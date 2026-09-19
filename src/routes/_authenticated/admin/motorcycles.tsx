@@ -3,7 +3,10 @@ import { Plus } from "lucide-react";
 import { useRef } from "react";
 
 import { PageHeader } from "@/components/admin/page-header";
-import { ProductManager, ProductManagerHandle } from "@/components/admin/product-manager";
+import {
+  MotorcycleCatalogManager,
+  MotorcycleCatalogManagerHandle,
+} from "@/components/admin/motorcycle-catalog-manager";
 import { Button } from "@/components/ui/button";
 
 export const Route = createFileRoute("/_authenticated/admin/motorcycles")({
@@ -11,7 +14,7 @@ export const Route = createFileRoute("/_authenticated/admin/motorcycles")({
 });
 
 function MotorcyclesAdmin() {
-  const productManagerRef = useRef<ProductManagerHandle>(null);
+  const motorcycleCatalogRef = useRef<MotorcycleCatalogManagerHandle>(null);
 
   return (
     <div>
@@ -21,13 +24,13 @@ function MotorcyclesAdmin() {
         action={
           <Button
             className="font-display uppercase"
-            onClick={() => productManagerRef.current?.openNew()}
+            onClick={() => motorcycleCatalogRef.current?.openNew()}
           >
             <Plus /> Add item
           </Button>
         }
       />
-      <ProductManager ref={productManagerRef} category="motorcycle" />
+      <MotorcycleCatalogManager ref={motorcycleCatalogRef} />
     </div>
   );
 }

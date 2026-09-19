@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { CalendarDays, Eye } from "lucide-react";
+import { CalendarDays } from "lucide-react";
 import { useDeferredValue, useEffect, useState } from "react";
 
 import { PageHeader } from "@/components/admin/page-header";
@@ -30,7 +30,6 @@ export const Route = createFileRoute("/_authenticated/admin/customers")({
 type Customer = {
   customer_name: string;
   phone: string;
-  email: string | null;
   visits: number;
   completed_spend: number | string;
   last_booking: string;
@@ -93,7 +92,7 @@ function CustomersPage() {
       <Input
         value={term}
         onChange={(event) => setTerm(event.target.value)}
-        placeholder="Search name, number, or email"
+        placeholder="Search name or number"
         className="mb-4 max-w-xs"
       />
       <ActiveFilterChips
@@ -110,13 +109,13 @@ function CustomersPage() {
           <Table className="admin-data-table">
             <TableHeader>
               <TableRow>
-                <TableHead>Customer</TableHead>
-                <TableHead>Contact</TableHead>
-                <TableHead>Units</TableHead>
-                <TableHead>Visits</TableHead>
-                <TableHead>Completed spend</TableHead>
-                <TableHead>Last booking</TableHead>
-                <TableHead className="text-right">History</TableHead>
+                <TableHead className="text-left">Customer</TableHead>
+                <TableHead className="text-left">Contact</TableHead>
+                <TableHead className="text-left">Units</TableHead>
+                <TableHead className="text-center">Bookings</TableHead>
+                <TableHead className="text-right">Completed spend</TableHead>
+                <TableHead className="text-left">Last booking</TableHead>
+                <TableHead className="text-center">History</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -127,23 +126,23 @@ function CustomersPage() {
                   </TableCell>
                   <TableCell data-label="Contact" className="text-xs">
                     {customer.phone}
-                    {customer.email && (
-                      <span className="block text-muted-foreground">{customer.email}</span>
-                    )}
                   </TableCell>
                   <TableCell data-label="Units" className="max-w-72 text-xs">
                     {customer.units.join(", ")}
                   </TableCell>
-                  <TableCell data-label="Visits" className="text-sm">
+                  <TableCell data-label="Bookings" className="text-center text-sm">
                     {customer.visits}
                   </TableCell>
-                  <TableCell data-label="Completed spend" className="text-sm text-primary">
+                  <TableCell
+                    data-label="Completed spend"
+                    className="text-right text-sm text-primary"
+                  >
                     {formatPHP(customer.completed_spend)}
                   </TableCell>
                   <TableCell data-label="Last booking" className="text-xs">
                     {formatDateLong(customer.last_booking)}
                   </TableCell>
-                  <TableCell data-label="History" className="text-right">
+                  <TableCell data-label="History" className="text-center">
                     <Button
                       size="sm"
                       variant="ghost"
@@ -153,7 +152,7 @@ function CustomersPage() {
                         setHistoryPage(0);
                       }}
                     >
-                      <Eye className="h-4 w-4" />
+                      View
                     </Button>
                   </TableCell>
                 </TableRow>

@@ -1,10 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 
 import { ProductCard } from "@/components/site/product-card";
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
@@ -37,6 +38,7 @@ const tabs = [
 function ShopPage() {
   const [tab, setTab] = useState("all");
   const [term, setTerm] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
 
   const products = useQuery({
     queryKey: ["products"],
@@ -49,18 +51,28 @@ function ShopPage() {
         .in("category", ["part", "accessory"])
         .order("sort_order");
       if (error) throw error;
-      return Array.from(new Map((data ?? []).map((p) => [p.name.trim(), p])).values());
+      return data ?? [];
     },
   });
 
-  const list = (products.data ?? []).filter(
-    (p) =>
-      (tab === "all" || p.category === tab) &&
-      (term.trim() === "" ||
-        `${p.name} ${p.brand ?? ""} ${p.description ?? ""}`
-          .toLowerCase()
-          .includes(term.toLowerCase())),
+  const normalizedSearchTerm = searchTerm.trim().toLocaleLowerCase();
+  const list = useMemo(
+    () =>
+      (products.data ?? []).filter(
+        (product) =>
+          (tab === "all" || product.category === tab) &&
+          (normalizedSearchTerm === "" ||
+            `${product.name} ${product.brand ?? ""} ${product.description ?? ""}`
+              .toLocaleLowerCase()
+              .includes(normalizedSearchTerm)),
+      ),
+    [normalizedSearchTerm, products.data, tab],
   );
+
+  function clearSearch() {
+    setTerm("");
+    setSearchTerm("");
+  }
 
   return (
     <div className="min-h-screen">
@@ -85,12 +97,33 @@ function ShopPage() {
               ))}
             </TabsList>
           </Tabs>
-          <Input
-            value={term}
-            onChange={(e) => setTerm(e.target.value)}
-            placeholder="Search item or brand"
-            className="max-w-xs"
-          />
+          <form
+            className="flex w-full gap-2 sm:w-auto"
+            onSubmit={(event) => {
+              event.preventDefault();
+              setSearchTerm(term);
+            }}
+          >
+            <Input
+              value={term}
+              onChange={(event) => {
+                const value = event.target.value;
+                setTerm(value);
+                if (!value.trim()) setSearchTerm("");
+              }}
+              placeholder="Search item or brand"
+              aria-label="Search shop items"
+              className="min-w-0 flex-1 sm:w-64"
+            />
+            <Button type="submit" className="font-display uppercase">
+              Search
+            </Button>
+            {(term || searchTerm) && (
+              <Button type="button" variant="outline" onClick={clearSearch}>
+                Clear
+              </Button>
+            )}
+          </form>
         </div>
 
         <div className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">

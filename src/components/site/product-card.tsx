@@ -1,9 +1,9 @@
-import { Bike, ImageIcon } from "lucide-react";
+import { ImageIcon } from "lucide-react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { formatPHP, SHOP } from "@/lib/shop";
+import { SHOP } from "@/lib/shop";
 
 export type ProductRow = {
   id: string;
@@ -28,8 +28,6 @@ export function ProductCard({ product }: { product: ProductRow }) {
             loading="lazy"
             className="h-full w-full object-cover transition-transform duration-300 group-hover:scale-105"
           />
-        ) : product.category === "motorcycle" ? (
-          <Bike className="h-14 w-14 text-muted-foreground/50" />
         ) : (
           <ImageIcon className="h-12 w-12 text-muted-foreground/50" />
         )}
@@ -52,7 +50,6 @@ export function ProductCard({ product }: { product: ProductRow }) {
         {product.description && (
           <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{product.description}</p>
         )}
-        <p className="mt-3 font-display text-xl text-primary">{formatPHP(product.price)}</p>
         {product.in_stock ? (
           <Button asChild variant="outline" size="sm" className="mt-4 w-full uppercase">
             <a href={SHOP.messenger} target="_blank" rel="noopener noreferrer">

@@ -133,7 +133,6 @@ export type Database = {
           created_at: string;
           booking_duration_minutes: number;
           customer_name: string;
-          email: string | null;
           first_name: string | null;
           id: string;
           is_archived: boolean;
@@ -142,10 +141,7 @@ export type Database = {
           last_name: string | null;
           middle_name: string | null;
           moto_brand: string;
-          moto_cc: number | null;
-          moto_fuel_type: string | null;
           moto_model: string;
-          moto_transmission: string | null;
           moto_variant: string | null;
           moto_year: number | null;
           notes: string | null;
@@ -175,7 +171,6 @@ export type Database = {
           created_at?: string;
           booking_duration_minutes?: number;
           customer_name: string;
-          email?: string | null;
           first_name?: string | null;
           id?: string;
           is_archived?: boolean;
@@ -184,10 +179,7 @@ export type Database = {
           last_name?: string | null;
           middle_name?: string | null;
           moto_brand: string;
-          moto_cc?: number | null;
-          moto_fuel_type?: string | null;
           moto_model: string;
-          moto_transmission?: string | null;
           moto_variant?: string | null;
           moto_year?: number | null;
           notes?: string | null;
@@ -217,7 +209,6 @@ export type Database = {
           created_at?: string;
           booking_duration_minutes?: number;
           customer_name?: string;
-          email?: string | null;
           first_name?: string | null;
           id?: string;
           is_archived?: boolean;
@@ -226,10 +217,7 @@ export type Database = {
           last_name?: string | null;
           middle_name?: string | null;
           moto_brand?: string;
-          moto_cc?: number | null;
-          moto_fuel_type?: string | null;
           moto_model?: string;
-          moto_transmission?: string | null;
           moto_variant?: string | null;
           moto_year?: number | null;
           notes?: string | null;
@@ -256,6 +244,66 @@ export type Database = {
             columns: ["assigned_crew_id"];
             isOneToOne: false;
             referencedRelation: "crew_members";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      appointment_reschedule_history: {
+        Row: {
+          id: string;
+          appointment_id: string;
+          new_appointment_id: string | null;
+          reschedule_number: number;
+          from_date: string;
+          from_start_time: string;
+          to_date: string | null;
+          to_start_time: string | null;
+          reason: string;
+          decision: string;
+          approved_at: string;
+          approved_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          appointment_id: string;
+          new_appointment_id?: string | null;
+          reschedule_number: number;
+          from_date: string;
+          from_start_time: string;
+          to_date?: string | null;
+          to_start_time?: string | null;
+          reason: string;
+          decision: string;
+          approved_at?: string;
+          approved_by?: string | null;
+        };
+        Update: {
+          id?: string;
+          appointment_id?: string;
+          new_appointment_id?: string | null;
+          reschedule_number?: number;
+          from_date?: string;
+          from_start_time?: string;
+          to_date?: string | null;
+          to_start_time?: string | null;
+          reason?: string;
+          decision?: string;
+          approved_at?: string;
+          approved_by?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "appointment_reschedule_history_appointment_id_fkey";
+            columns: ["appointment_id"];
+            isOneToOne: false;
+            referencedRelation: "appointments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "appointment_reschedule_history_new_appointment_id_fkey";
+            columns: ["new_appointment_id"];
+            isOneToOne: false;
+            referencedRelation: "appointments";
             referencedColumns: ["id"];
           },
         ];
@@ -504,8 +552,6 @@ export type Database = {
           category: string;
           created_at: string;
           description: string | null;
-          engine_cc: number | null;
-          fuel_type: string | null;
           id: string;
           image_url: string | null;
           in_stock: boolean;
@@ -516,7 +562,6 @@ export type Database = {
           price: number;
           sort_order: number;
           stock_quantity: number;
-          transmission: string | null;
           updated_at: string;
         };
         Insert: {
@@ -525,8 +570,6 @@ export type Database = {
           category?: string;
           created_at?: string;
           description?: string | null;
-          engine_cc?: number | null;
-          fuel_type?: string | null;
           id?: string;
           image_url?: string | null;
           in_stock?: boolean;
@@ -537,7 +580,6 @@ export type Database = {
           price?: number;
           sort_order?: number;
           stock_quantity?: number;
-          transmission?: string | null;
           updated_at?: string;
         };
         Update: {
@@ -546,8 +588,6 @@ export type Database = {
           category?: string;
           created_at?: string;
           description?: string | null;
-          engine_cc?: number | null;
-          fuel_type?: string | null;
           id?: string;
           image_url?: string | null;
           in_stock?: boolean;
@@ -558,7 +598,42 @@ export type Database = {
           price?: number;
           sort_order?: number;
           stock_quantity?: number;
-          transmission?: string | null;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
+      motorcycle_catalog: {
+        Row: {
+          archived_at: string | null;
+          brand: string | null;
+          created_at: string;
+          id: string;
+          is_active: boolean;
+          is_archived: boolean;
+          model: string;
+          sort_order: number;
+          updated_at: string;
+        };
+        Insert: {
+          archived_at?: string | null;
+          brand?: string | null;
+          created_at?: string;
+          id?: string;
+          is_active?: boolean;
+          is_archived?: boolean;
+          model: string;
+          sort_order?: number;
+          updated_at?: string;
+        };
+        Update: {
+          archived_at?: string | null;
+          brand?: string | null;
+          created_at?: string;
+          id?: string;
+          is_active?: boolean;
+          is_archived?: boolean;
+          model?: string;
+          sort_order?: number;
           updated_at?: string;
         };
         Relationships: [];
@@ -655,50 +730,6 @@ export type Database = {
           updated_at?: string;
         };
         Relationships: [];
-      };
-      service_configurations: {
-        Row: {
-          cc_category: string;
-          created_at: string;
-          duration_minutes: number;
-          fuel_type: string;
-          id: string;
-          price: number;
-          service_id: string;
-          transmission: string;
-          updated_at: string;
-        };
-        Insert: {
-          cc_category: string;
-          created_at?: string;
-          duration_minutes: number;
-          fuel_type: string;
-          id?: string;
-          price: number;
-          service_id: string;
-          transmission: string;
-          updated_at?: string;
-        };
-        Update: {
-          cc_category?: string;
-          created_at?: string;
-          duration_minutes?: number;
-          fuel_type?: string;
-          id?: string;
-          price?: number;
-          service_id?: string;
-          transmission?: string;
-          updated_at?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "service_configurations_service_id_fkey";
-            columns: ["service_id"];
-            isOneToOne: false;
-            referencedRelation: "services";
-            referencedColumns: ["id"];
-          },
-        ];
       };
       service_model_overrides: {
         Row: {
@@ -842,6 +873,13 @@ export type Database = {
       [_ in never]: never;
     };
     Functions: {
+      cancel_public_appointment: {
+        Args: {
+          p_appointment_id: string;
+          p_cancellation_notice_hours: number;
+        };
+        Returns: undefined;
+      };
       create_booking_atomic: {
         Args: {
           p_appointment_date: string;
@@ -849,48 +887,16 @@ export type Database = {
           p_booking_duration_minutes: number;
           p_booking_request_id: string;
           p_customer_name: string;
-          p_email: string | null;
           p_first_name: string;
           p_last_name: string;
           p_middle_name: string;
           p_moto_brand: string;
-          p_moto_cc: number;
-          p_moto_fuel_type: string;
-          p_moto_model: string;
-          p_moto_transmission: string;
-          p_moto_variant: string | null;
-          p_moto_year: number;
-          p_notification_message: string;
-          p_notification_title: string;
-          p_notes: string | null;
-          p_phone: string;
-          p_plate_number: string;
-          p_reference_code: string;
-          p_services: Json;
-          p_start_time: string;
-          p_total_estimate: number;
-        };
-        Returns: {
-          appointment_id: string;
-          reference_code: string;
-        }[];
-      };
-      create_rescheduled_booking_atomic: {
-        Args: {
-          p_appointment_date: string;
-          p_assigned_crew_id: string | null;
-          p_booking_duration_minutes: number;
-          p_booking_request_id: string;
-          p_customer_name: string;
-          p_email: string | null;
-          p_moto_brand: string;
           p_moto_model: string;
           p_moto_variant: string | null;
           p_moto_year: number;
           p_notification_message: string;
           p_notification_title: string;
           p_notes: string | null;
-          p_original_appointment_id: string;
           p_phone: string;
           p_plate_number: string;
           p_reference_code: string;

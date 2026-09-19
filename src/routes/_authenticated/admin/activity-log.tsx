@@ -112,27 +112,25 @@ function ActivityLogPage() {
   const pageSize = 10;
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
-  const [user, setUser] = useState("");
+  
   const [action, setAction] = useState("all");
   const [resource, setResource] = useState("all");
   const [fromDate, setFromDate] = useState("");
   const [toDate, setToDate] = useState("");
-  const [fromTime, setFromTime] = useState("");
-  const [toTime, setToTime] = useState("");
+  
   const [page, setPage] = useState(0);
   const [pendingExport, setPendingExport] = useState<ExportFormat | null>(null);
   const deferredSearch = useDeferredValue(search);
-  const deferredUser = useDeferredValue(user);
+ 
 
   const hasFilters = Boolean(
     search.trim() ||
-    user.trim() ||
+    
     action !== "all" ||
     resource !== "all" ||
     fromDate ||
-    toDate ||
-    fromTime ||
-    toTime,
+    toDate
+    ,
   );
 
   const logs = useQuery({
@@ -140,20 +138,17 @@ function ActivityLogPage() {
       "admin-activity-logs",
       {
         search: deferredSearch,
-        user: deferredUser,
         action,
         resource,
         fromDate,
         toDate,
-        fromTime,
-        toTime,
+        
         page,
       },
     ],
     queryFn: async () => {
       const { error: cleanupError } = await supabase.rpc("purge_expired_admin_activity_logs");
       if (cleanupError) throw cleanupError;
-
       let query = supabase
         .from("admin_activity_logs")
         .select("*", { count: "exact" })
@@ -162,14 +157,9 @@ function ActivityLogPage() {
 
       if (fromDate) query = query.gte("activity_date", fromDate);
       if (toDate) query = query.lte("activity_date", toDate);
-      if (fromTime) query = query.gte("activity_time", fromTime);
-      if (toTime) query = query.lte("activity_time", toTime);
+      
       if (action !== "all") query = query.eq("action", action);
       if (resource !== "all") query = query.eq("resource_type", resource);
-      if (deferredUser.trim()) {
-        query = query.ilike("actor_email", `%${cleanSearchTerm(deferredUser)}%`);
-      }
-
       if (deferredSearch.trim()) {
         const term = cleanSearchTerm(deferredSearch);
         query = query.or(
@@ -188,7 +178,7 @@ function ActivityLogPage() {
     ...(search.trim()
       ? [{ label: "Search", value: search.trim(), onClear: () => setSearch("") }]
       : []),
-    ...(user.trim() ? [{ label: "User", value: user.trim(), onClear: () => setUser("") }] : []),
+
     ...(action !== "all"
       ? [{ label: "Action", value: action, onClear: () => setAction("all") }]
       : []),
@@ -197,8 +187,7 @@ function ActivityLogPage() {
       : []),
     ...(fromDate ? [{ label: "From", value: fromDate, onClear: () => setFromDate("") }] : []),
     ...(toDate ? [{ label: "To", value: toDate, onClear: () => setToDate("") }] : []),
-    ...(fromTime ? [{ label: "After", value: fromTime, onClear: () => setFromTime("") }] : []),
-    ...(toTime ? [{ label: "Before", value: toTime, onClear: () => setToTime("") }] : []),
+    
   ];
   const filterDescription = useMemo(() => {
     if (!hasFilters) return "Showing 10 records per page from the last 50 days.";
@@ -207,7 +196,7 @@ function ActivityLogPage() {
 
   useEffect(() => {
     setPage(0);
-  }, [search, user, action, resource, fromDate, toDate, fromTime, toTime]);
+  }, [search, action, resource, fromDate, toDate]);
 
   function refresh() {
     queryClient.invalidateQueries({ queryKey: ["admin-activity-logs"] });
@@ -215,13 +204,10 @@ function ActivityLogPage() {
 
   function clearFilters() {
     setSearch("");
-    setUser("");
     setAction("all");
     setResource("all");
     setFromDate("");
     setToDate("");
-    setFromTime("");
-    setToTime("");
     setPage(0);
   }
 
@@ -462,15 +448,7 @@ function ActivityLogPage() {
               />
             </div>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="activity-user">User email</Label>
-            <Input
-              id="activity-user"
-              value={user}
-              onChange={(event) => setUser(event.target.value)}
-              placeholder="admin@email.com"
-            />
-          </div>
+          
           <div className="space-y-1.5">
             <Label>Action</Label>
             <Select value={action} onValueChange={setAction}>
@@ -523,26 +501,7 @@ function ActivityLogPage() {
               onChange={(event) => setToDate(event.target.value)}
             />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="activity-from-time">From time</Label>
-            <Input
-              id="activity-from-time"
-              type="time"
-              value={fromTime}
-              max={toTime || undefined}
-              onChange={(event) => setFromTime(event.target.value)}
-            />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="activity-to-time">To time</Label>
-            <Input
-              id="activity-to-time"
-              type="time"
-              value={toTime}
-              min={fromTime || undefined}
-              onChange={(event) => setToTime(event.target.value)}
-            />
-          </div>
+          
         </CardContent>
       </Card>
       <ActiveFilterChips filters={activeFilters} onReset={clearFilters} />

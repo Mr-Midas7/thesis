@@ -19,12 +19,6 @@ Cancellations must be made at least ${SHOP.noticeHours} hours before the schedul
 
 We use your name, contact details, motorcycle details, selected services, and notes only to manage this booking, contact you about it, and provide shop services. We do not sell your information.`;
 
-export const PRODUCT_CATEGORIES = [
-  { value: "part", label: "Parts" },
-  { value: "accessory", label: "Accessories" },
-  { value: "motorcycle", label: "Motorcycles" },
-] as const;
-
 export const APPOINTMENT_STATUSES = [
   "pending",
   "confirmed",
@@ -134,6 +128,17 @@ export function isBookingStartTime(time: string) {
   );
 }
 
+/** True when the entire appointment fits inside the shop's operating hours. */
+export function isBookingTimeRangeWithinHours(time: string, durationMinutes: number) {
+  const startMinutes = timeToMinutes(time);
+  return (
+    isBookingStartTime(time) &&
+    Number.isFinite(durationMinutes) &&
+    durationMinutes > 0 &&
+    startMinutes + durationMinutes <= BOOKING_CLOSE_MINUTES
+  );
+}
+
 /** True for a valid Monday-Saturday Manila calendar date. */
 export function isShopOpenDate(dateIso: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) return false;
@@ -152,8 +157,6 @@ export function isShopOpenDate(dateIso: string) {
  * to both half-hour starts within that hour.
  */
 export function buildBookingTimeSlots(config: BookingCapacityConfig[]): BookingTimeSlot[] {
-  const fallbackCapacity = Math.max(0, ...config.map((slot) => Number(slot.capacity) || 0));
-
   return Array.from(
     { length: (BOOKING_CLOSE_MINUTES - BOOKING_OPEN_MINUTES) / BOOKING_INTERVAL_MINUTES },
     (_, index) => {
@@ -167,7 +170,10 @@ export function buildBookingTimeSlots(config: BookingCapacityConfig[]): BookingT
         id: `booking-${startTime}`,
         startTime,
         endTime: minutesToTime(startMinutes + BOOKING_INTERVAL_MINUTES),
-        capacity: Number(configured?.capacity ?? hourlyConfigured?.capacity ?? fallbackCapacity),
+        // A configured hour covers its two half-hour starts. Do not infer a
+        // capacity for hours absent from the configuration: doing so can
+        // inadvertently reopen an intentionally omitted time such as lunch.
+        capacity: Math.max(0, Number(configured?.capacity ?? hourlyConfigured?.capacity ?? 0)),
       };
     },
   );

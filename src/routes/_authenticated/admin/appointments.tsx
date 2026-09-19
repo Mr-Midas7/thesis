@@ -92,6 +92,19 @@ type AppointmentService = Pick<
   Database["public"]["Tables"]["appointment_services"]["Row"],
   "service_id" | "service_name" | "price" | "duration_minutes"
 >;
+type RescheduleHistoryEntry = {
+  id: string;
+  appointment_id: string;
+  new_appointment_id: string | null;
+  reschedule_number: number;
+  from_date: string;
+  from_start_time: string;
+  to_date: string | null;
+  to_start_time: string | null;
+  reason: string;
+  decision: string;
+  approved_at: string;
+};
 type AppointmentDetails = Database["public"]["Tables"]["appointments"]["Row"] & {
   appointment_services: AppointmentService[];
   crew_members: { name: string } | null;
@@ -459,6 +472,24 @@ function AppointmentsPage() {
   const rows = appointments.data?.rows ?? [];
   const typedRows = rows as AppointmentDetails[];
   const selectedAppointment = typedRows.find((appointment) => appointment.id === openId) ?? null;
+
+  const rescheduleHistory = useQuery({
+    queryKey: ["appointment-reschedule-history", openId],
+    queryFn: async () => {
+      if (!openId) return [];
+      const { data, error } = await supabase
+        .from("appointment_reschedule_history")
+        .select(
+          "id, from_date, from_start_time, to_date, to_start_time, reason, decision, reschedule_number, approved_at",
+        )
+        .eq("appointment_id", openId)
+        .order("reschedule_number", { ascending: true });
+      if (error) throw error;
+      return (data ?? []) as RescheduleHistoryEntry[];
+    },
+    enabled: Boolean(openId),
+    staleTime: 5_000,
+  });
   const hasEditChanges = Boolean(
     selectedAppointment && editForm && appointmentEditHasChanges(selectedAppointment, editForm),
   );
@@ -1139,6 +1170,59 @@ function AppointmentsPage() {
                     />
                   </div>
                 </section>
+                {rescheduleHistory.data && rescheduleHistory.data.length > 0 && (
+                  <section className="rounded-lg border border-border/70 p-4">
+                    <h3 className="font-medium">Reschedule history</h3>
+                    <div className="mt-3 divide-y divide-border/70 text-sm">
+                      {rescheduleHistory.data.map((entry) => (
+                        <div
+                          key={entry.id}
+                          className="flex flex-col gap-1 py-3 first:pt-0 last:pb-0"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-medium">
+                              {entry.reschedule_number === 1
+                                ? "1st reschedule"
+                                : entry.reschedule_number === 2
+                                  ? "2nd reschedule"
+                                  : entry.reschedule_number === 3
+                                    ? "3rd reschedule"
+                                    : `${entry.reschedule_number}th reschedule`}
+                            </span>
+                            <Badge
+                              variant="outline"
+                              className={
+                                entry.decision === "confirmed"
+                                  ? "border-emerald-500/30 text-emerald-600"
+                                  : "border-destructive/40 text-destructive"
+                              }
+                            >
+                              {entry.decision === "confirmed" ? "Approved" : "Rejected"}
+                            </Badge>
+                          </div>
+                          <div className="grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                            <div>
+                              <span className="font-medium text-foreground">From:</span>{" "}
+                              {formatDateLong(entry.from_date)} at{" "}
+                              {formatTime(String(entry.from_start_time).slice(0, 5))}
+                            </div>
+                            {entry.to_date && entry.to_start_time && (
+                              <div>
+                                <span className="font-medium text-foreground">To:</span>{" "}
+                                {formatDateLong(entry.to_date)} at{" "}
+                                {formatTime(String(entry.to_start_time).slice(0, 5))}
+                              </div>
+                            )}
+                          </div>
+                          <p className="text-xs text-muted-foreground">Reason: {entry.reason}</p>
+                          <p className="text-[10px] text-muted-foreground/70">
+                            {formatBookedOn(entry.approved_at)}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                )}
                 <section className="rounded-lg border border-border/70 p-4">
                   <h3 className="font-medium">Services</h3>
                   <div className="mt-3 divide-y divide-border/70 text-sm">
@@ -1253,7 +1337,6 @@ function AppointmentReadOnlyDetails({
         <div className="mt-3 grid gap-3 text-sm">
           {!hideName && <AppointmentDetail label="Name" value={appointment.customer_name} />}
           <AppointmentDetail label="Contact number" value={appointment.phone} />
-          <AppointmentDetail label="Email" value={appointment.email || "Not provided"} />
         </div>
       </div>
       <div>

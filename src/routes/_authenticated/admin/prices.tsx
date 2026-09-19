@@ -52,9 +52,6 @@ type PriceItem = {
   category: string;
   price: number;
   duration_minutes: number | null;
-  engine_cc: number | null;
-  fuel_type: string | null;
-  transmission: string | null;
   is_active: boolean;
   is_archived: boolean;
   created_at: string;
@@ -175,19 +172,12 @@ function PriceCatalog({ table, archived }: { table: PriceTableName; archived: bo
           .eq("is_archived", archived)
           .order("name");
         if (error) throw error;
-        return (data ?? []).map((service) => ({
-          ...service,
-          engine_cc: null,
-          fuel_type: null,
-          transmission: null,
-        }));
+        return data ?? [];
       }
 
       const { data, error } = await supabase
         .from("products")
-        .select(
-          "id,name,category,price,engine_cc,fuel_type,transmission,is_active,is_archived,created_at,updated_at,archived_at",
-        )
+        .select("id,name,category,price,is_active,is_archived,created_at,updated_at,archived_at")
         .in("category", ["part", "accessory"])
         .eq("is_archived", archived)
         .order("name");
@@ -1245,8 +1235,7 @@ function EmptyRow({ colSpan, message }: { colSpan: number; message: string }) {
 }
 
 function productConfigurationLabel(item: PriceItem) {
-  const cc = item.engine_cc ? `${item.engine_cc} cc` : "N/A CC";
-  return `${cc} · ${item.fuel_type ?? "N/A fuel/power"} · ${item.transmission ?? "N/A transmission"}`;
+  return item.category === "accessory" ? "Accessory" : "Part";
 }
 
 function modelLabel(brand: string, model: string) {
@@ -1267,4 +1256,4 @@ function formatDateTime(value: string | null) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(value));
- }
+}

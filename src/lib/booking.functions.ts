@@ -12,6 +12,7 @@ import {
   formatTime,
   intervalsOverlap,
   isBookingStartTime,
+  isBookingTimeRangeWithinHours,
   isShopOpenDate,
   isSlotBookable,
   manilaNow,
@@ -65,73 +66,18 @@ async function getBookingRules(): Promise<BookingRules> {
   }
 }
 
-function firstBookableDate(rules: BookingRules) {
-  let date = earliestBookableDate(rules.minimumBookingLeadHours);
+function firstBookableDate(rules: BookingRules, minimumLeadHours = rules.minimumBookingLeadHours) {
+  let date = earliestBookableDate(minimumLeadHours);
   if (!rules.allowSameDayAppointments && date === manilaNow().date) date = addDays(date, 1);
   return date;
 }
 
 const currentYear = new Date().getFullYear();
 
-const motorcycleConfigurationSchema = z.object({
-  cc: z.number().int().min(50).max(2000),
-  ccCategory: z.enum(["Small", "Mid", "Big"]),
-  fuelType: z.enum(["FI", "Carburetor"]),
-  transmission: z.enum(["Manual", "Semi-Automatic", "Automatic"]),
-});
-
 const motorcycleSelectionSchema = z.object({
   brand: z.string().trim().min(1).max(50),
   model: z.string().trim().min(1).max(50),
 });
-
-type MotorcycleConfiguration = z.infer<typeof motorcycleConfigurationSchema>;
-
-function serviceCcCategory(engineCc: number): MotorcycleConfiguration["ccCategory"] {
-  if (engineCc <= 150) return "Small";
-  // The catalog includes 401–499cc motorcycles. Treat them as Mid so every
-  // valid catalog motorcycle has a deterministic configuration before Big.
-  if (engineCc < 500) return "Mid";
-  return "Big";
-}
-
-function catalogMotorcycleConfiguration(motorcycle: {
-  engine_cc: number | string | null;
-  fuel_type: string | null;
-  transmission: string | null;
-}): MotorcycleConfiguration | null {
-  const engineCc = Number(motorcycle.engine_cc);
-  const fuel = motorcycle.fuel_type?.trim().toLowerCase();
-  const fuelType = fuel === "fi" ? "FI" : fuel?.startsWith("carb") ? "Carburetor" : null;
-  const transmission = motorcycle.transmission?.trim().toLowerCase();
-  const transmissionType =
-    transmission === "manual"
-      ? "Manual"
-      : transmission === "semi-auto" || transmission === "semi-automatic"
-        ? "Semi-Automatic"
-        : transmission === "automatic"
-          ? "Automatic"
-          : null;
-
-  if (
-    !Number.isFinite(engineCc) ||
-    engineCc < 50 ||
-    engineCc > 2000 ||
-    !fuelType ||
-    !transmissionType
-  ) {
-    return null;
-  }
-
-  // Catalog data retains the manufacturer's exact displacement (for example,
-  // 156.9cc). Service pricing uses the matching administrative size category.
-  return {
-    cc: Math.round(engineCc),
-    ccCategory: serviceCcCategory(engineCc),
-    fuelType,
-    transmission: transmissionType,
-  };
-}
 
 type ResolvedService = {
   id: string;
@@ -157,8 +103,8 @@ function resolveServicePricing(
       ? overrides.find(
           (item) =>
             item.service_id === service.id &&
-            item.brand === motorcycle.brand &&
-            item.model === motorcycle.model,
+            item.brand.trim().toLocaleLowerCase() === motorcycle.brand.trim().toLocaleLowerCase() &&
+            item.model.trim().toLocaleLowerCase() === motorcycle.model.trim().toLocaleLowerCase(),
         )
       : undefined;
     if (override) {
@@ -224,7 +170,6 @@ const bookingSchema = z
     middleName: namePartSchema.default(""),
     lastName: namePartSchema.default(""),
     phone: phoneSchema,
-    email: z.string().trim().email().max(120).optional().or(z.literal("")),
     motoBrand: z.string().trim().min(1).max(50),
     motoModel: z.string().trim().min(1).max(50),
     motoVariant: z.string().trim().max(50).optional().or(z.literal("")),
@@ -394,12 +339,10 @@ export const getAvailability = createServerFn({ method: "GET" })
     }
     const { supabaseAdmin } = supabaseModule;
     const bookingRules = await getBookingRules();
-    let configuredFrom = data.rescheduling
-      ? earliestBookableDate(bookingRules.reschedulingNoticeHours)
-      : firstBookableDate(bookingRules);
-    if (!bookingRules.allowSameDayAppointments && configuredFrom === manilaNow().date) {
-      configuredFrom = addDays(configuredFrom, 1);
-    }
+    const configuredFrom = firstBookableDate(
+      bookingRules,
+      data.rescheduling ? bookingRules.reschedulingNoticeHours : undefined,
+    );
     const configuredTo = addDays(
       manilaNow().date,
       Math.max(0, Math.min(data.days, bookingRules.maxAdvanceBookingDays)),
@@ -549,11 +492,10 @@ export const getAvailability = createServerFn({ method: "GET" })
 
     if (!motorcycle && data.motorcycle) {
       const motorcycleRecord = await supabaseAdmin
-        .from("products")
-        .select("engine_cc,fuel_type,transmission")
-        .eq("category", "motorcycle")
+        .from("motorcycle_catalog")
+        .select("brand,model")
         .eq("brand", data.motorcycle.brand)
-        .eq("name", data.motorcycle.model)
+        .eq("model", data.motorcycle.model)
         .eq("is_active", true)
         .eq("is_archived", false)
         .maybeSingle();
@@ -635,9 +577,6 @@ export const createBooking = createServerFn({ method: "POST" })
     if (!data.rescheduleReference && !data.firstName.trim()) {
       return { ok: false as const, error: "Enter the customer's first name." };
     }
-    if (!data.rescheduleReference && !data.middleName.trim()) {
-      return { ok: false as const, error: "Enter the customer's middle name." };
-    }
     if (!data.rescheduleReference && !data.lastName.trim()) {
       return { ok: false as const, error: "Enter the customer's last name." };
     }
@@ -667,7 +606,6 @@ export const createBooking = createServerFn({ method: "POST" })
       id: string;
       reference_code: string;
       total_estimate: number;
-      motorcycleConfiguration: MotorcycleConfiguration | null;
     } | null = null;
     if (data.rescheduleReference) {
       const original = await findAppointment(data.rescheduleReference, data.phone);
@@ -764,7 +702,6 @@ export const createBooking = createServerFn({ method: "POST" })
       data = {
         ...data,
         phone: original.phone,
-        email: original.email ?? "",
         motoBrand: original.moto_brand,
         motoModel: original.moto_model,
         motoVariant: original.moto_variant ?? "",
@@ -777,11 +714,6 @@ export const createBooking = createServerFn({ method: "POST" })
         id: original.id,
         reference_code: original.reference_code,
         total_estimate: Number(original.total_estimate),
-        motorcycleConfiguration: catalogMotorcycleConfiguration({
-          engine_cc: original.moto_cc,
-          fuel_type: original.moto_fuel_type,
-          transmission: original.moto_transmission,
-        }),
       };
     }
 
@@ -834,7 +766,10 @@ export const createBooking = createServerFn({ method: "POST" })
       };
     }
 
-    const firstAvailableDate = firstBookableDate(bookingRules);
+    const firstAvailableDate = firstBookableDate(
+      bookingRules,
+      rescheduledFrom ? bookingRules.reschedulingNoticeHours : undefined,
+    );
     const lastAvailableDate = addDays(manilaNow().date, bookingRules.maxAdvanceBookingDays);
     if (
       data.date < firstAvailableDate ||
@@ -875,8 +810,7 @@ export const createBooking = createServerFn({ method: "POST" })
       return { ok: false as const, error: "That time slot is not available." };
 
     // Resolve every selected service using its most-specific rule: exact model
-    // override, then exact CC/fuel/transmission configuration, then the
-    // service's default price and duration.
+    // override, then the service's default price and duration.
     const services = await supabaseAdmin
       .from("services")
       .select("id,name,price,duration_minutes")
@@ -905,86 +839,24 @@ export const createBooking = createServerFn({ method: "POST" })
       };
     }
 
-    // Brand and model are the only customer-supplied motorcycle values. The
-    // catalog is the source of truth for CC, fuel type, and transmission.
-    let motorcycleConfiguration = rescheduledFrom?.motorcycleConfiguration ?? null;
-    if (!motorcycleConfiguration) {
-      const motorcycle = await supabaseAdmin
-        .from("products")
-        .select("engine_cc,fuel_type,transmission")
-        .eq("category", "motorcycle")
-        .eq("brand", data.motoBrand)
-        .eq("name", data.motoModel)
-        .eq("is_active", true)
-        .eq("is_archived", false)
-        .maybeSingle();
-      if (motorcycle.error) {
-        return {
-          ok: false as const,
-          error: "We could not verify that motorcycle model. Please try again.",
-        };
-      }
-      if (!motorcycle.data) {
-        return {
-          ok: false as const,
-          error: "Select a valid motorcycle model from the catalog.",
-        };
-      }
-      motorcycleConfiguration = catalogMotorcycleConfiguration(motorcycle.data);
-    }
-    if (!motorcycleConfiguration) {
-      return {
-        ok: false as const,
-        error:
-          "The selected motorcycle is missing its CC, fuel type, or transmission in the Motorcycle Catalog.",
-      };
-    }
-
-    // A customer may only hold one active booking for a service on a given date.
-    // The database trigger below remains the source of truth for concurrent requests;
-    // this check gives the customer an actionable response before we reserve capacity.
-    const duplicateServiceBookingQuery = supabaseAdmin
-      .from("appointments")
-      .select("appointment_date,start_time,appointment_services!inner(service_id,service_name)")
-      .eq("phone", data.phone)
-      .eq("appointment_date", data.date)
-      .eq("is_archived", false)
-      .is("rescheduled_to_appointment_id", null)
-      .not("status", "in", "(completed,cancelled,rejected)")
-      .in("appointment_services.service_id", data.serviceIds);
-    const duplicateServiceBooking = rescheduledFrom
-      ? await duplicateServiceBookingQuery.neq("id", rescheduledFrom.id).limit(1)
-      : await duplicateServiceBookingQuery.limit(1);
-
-    if (duplicateServiceBooking.error) {
-      console.error("[Booking] duplicate service booking check failed", {
-        code: duplicateServiceBooking.error.code,
-        message: duplicateServiceBooking.error.message,
-      });
-      return {
-        ok: false as const,
-        error: "We could not verify your existing appointments. Please try again.",
-      };
-    }
-
-    const appointment = duplicateServiceBooking.data?.[0];
-    if (appointment) {
-      const conflictingService = appointment.appointment_services[0];
-      return {
-        ok: false as const,
-        error: `You already have an appointment for "${conflictingService?.service_name ?? "the selected service"}" on ${formatDateLong(appointment.appointment_date)} at ${formatTime(String(appointment.start_time))}.`,
-      };
-    }
-
+    // Each selected service uses the matching brand-and-model override when it
+    // exists; otherwise its service-level default price and duration apply.
     const resolvedServices = resolveServicePricing(services.data, overrides.data ?? [], {
       brand: data.motoBrand,
       model: data.motoModel,
-      ...motorcycleConfiguration,
     });
     const totalDuration = resolvedServices.reduce(
       (sum, service) => sum + service.durationMinutes,
       30,
     );
+
+    if (!isBookingTimeRangeWithinHours(startTime, totalDuration)) {
+      return {
+        ok: false as const,
+        error:
+          "The selected services do not fit within the shop's operating hours. Please choose an earlier time.",
+      };
+    }
 
     const blocked = await supabaseAdmin
       .from("schedule_blocks")
@@ -1002,10 +874,12 @@ export const createBooking = createServerFn({ method: "POST" })
         if (!b.start_time) return true; // whole-day block
         const { endTime } = decodeBlockReason(b.reason);
         const bs = String(b.start_time).slice(0, 5);
+        // Older single-slot blocks have no RANGE marker. They block their
+        // exact start time; treating them as a zero-length range lets a final
+        // booking bypass a slot that public availability correctly hides.
+        if (!endTime) return bs === startTime;
         const bsMin = parseInt(bs.slice(0, 2)) * 60 + parseInt(bs.slice(3, 5));
-        const beMin = endTime
-          ? parseInt(endTime.slice(0, 2)) * 60 + parseInt(endTime.slice(3, 5))
-          : bsMin;
+        const beMin = parseInt(endTime.slice(0, 2)) * 60 + parseInt(endTime.slice(3, 5));
         // Overlap: appointment [slotStartMin, slotStartMin+totalDuration] overlaps block [bsMin, beMin]
         return slotStartMin < beMin && slotStartMin + totalDuration > bsMin;
       })
@@ -1216,12 +1090,8 @@ export const createBooking = createServerFn({ method: "POST" })
       p_booking_request_id: data.idempotencyKey,
       p_customer_name: customerName,
       p_phone: data.phone,
-      p_email: data.email || null,
       p_moto_brand: data.motoBrand,
       p_moto_model: data.motoModel,
-      p_moto_cc: motorcycleConfiguration.cc,
-      p_moto_fuel_type: motorcycleConfiguration.fuelType,
-      p_moto_transmission: motorcycleConfiguration.transmission,
       p_moto_variant: data.motoVariant || null,
       p_moto_year: data.motoYear,
       p_plate_number: data.plateNumber.toUpperCase(),
@@ -1311,7 +1181,7 @@ async function findAppointment(reference: string, phone: string) {
   const primaryLookup = await supabaseAdmin
     .from("appointments")
     .select(
-      "id,reference_code,customer_name,first_name,middle_name,last_name,phone,email,moto_brand,moto_model,moto_cc,moto_fuel_type,moto_transmission,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reference_code,pending_reschedule_reason,appointment_services(service_id,service_name,price)",
+      "id,reference_code,customer_name,first_name,middle_name,last_name,phone,moto_brand,moto_model,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reason,pending_reschedule_reference_code,appointment_services(service_id,service_name,price)",
     )
     // Legacy records may have been written with lower-case reference codes.
     // Input is validated before this query, so it cannot introduce LIKE wildcards.
@@ -1329,7 +1199,7 @@ async function findAppointment(reference: string, phone: string) {
     ? await supabaseAdmin
         .from("appointments")
         .select(
-          "id,reference_code,customer_name,first_name,middle_name,last_name,phone,email,moto_brand,moto_model,moto_cc,moto_fuel_type,moto_transmission,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reason,appointment_services(service_id,service_name,price)",
+          "id,reference_code,customer_name,first_name,middle_name,last_name,phone,moto_brand,moto_model,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reason,appointment_services(service_id,service_name,price)",
         )
         .ilike("reference_code", normalizeReferenceCode(reference))
         .maybeSingle()
@@ -1435,7 +1305,6 @@ export const getRescheduleDetails = createServerFn({ method: "POST" })
         middleName: appt.middle_name ?? "",
         lastName: appt.last_name ?? "",
         phone: appt.phone,
-        email: appt.email ?? "",
         motoBrand: appt.moto_brand,
         motoModel: appt.moto_model,
         motoVariant: appt.moto_variant ?? "",
@@ -1584,16 +1453,30 @@ export const cancelAppointment = createServerFn({ method: "POST" })
     }
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { error } = await supabaseAdmin
-      .from("appointments")
-      .update({ status: "cancelled", cancelled_at: new Date().toISOString() })
-      .eq("id", appt.id);
-    if (error) throw error;
-    await supabaseAdmin.from("notifications").insert({
-      type: "cancelled_appointment",
-      title: `Cancelled ${appt.reference_code}`,
-      message: `${appt.customer_name} cancelled their ${appt.appointment_date} appointment.`,
-      appointment_id: appt.id,
+    const cancellation = await supabaseAdmin.rpc("cancel_public_appointment", {
+      p_appointment_id: appt.id,
+      p_cancellation_notice_hours: bookingRules.cancellationNoticeHours,
     });
+    if (cancellation.error) {
+      console.error("[Cancellation] atomic cancellation failed", {
+        code: cancellation.error.code,
+        message: cancellation.error.message,
+      });
+      if (
+        /PGRST202|cancel_public_appointment|function .* does not exist/i.test(
+          cancellation.error.message,
+        )
+      ) {
+        return {
+          ok: false as const,
+          error: "Cancellation setup is incomplete. The shop needs to apply its database update.",
+        };
+      }
+      return {
+        ok: false as const,
+        error:
+          cancellation.error.message || "We could not cancel the appointment. Please try again.",
+      };
+    }
     return { ok: true as const };
   });

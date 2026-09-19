@@ -171,13 +171,12 @@ function ArchivePage() {
     queryKey: ["archived-motorcycles", { searchTerm, filters, page }],
     queryFn: async () => {
       let query = supabase
-        .from("products")
+        .from("motorcycle_catalog")
         .select("*", { count: "exact" })
-        .eq("category", "motorcycle")
         .eq("is_archived", true)
         .order("brand")
-        .order("name");
-      if (searchTerm) query = query.or(`name.ilike.%${searchTerm}%,brand.ilike.%${searchTerm}%`);
+        .order("model");
+      if (searchTerm) query = query.or(`model.ilike.%${searchTerm}%,brand.ilike.%${searchTerm}%`);
       if (filters.dateFrom) query = query.gte("created_at", startOfManilaDay(filters.dateFrom));
       if (filters.dateTo) query = query.lte("created_at", endOfDay(filters.dateTo));
       const { data, error, count } = await query.range(
@@ -296,9 +295,28 @@ function ArchivePage() {
     onSuccess: () => {
       toast.success("Product restored.");
       queryClient.invalidateQueries({ queryKey: ["archived-products"], exact: false });
-      queryClient.invalidateQueries({ queryKey: ["archived-motorcycles"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-products"], exact: false });
+    },
+    onError: (err: Error) => {
+      console.error("Restore failed:", err);
+      toast.error(`Restore failed: ${err.message}`);
+    },
+  });
+
+  const restoreMotorcycle = useMutation({
+    mutationFn: async (id: string) => {
+      const { error } = await supabase
+        .from("motorcycle_catalog")
+        .update({ is_archived: false })
+        .eq("id", id);
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Motorcycle catalog item restored.");
+      queryClient.invalidateQueries({ queryKey: ["archived-motorcycles"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["admin-motorcycle-catalog"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["motorcycle-catalog"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["admin-service-model-catalog"], exact: false });
     },
     onError: (err: Error) => {
       console.error("Restore failed:", err);
@@ -369,6 +387,7 @@ function ArchivePage() {
         appointment: "appointments",
         service: "services",
         product: "products",
+        motorcycle: "motorcycle_catalog",
         crew: "crew_members",
         block: "schedule_blocks",
         blockedNumber: "blocked_numbers",
@@ -377,6 +396,7 @@ function ArchivePage() {
         | "appointments"
         | "services"
         | "products"
+        | "motorcycle_catalog"
         | "crew_members"
         | "schedule_blocks"
         | "blocked_numbers";
@@ -843,15 +863,15 @@ function ArchivePage() {
                   {motorcycleRows.map((p) => (
                     <TableRow key={p.id}>
                       <TableCell data-label="Model" className="text-sm font-medium">
-                        {p.name}
+                        {p.model}
                       </TableCell>
                       <TableCell data-label="Brand" className="text-sm">
                         {p.brand ?? "-"}
                       </TableCell>
                       <TableCell data-label="Actions" className="text-right">
                         <ArchiveRowActions
-                          onRestore={() => restoreProduct.mutate(p.id)}
-                          onDelete={() => confirmDelete(p.id, "product")}
+                          onRestore={() => restoreMotorcycle.mutate(p.id)}
+                          onDelete={() => confirmDelete(p.id, "motorcycle")}
                         />
                       </TableCell>
                     </TableRow>

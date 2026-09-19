@@ -1,7 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Clock } from "lucide-react";
-
 import { useState } from "react";
 
 import { SiteFooter } from "@/components/site/site-footer";
@@ -11,7 +10,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group";
 import { supabase } from "@/integrations/supabase/client";
-import { formatPHP } from "@/lib/shop";
 
 export const Route = createFileRoute("/services")({
   head: () => ({
@@ -97,22 +95,16 @@ function ServicesPage() {
             {filtered?.map((s) => (
               <Card key={s.id} className="border-border/70 bg-card/60">
                 <CardContent className="p-5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <Badge
-                        variant="outline"
-                        className="font-display text-[0.55rem] font-medium uppercase"
-                      >
-                        {s.category}
-                      </Badge>
-                      <h2 className="font-display text-lg tracking-wide uppercase">{s.name}</h2>
-                    </div>
-                    <span className="font-display text-lg text-primary">{formatPHP(s.price)}</span>
+                  <div className="flex items-center gap-2">
+                    <Badge
+                      variant="outline"
+                      className="font-display text-[0.55rem] font-medium uppercase"
+                    >
+                      {s.category}
+                    </Badge>
+                    <h2 className="font-display text-lg tracking-wide uppercase">{s.name}</h2>
                   </div>
                   <p className="mt-2 text-sm text-muted-foreground">{s.description}</p>
-                  <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-                    <Clock className="h-3.5 w-3.5" /> approx. {s.duration_minutes} minutes
-                  </p>
                 </CardContent>
               </Card>
             ))}

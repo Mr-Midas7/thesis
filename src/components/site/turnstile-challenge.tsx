@@ -10,6 +10,7 @@ type TurnstileWidget = {
       sitekey: string;
       action: string;
       theme: "auto";
+      size: "flexible";
       callback: (token: string) => void;
       "expired-callback": () => void;
       "error-callback": () => void;
@@ -50,6 +51,7 @@ export function TurnstileChallenge({ resetKey, onToken }: TurnstileChallengeProp
           sitekey,
           action: "booking",
           theme: "auto",
+          size: "flexible",
           callback: onToken,
           "expired-callback": () => onToken(""),
           "error-callback": () => onToken(""),
@@ -83,7 +85,7 @@ export function TurnstileChallenge({ resetKey, onToken }: TurnstileChallengeProp
       <p className="text-sm text-muted-foreground">
         Complete the security check to confirm booking.
       </p>
-      <div ref={containerRef} />
+      <div ref={containerRef} className="w-full" />
     </div>
   );
 }

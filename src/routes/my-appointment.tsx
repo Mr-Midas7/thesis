@@ -1,13 +1,15 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { Loader2, Search } from "lucide-react";
+import { CircleAlert, Loader2, Search } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
+import { TurnstileChallenge } from "@/components/site/turnstile-challenge";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -88,6 +90,8 @@ export const Route = createFileRoute("/my-appointment")({
 type Appt =
   Awaited<ReturnType<typeof lookupAppointment>> extends { appointment: infer A } ? A : never;
 
+const turnstileEnabled = Boolean(import.meta.env["VITE_TURNSTILE_SITE_KEY"]);
+
 function MyAppointment() {
   const lookup = useServerFn(lookupAppointment);
   const cancel = useServerFn(cancelAppointment);
@@ -96,11 +100,13 @@ function MyAppointment() {
   const [reference, setReference] = useState("");
   const [phone, setPhone] = useState("");
   const [errors, setErrors] = useState<{ reference?: string; phone?: string }>({});
+  const [appointmentPreviewError, setAppointmentPreviewError] = useState<string | null>(null);
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [newDate, setNewDate] = useState("");
   const [newStartTime, setNewStartTime] = useState("");
   const [rescheduleReason, setRescheduleReason] = useState("");
   const [rescheduleRequestId, setRescheduleRequestId] = useState<string | null>(null);
+  const [rescheduleTurnstileToken, setRescheduleTurnstileToken] = useState("");
   const [rescheduleConfirmation, setRescheduleConfirmation] = useState<{
     reference: string;
     date: string;
@@ -137,7 +143,13 @@ function MyAppointment() {
     queryKey: ["appointment-reschedule-availability", appt?.reference, rescheduleServiceIds],
     queryFn: () =>
       availabilityFn({
-        data: { days: 45, serviceIds: rescheduleServiceIds, rescheduling: true },
+        data: {
+          days: 45,
+          serviceIds: rescheduleServiceIds,
+          rescheduling: true,
+          rescheduleReference: appt?.reference,
+          reschedulePhone: appt?.phone,
+        },
       }),
     enabled: isRescheduling && Boolean(appt) && rescheduleServiceIds.length > 0,
   });
@@ -182,16 +194,18 @@ function MyAppointment() {
     onSuccess: (res) => {
       if (!res.ok) {
         setAppt(null);
-        setErrors((current) => ({ ...current, reference: res.error }));
+        setAppointmentPreviewError(res.error);
         return;
       }
+      setAppointmentPreviewError(null);
       setAppt(res.appointment);
     },
-    onError: () =>
-      setErrors((current) => ({
-        ...current,
-        reference: "Please check your reference code and mobile number.",
-      })),
+    onError: () => {
+      setAppt(null);
+      setAppointmentPreviewError(
+        "We could not retrieve your appointment details right now. Please try again shortly.",
+      );
+    },
   });
 
   const cancelMutation = useMutation({
@@ -199,17 +213,16 @@ function MyAppointment() {
       cancel({ data: { reference: normalizeReferenceCode(reference), phone: phone.trim() } }),
     onSuccess: (res) => {
       if (!res.ok) {
-        setErrors((current) => ({ ...current, reference: res.error }));
+        setAppointmentPreviewError(res.error);
         return;
       }
       toast.success("Your appointment has been cancelled.");
       search.mutate();
     },
     onError: () =>
-      setErrors((current) => ({
-        ...current,
-        reference: "We could not cancel the appointment. Please call the shop.",
-      })),
+      setAppointmentPreviewError(
+        "We could not cancel the appointment right now. Please try again or contact the shop.",
+      ),
   });
 
   const rescheduleMutation = useMutation({
@@ -223,7 +236,6 @@ function MyAppointment() {
           middleName: appt.middleName,
           lastName: appt.lastName,
           phone: appt.phone,
-          email: "",
           motoBrand: "Original",
           motoModel: "Appointment",
           motoVariant: "",
@@ -233,7 +245,7 @@ function MyAppointment() {
           date: newDate,
           startTime: newStartTime,
           notes: "",
-          turnstileToken: "",
+          turnstileToken: rescheduleTurnstileToken,
           // Keep this value stable for retries so a lost response returns the
           // originally reserved reference instead of creating a new request.
           idempotencyKey: rescheduleRequestId ?? crypto.randomUUID(),
@@ -280,6 +292,7 @@ function MyAppointment() {
     setNewStartTime("");
     setRescheduleReason("");
     setRescheduleRequestId(crypto.randomUUID());
+    setRescheduleTurnstileToken("");
     setRescheduleConfirmation(null);
     setRescheduleTermsAccepted(false);
     setRescheduleErrors({});
@@ -317,8 +330,10 @@ function MyAppointment() {
     setNewStartTime("");
     setRescheduleReason("");
     setRescheduleRequestId(null);
+    setRescheduleTurnstileToken("");
     setRescheduleConfirmation(null);
     setRescheduleErrors({});
+    setAppointmentPreviewError(null);
     setReference("");
     setPhone("");
     setErrors({});
@@ -327,10 +342,11 @@ function MyAppointment() {
   function validate() {
     const nextErrors: { reference?: string; phone?: string } = {};
     if (!isReferenceCode(reference)) {
-      nextErrors.reference = "Enter a valid reference code in the format FRM-XXXXXX.";
+      nextErrors.reference = "Enter a valid reference code.";
     }
     if (!normalizePhilippineMobile(phone)) nextErrors.phone = PHONE_VALIDATION_MESSAGE;
     setErrors(nextErrors);
+    setAppointmentPreviewError(null);
     return Object.keys(nextErrors).length === 0;
   }
 
@@ -355,12 +371,13 @@ function MyAppointment() {
             }
           }}
         >
-          <div className="space-y-1.5">
+          <div className="relative space-y-1.5">
             <Label>Reference code</Label>
             <Input
               value={reference}
               onChange={(e) => {
                 setReference(normalizeReferenceCode(e.target.value));
+                setAppointmentPreviewError(null);
                 setErrors((current) => {
                   const { reference: _, ...rest } = current;
                   return rest;
@@ -371,9 +388,17 @@ function MyAppointment() {
               autoCapitalize="characters"
               aria-invalid={!!errors.reference}
             />
-            <FieldError message={errors.reference} />
+            {errors.reference && (
+              <p
+                role="alert"
+                className="absolute -bottom-5 left-0 flex items-center gap-1 text-xs text-destructive"
+              >
+                <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+                {errors.reference}
+              </p>
+            )}
           </div>
-          <div className="space-y-1.5">
+          <div className="relative space-y-1.5">
             <Label>Mobile number</Label>
             <Input
               type="tel"
@@ -383,6 +408,7 @@ function MyAppointment() {
               autoComplete="tel"
               onChange={(e) => {
                 setPhone(sanitizePhilippineMobileInput(e.target.value));
+                setAppointmentPreviewError(null);
                 setErrors((current) => {
                   const { phone: _, ...rest } = current;
                   return rest;
@@ -391,12 +417,35 @@ function MyAppointment() {
               placeholder="09171234567"
               aria-invalid={!!errors.phone}
             />
-            <FieldError message={errors.phone} />
+            {errors.phone && (
+              <p
+                role="alert"
+                className="absolute -bottom-5 left-0 flex items-center gap-1 text-xs text-destructive"
+              >
+                <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
+                {errors.phone}
+              </p>
+            )}
           </div>
           <Button type="submit" disabled={search.isPending} className="font-display uppercase">
             {search.isPending ? <Loader2 className="animate-spin" /> : <Search />} Find
           </Button>
         </form>
+
+        {appointmentPreviewError && (
+          <Alert variant="destructive" className="mt-4 border-destructive/40 bg-destructive/5">
+            <CircleAlert className="size-4" aria-hidden="true" />
+            <div>
+              <AlertTitle>Unable to show appointment details</AlertTitle>
+              <AlertDescription>
+                <p>{appointmentPreviewError}</p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  No changes have been made to your appointment.
+                </p>
+              </AlertDescription>
+            </div>
+          </Alert>
+        )}
 
         {rescheduleConfirmation && (
           <section
@@ -662,13 +711,20 @@ function MyAppointment() {
                           </div>
                           <FieldError message={rescheduleErrors.terms} />
                           <FieldError message={rescheduleErrors.request} />
+                          <TurnstileChallenge
+                            resetKey={rescheduleRequestId ?? ""}
+                            onToken={setRescheduleTurnstileToken}
+                          />
 
                           <div className="flex flex-wrap gap-3">
                             <Button
                               type="button"
                               className="font-display uppercase"
                               onClick={openRescheduleReview}
-                              disabled={rescheduleMutation.isPending}
+                              disabled={
+                                rescheduleMutation.isPending ||
+                                (turnstileEnabled && !rescheduleTurnstileToken)
+                              }
                             >
                               Reschedule
                             </Button>
@@ -728,7 +784,10 @@ function MyAppointment() {
                           <AlertDialogFooter>
                             <AlertDialogCancel>Go back</AlertDialogCancel>
                             <AlertDialogAction
-                              disabled={rescheduleMutation.isPending}
+                              disabled={
+                                rescheduleMutation.isPending ||
+                                (turnstileEnabled && !rescheduleTurnstileToken)
+                              }
                               onClick={submitRescheduleRequest}
                             >
                               {rescheduleMutation.isPending && <Loader2 className="animate-spin" />}{" "}
@@ -1107,6 +1166,12 @@ function MyAppointment() {
                       </div>
                       <FieldError message={rescheduleErrors.terms} />
                       <FieldError message={rescheduleErrors.request} />
+                      {isRescheduling && supportsSlideTransition && (
+                        <TurnstileChallenge
+                          resetKey={rescheduleRequestId ?? ""}
+                          onToken={setRescheduleTurnstileToken}
+                        />
+                      )}
 
                       <div className="flex flex-wrap justify-between gap-3 border-t border-border/70 pt-5">
                         <Button
@@ -1124,7 +1189,10 @@ function MyAppointment() {
                           type="button"
                           className="font-display uppercase"
                           onClick={openRescheduleReview}
-                          disabled={rescheduleMutation.isPending}
+                          disabled={
+                            rescheduleMutation.isPending ||
+                            (turnstileEnabled && !rescheduleTurnstileToken)
+                          }
                         >
                           Continue to confirmation
                         </Button>
@@ -1147,7 +1215,10 @@ function MyAppointment() {
                       <AlertDialogFooter>
                         <AlertDialogCancel>Go back</AlertDialogCancel>
                         <AlertDialogAction
-                          disabled={rescheduleMutation.isPending}
+                          disabled={
+                            rescheduleMutation.isPending ||
+                            (turnstileEnabled && !rescheduleTurnstileToken)
+                          }
                           onClick={submitRescheduleRequest}
                         >
                           {rescheduleMutation.isPending && <Loader2 className="animate-spin" />}{" "}

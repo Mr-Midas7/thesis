@@ -96,7 +96,6 @@ const MOBILE_BOOKING_STEPS = [
   "Motorcycle details",
   "Service selection",
   "Date & time",
-  "Terms & total",
   "Review",
 ] as const;
 
@@ -125,7 +124,6 @@ type Errors = Partial<{
   middleName: string;
   lastName: string;
   phone: string;
-  email: string;
   motoBrand: string;
   motoModel: string;
   plateNumber: string;
@@ -138,11 +136,10 @@ type Errors = Partial<{
 }>;
 
 const validationFieldOrder: (keyof Errors)[] = [
+  "lastName",
   "firstName",
   "middleName",
-  "lastName",
   "phone",
-  "email",
   "motoBrand",
   "motoModel",
   "plateNumber",
@@ -159,7 +156,6 @@ const validationFocusTargets: Partial<Record<keyof Errors, string>> = {
   middleName: "#booking-middle-name",
   lastName: "#booking-last-name",
   phone: "#booking-phone",
-  email: "#booking-email",
   motoBrand: "#booking-moto-brand",
   motoModel: "#booking-moto-model",
   plateNumber: "#booking-plate-number",
@@ -176,7 +172,6 @@ const validationSteps: Partial<Record<keyof Errors, number>> = {
   middleName: 1,
   lastName: 1,
   phone: 1,
-  email: 1,
   motoBrand: 2,
   motoModel: 2,
   plateNumber: 2,
@@ -203,7 +198,6 @@ function BookPage() {
     middleName: "",
     lastName: "",
     phone: "",
-    email: "",
     motoBrand: "",
     motoModel: "",
     motoVariant: "",
@@ -288,7 +282,6 @@ function BookPage() {
       middleName: appointment.middleName,
       lastName: appointment.lastName,
       phone: appointment.phone,
-      email: appointment.email,
       motoBrand: appointment.motoBrand,
       motoModel: appointment.motoModel,
       motoVariant: appointment.motoVariant,
@@ -308,16 +301,15 @@ function BookPage() {
     queryKey: ["motorcycle-catalog"],
     queryFn: async () => {
       const { data, error } = await supabase
-        .from("products")
-        .select("brand,name,engine_cc,fuel_type,transmission")
-        .eq("category", "motorcycle")
+        .from("motorcycle_catalog")
+        .select("brand,model")
         .eq("is_active", true)
         .eq("is_archived", false)
         .order("brand")
-        .order("name");
+        .order("model");
       if (error) throw error;
       return Array.from(
-        new Map((data ?? []).map((m) => [`${m.brand ?? ""}:${m.name.trim()}`, m])).values(),
+        new Map((data ?? []).map((m) => [`${m.brand ?? ""}:${m.model.trim()}`, m])).values(),
       );
     },
   });
@@ -325,16 +317,7 @@ function BookPage() {
   const bookableMotorcycles = useMemo(
     () =>
       (motorcycleCatalog.data ?? []).filter((motorcycle) => {
-        const engineCc = Number(motorcycle.engine_cc);
-        const fuelType = motorcycle.fuel_type?.trim().toLowerCase();
-        const transmission = motorcycle.transmission?.trim().toLowerCase();
-        return (
-          Number.isFinite(engineCc) &&
-          engineCc >= 50 &&
-          engineCc <= 2000 &&
-          (fuelType === "fi" || fuelType?.startsWith("carb")) &&
-          ["manual", "semi-auto", "semi-automatic", "automatic"].includes(transmission ?? "")
-        );
+        return motorcycle.brand && motorcycle.model;
       }),
     [motorcycleCatalog.data],
   );
@@ -353,13 +336,13 @@ function BookPage() {
     const list = bookableMotorcycles.filter((p) => p.brand === form.motoBrand);
     return list
       .filter((p) => {
-        if (seen.has(p.name)) return false;
-        seen.add(p.name);
+        if (seen.has(p.model)) return false;
+        seen.add(p.model);
         return true;
       })
       .map((p) => ({
-        value: p.name,
-        label: p.name.replace(new RegExp(`^${p.brand} `), ""),
+        value: p.model,
+        label: p.model.replace(new RegExp(`^${p.brand} `), ""),
       }))
       .sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: "base" }));
   }, [bookableMotorcycles, form.motoBrand]);
@@ -479,7 +462,6 @@ function BookPage() {
           middleName: form.middleName.trim(),
           lastName: form.lastName.trim(),
           phone: form.phone.trim(),
-          email: form.email.trim(),
           motoBrand: form.motoBrand.trim(),
           motoModel: form.motoModel.trim(),
           motoVariant: form.motoVariant.trim(),
@@ -552,12 +534,9 @@ function BookPage() {
       return e;
     }
     if (steps.includes(1)) {
-      if (form.firstName.trim().length < 2) e.firstName = "Enter your first name.";
-      if (form.middleName.trim().length < 1) e.middleName = "Enter your middle name.";
       if (form.lastName.trim().length < 2) e.lastName = "Enter your last name.";
+      if (form.firstName.trim().length < 2) e.firstName = "Enter your first name.";
       if (!normalizePhilippineMobile(form.phone)) e.phone = PHONE_VALIDATION_MESSAGE;
-      if (form.email.trim() && !/^\S+@\S+\.\S+$/.test(form.email.trim()))
-        e.email = "Enter a valid email address.";
     }
     if (steps.includes(2)) {
       if (!form.motoBrand.trim()) e.motoBrand = "Required";
@@ -611,7 +590,7 @@ function BookPage() {
   function continueMobileBooking() {
     const e = validationErrors([mobileStep]);
     if (!showValidationErrors(e)) return;
-    setMobileStep((step) => Math.min(step + 1, 6));
+    setMobileStep((step) => Math.min(step + 1, 5));
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -736,11 +715,11 @@ function BookPage() {
   return (
     <div className="min-h-screen">
       <SiteHeader />
-      <main className="mx-auto w-full max-w-5xl px-4 py-12">
+      <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:py-12">
         <p className="text-xs tracking-[0.3em] text-accent uppercase">
           {isReschedule ? "Reschedule appointment" : "Booking"}
         </p>
-        <h1 className="font-display text-4xl font-bold uppercase md:text-5xl">
+        <h1 className="font-display text-3xl font-bold uppercase sm:text-4xl md:text-5xl">
           {isReschedule ? "Choose a new service slot" : "Reserve your service slot"}
         </h1>
         <p className="mt-2 max-w-2xl text-muted-foreground">
@@ -751,10 +730,10 @@ function BookPage() {
 
         <div className="sticky top-20 z-20 -mx-4 mt-6 border-y border-border/70 bg-background/95 px-4 py-3 backdrop-blur">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">Step {mobileStep} of 6</span>
+            <span className="font-medium text-foreground">Step {mobileStep} of 5</span>
             <span>{MOBILE_BOOKING_STEPS[mobileStep - 1]}</span>
           </div>
-          <ol className="mt-3 grid grid-cols-6 gap-1" aria-label="Booking progress">
+          <ol className="mt-3 grid grid-cols-5 gap-1.5 sm:gap-2" aria-label="Booking progress">
             {MOBILE_BOOKING_STEPS.map((step, index) => {
               const stepNumber = index + 1;
               const complete = stepNumber < mobileStep;
@@ -763,7 +742,7 @@ function BookPage() {
                 <li key={step} className="min-w-0">
                   <span
                     className={cn(
-                      "flex h-6 w-full items-center justify-center rounded-full border text-[10px] font-semibold",
+                      "flex h-8 w-full items-center justify-center rounded-full border text-xs font-medium sm:h-9",
                       complete && "border-primary bg-primary text-primary-foreground",
                       current && "border-primary text-primary",
                       !complete && !current && "border-border text-muted-foreground",
@@ -789,7 +768,7 @@ function BookPage() {
           className="mt-10 space-y-8"
           onSubmit={(e) => {
             e.preventDefault();
-            if (mobileStep === 6) submitBooking();
+            if (mobileStep === 5) submitBooking();
             else continueMobileBooking();
           }}
         >
@@ -800,36 +779,6 @@ function BookPage() {
               </p>
             )}
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              <Field label="First Name" error={errors.firstName}>
-                <Input
-                  id="booking-first-name"
-                  value={form.firstName}
-                  maxLength={40}
-                  disabled={isReschedule}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      firstName: e.target.value.replace(/[^a-zA-Z\s]/g, ""),
-                    })
-                  }
-                  placeholder="Juan"
-                />
-              </Field>
-              <Field label="Middle Name" error={errors.middleName}>
-                <Input
-                  id="booking-middle-name"
-                  value={form.middleName}
-                  maxLength={40}
-                  disabled={isReschedule}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      middleName: e.target.value.replace(/[^a-zA-Z\s]/g, ""),
-                    })
-                  }
-                  placeholder="Santos"
-                />
-              </Field>
               <Field label="Last Name" error={errors.lastName}>
                 <Input
                   id="booking-last-name"
@@ -845,6 +794,36 @@ function BookPage() {
                   placeholder="Dela Cruz"
                 />
               </Field>
+              <Field label="First Name" error={errors.firstName}>
+                <Input
+                  id="booking-first-name"
+                  value={form.firstName}
+                  maxLength={40}
+                  disabled={isReschedule}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      firstName: e.target.value.replace(/[^a-zA-Z\s]/g, ""),
+                    })
+                  }
+                  placeholder="Juan"
+                />
+              </Field>
+              <Field label="Middle Name (Optional)" error={errors.middleName}>
+                <Input
+                  id="booking-middle-name"
+                  value={form.middleName}
+                  maxLength={40}
+                  disabled={isReschedule}
+                  onChange={(e) =>
+                    setForm({
+                      ...form,
+                      middleName: e.target.value.replace(/[^a-zA-Z\s]/g, ""),
+                    })
+                  }
+                  placeholder="Santos"
+                />
+              </Field>
               <Field label="Mobile number" error={errors.phone}>
                 <Input
                   id="booking-phone"
@@ -858,16 +837,6 @@ function BookPage() {
                     setForm({ ...form, phone: sanitizePhilippineMobileInput(e.target.value) });
                   }}
                   placeholder="09171234567"
-                />
-              </Field>
-              <Field label="Email (optional)" error={errors.email}>
-                <Input
-                  id="booking-email"
-                  value={form.email}
-                  maxLength={120}
-                  disabled={isReschedule}
-                  onChange={(e) => setForm({ ...form, email: e.target.value })}
-                  placeholder="you@email.com"
                 />
               </Field>
             </div>
@@ -966,9 +935,9 @@ function BookPage() {
                 disabled={isReschedule}
               >
                 <SelectTrigger id="booking-service-category" className="w-full sm:w-52">
-                  <SelectValue />
+                  <SelectValue placeholder="All categories" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="item-aligned" className="max-h-64">
                   <SelectItem value="all">All categories</SelectItem>
                   {serviceCategories.map((category) => (
                     <SelectItem key={category} value={category} className="capitalize">
@@ -1073,88 +1042,108 @@ function BookPage() {
                   id="booking-schedule"
                   tabIndex={-1}
                   className={cn(
-                    "w-full overflow-x-auto rounded-lg border border-border bg-card/50 p-2",
-                    (errors.date || errors.schedule) && "border-destructive",
+                    "w-full rounded-xl border border-border bg-card/50 p-4 sm:p-5",
+                    (errors.date || errors.startTime || errors.schedule) && "border-destructive",
                   )}
                 >
-                  <div id="booking-date" tabIndex={-1}>
-                    <Calendar
-                      mode="single"
-                      selected={selectedDate}
-                      onSelect={(d) => {
-                        if (!d) return;
-                        const iso = format(d, "yyyy-MM-dd");
-                        setDate(iso);
-                        setStartTime("");
-                      }}
-                      disabled={(d) => {
-                        const iso = format(d, "yyyy-MM-dd");
-                        return !availableDateSet.has(iso);
-                      }}
-                      modifiers={{ fullyBooked: fullyBookedDates.map((value) => parseISO(value)) }}
-                      modifiersClassNames={{
-                        fullyBooked: "bg-destructive/15 text-destructive line-through opacity-100",
-                      }}
-                      classNames={{
-                        nav: "justify-between gap-1",
-                        month_caption:
-                          "flex h-(--cell-size) w-full items-center justify-center px-(--cell-size)",
-                      }}
-                    />
-                  </div>
-                </div>
-                <FieldError message={errors.date} className="mt-2" />
-                {fullyBookedDates.length > 0 && (
-                  <p className="mt-2 flex items-center gap-2 text-xs text-muted-foreground">
-                    <span className="h-3 w-3 rounded-sm bg-destructive/15 ring-1 ring-destructive/40" />
-                    Fully Booked dates cannot be selected.
-                  </p>
-                )}
-
-                <div id="booking-start-time" tabIndex={-1} className="mt-4">
-                  <p className="mb-2 text-sm text-muted-foreground">
-                    {date
-                      ? `Time slots for ${formatDateLong(date)}`
-                      : "Choose a date above to view available time slots."}
-                  </p>
-                  {date ? (
-                    <div
-                      className={cn(
-                        "grid grid-cols-2 gap-3 sm:grid-cols-4",
-                        (errors.startTime || errors.schedule) &&
-                          "rounded-lg ring-1 ring-destructive",
-                      )}
-                    >
-                      {availableSlots.map((slot) => (
-                        <button
-                          type="button"
-                          key={slot.id}
-                          disabled={slot.disabled}
-                          onClick={() => setStartTime(slot.startTime)}
-                          className={cn(
-                            "rounded-lg border p-3 text-center transition-colors",
-                            slot.disabled && "cursor-not-allowed opacity-40",
-                            startTime === slot.startTime
-                              ? "border-primary bg-primary/15"
-                              : "border-border bg-card/50 hover:border-primary/50",
-                          )}
-                        >
-                          <span className="font-display block">{formatTime(slot.startTime)}</span>
-                          <span className="block text-[11px] text-muted-foreground">Available</span>
-                        </button>
-                      ))}
-                      {availableSlots.length === 0 && (
-                        <p className="col-span-full rounded-lg border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
-                          No times remain available for this date. Select another available date.
+                  <div className="grid gap-6 lg:grid-cols-[minmax(18rem,0.8fr)_minmax(0,1.7fr)] lg:gap-8">
+                    <div className="border-b border-border/70 pb-5 lg:border-r lg:border-b-0 lg:pr-8 lg:pb-0">
+                      <div
+                        id="booking-date"
+                        tabIndex={-1}
+                        className="flex justify-center lg:justify-start"
+                      >
+                        <Calendar
+                          mode="single"
+                          selected={selectedDate}
+                          onSelect={(d) => {
+                            if (!d) return;
+                            const iso = format(d, "yyyy-MM-dd");
+                            setDate(iso);
+                            setStartTime("");
+                          }}
+                          disabled={(d) => !availableDateSet.has(format(d, "yyyy-MM-dd"))}
+                          modifiers={{
+                            fullyBooked: fullyBookedDates.map((value) => parseISO(value)),
+                          }}
+                          modifiersClassNames={{
+                            fullyBooked:
+                              "bg-destructive/15 text-destructive line-through opacity-100",
+                          }}
+                          className="p-0 min-[360px]:p-3"
+                          classNames={{
+                            nav: "justify-between gap-1",
+                            month_caption:
+                              "flex h-(--cell-size) w-full items-center justify-center px-(--cell-size)",
+                          }}
+                        />
+                      </div>
+                      {fullyBookedDates.length > 0 && (
+                        <p className="mt-4 flex items-center justify-center gap-2 text-xs text-muted-foreground lg:justify-start">
+                          <span className="h-3 w-3 rounded-sm bg-destructive/15 ring-1 ring-destructive/40" />
+                          Fully booked dates cannot be selected.
                         </p>
                       )}
                     </div>
-                  ) : (
-                    <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-                      Time slots will appear here after you choose a date.
+
+                    <div id="booking-start-time" tabIndex={-1}>
+                      <h3 className="font-display text-lg uppercase">Available time slots</h3>
+                      <p className="mt-1 mb-4 text-sm text-muted-foreground">
+                        {date
+                          ? formatDateLong(date)
+                          : "Choose a calendar date to view available times."}
+                      </p>
+                      {date ? (
+                        <div
+                          className={cn(
+                            "grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4",
+                            (errors.startTime || errors.schedule) &&
+                              "rounded-lg ring-1 ring-destructive",
+                          )}
+                        >
+                          {availableSlots.map((slot) => (
+                            <button
+                              type="button"
+                              key={slot.id}
+                              disabled={slot.disabled}
+                              onClick={() => setStartTime(slot.startTime)}
+                              className={cn(
+                                "rounded-lg border p-3 text-center transition-colors",
+                                slot.disabled && "cursor-not-allowed opacity-40",
+                                startTime === slot.startTime
+                                  ? "border-primary bg-primary text-primary-foreground"
+                                  : "border-border bg-card/50 hover:border-primary/50",
+                              )}
+                            >
+                              <span className="font-display block">
+                                {formatTime(slot.startTime)}
+                              </span>
+                              <span
+                                className={cn(
+                                  "block text-[11px] text-muted-foreground",
+                                  startTime === slot.startTime && "text-primary-foreground/80",
+                                )}
+                              >
+                                Available
+                              </span>
+                            </button>
+                          ))}
+                          {availableSlots.length === 0 && (
+                            <p className="col-span-full rounded-lg border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
+                              No times remain available for this date. Select another available
+                              date.
+                            </p>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+                          Time slots will appear here after you choose a date.
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </div>
+                <FieldError message={errors.date} className="mt-2" />
                 <FieldError message={errors.startTime} className="mt-2" />
               </>
             )}
@@ -1162,83 +1151,10 @@ function BookPage() {
           </Section>
 
           <Section
-            title="5. Terms, conditions, and estimated total"
+            title="5. Review"
             error={errors.terms}
             className={cn(mobileStep !== 5 && "hidden")}
           >
-            <div className="mb-5 rounded-lg border border-primary/30 bg-primary/5 p-4">
-              <p className="text-xs tracking-widest text-muted-foreground uppercase">
-                Estimated total
-              </p>
-              <p className="mt-1 font-display text-3xl text-primary">{formatPHP(total)}</p>
-              <div className="mt-3 space-y-1.5 text-sm text-muted-foreground">
-                {estimatedServices.map((service) => (
-                  <div key={service.id} className="flex items-center justify-between gap-3">
-                    <span>{service.name}</span>
-                    <span className="font-medium text-foreground">{formatPHP(service.price)}</span>
-                  </div>
-                ))}
-              </div>
-              {totalDuration > 0 && (
-                <p className="mt-3 text-xs text-muted-foreground">
-                  Estimated appointment time: {totalDuration} minutes, including arrival and
-                  post-service buffers.
-                </p>
-              )}
-            </div>
-            <div
-              className={cn(
-                "flex items-start gap-3 rounded-md text-sm",
-                errors.terms && "rounded-md border border-destructive p-3",
-              )}
-            >
-              <Checkbox
-                id="booking-terms"
-                checked={terms}
-                onCheckedChange={(v) => setTerms(v === true)}
-                className="mt-0.5"
-              />
-              <div className="leading-6">
-                <label id="booking-terms-label" htmlFor="booking-terms">
-                  I have read and agree to the{" "}
-                </label>
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <button
-                      type="button"
-                      className="font-bold text-primary underline decoration-primary/70 underline-offset-4 transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    >
-                      Terms and Conditions
-                    </button>
-                  </DialogTrigger>
-                  <DialogContent className="sm:max-w-2xl">
-                    <DialogHeader>
-                      <DialogTitle className="font-display text-2xl uppercase">
-                        Terms and Conditions
-                      </DialogTitle>
-                      <DialogDescription>
-                        Please read the complete booking terms before confirming your appointment.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-border/70 bg-card/50 p-4 text-sm leading-6 whitespace-pre-line text-muted-foreground">
-                      {bookingTerms}
-                    </div>
-                    <DialogFooter>
-                      <DialogClose asChild>
-                        <Button type="button" variant="outline">
-                          Close
-                        </Button>
-                      </DialogClose>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-                <span>.</span>
-              </div>
-            </div>
-            <WizardActions onBack={goBackMobileBooking} onContinue={continueMobileBooking} />
-          </Section>
-
-          <Section title="6. Review" className={cn(mobileStep !== 6 && "hidden")}>
             <p className="mb-5 text-sm text-muted-foreground">
               Review the details below before confirming your appointment.
             </p>
@@ -1250,7 +1166,6 @@ function BookPage() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <ReviewItem label="Customer" value={customerFullName} />
                   <ReviewItem label="Mobile number" value={form.phone} />
-                  <ReviewItem label="Email" value={form.email || "Not provided"} />
                 </div>
               </div>
               <div className="space-y-3">
@@ -1293,7 +1208,7 @@ function BookPage() {
                   </li>
                 ))}
                 <li className="flex flex-wrap items-center justify-between gap-3 bg-primary/5 p-3">
-                  <span className="font-medium">Estimated total</span>
+                  <span className="font-medium">Total</span>
                   <span className="font-display text-xl text-primary">{formatPHP(total)}</span>
                 </li>
               </ul>
@@ -1302,13 +1217,67 @@ function BookPage() {
                 post-service buffers.
               </p>
             </div>
+            <div
+              className={cn(
+                "mt-5 flex items-start gap-3 rounded-md text-sm",
+                errors.terms && "border border-destructive p-3",
+              )}
+            >
+              <Checkbox
+                id="booking-terms"
+                checked={terms}
+                onCheckedChange={(value) => setTerms(value === true)}
+                className="mt-0.5"
+              />
+              <div className="leading-6">
+                <label id="booking-terms-label" htmlFor="booking-terms">
+                  I have read and agree to the{" "}
+                </label>
+                <Dialog>
+                  <DialogTrigger asChild>
+                    <button
+                      type="button"
+                      className="font-bold text-primary underline decoration-primary/70 underline-offset-4 transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                    >
+                      Terms and Conditions
+                    </button>
+                  </DialogTrigger>
+                  <DialogContent className="sm:max-w-2xl">
+                    <DialogHeader>
+                      <DialogTitle className="font-display text-2xl uppercase">
+                        Terms and Conditions
+                      </DialogTitle>
+                      <DialogDescription>
+                        Please read the complete booking terms before confirming your appointment.
+                      </DialogDescription>
+                    </DialogHeader>
+                    <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-border/70 bg-card/50 p-4 text-sm leading-6 whitespace-pre-line text-muted-foreground">
+                      {bookingTerms}
+                    </div>
+                    <DialogFooter>
+                      <DialogClose asChild>
+                        <Button type="button" variant="outline">
+                          Close
+                        </Button>
+                      </DialogClose>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+                <span>.</span>
+              </div>
+            </div>
             <p className="mt-5 text-xs text-muted-foreground">
               Final availability is checked again when you confirm your booking.
             </p>
             <div className="w-full space-y-4 md:w-auto">
               <TurnstileChallenge resetKey={bookingRequestId} onToken={setTurnstileToken} />
-              <div className="flex justify-between gap-3 md:justify-end">
-                <Button type="button" variant="outline" onClick={goBackMobileBooking}>
+              <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={goBackMobileBooking}
+                  className="w-full sm:w-auto"
+                >
                   Back
                 </Button>
                 <Button
@@ -1317,7 +1286,7 @@ function BookPage() {
                   disabled={
                     !rescheduleReady || mutation.isPending || (turnstileEnabled && !turnstileToken)
                   }
-                  className="font-display tracking-wide uppercase"
+                  className="w-full font-display tracking-wide uppercase sm:w-auto"
                 >
                   {mutation.isPending && <Loader2 className="animate-spin" />}{" "}
                   {isReschedule ? "Submit reschedule request" : "Confirm booking"}
@@ -1409,7 +1378,7 @@ function Section({
   children: React.ReactNode;
 }) {
   return (
-    <section className={cn("rounded-xl border border-border/70 bg-card/40 p-6", className)}>
+    <section className={cn("rounded-xl border border-border/70 bg-card/40 p-4 sm:p-6", className)}>
       <h2 className="font-display mb-4 text-xl tracking-wide uppercase">{title}</h2>
       {children}
       <FieldError message={error} className="mt-3" />
@@ -1421,13 +1390,17 @@ function WizardActions({ onBack, onContinue }: { onBack?: () => void; onContinue
   return (
     <div className="mt-6 flex justify-between gap-3 border-t border-border/70 pt-4">
       {onBack ? (
-        <Button type="button" variant="outline" onClick={onBack}>
+        <Button type="button" variant="outline" onClick={onBack} className="flex-1 sm:flex-none">
           Back
         </Button>
       ) : (
         <span />
       )}
-      <Button type="button" onClick={onContinue} className="font-display uppercase">
+      <Button
+        type="button"
+        onClick={onContinue}
+        className="flex-1 font-display uppercase sm:flex-none"
+      >
         Continue
       </Button>
     </div>

@@ -478,7 +478,7 @@ function ScheduleBlocks() {
         </DialogContent>
       </Dialog>
 
-      <Card className="max-w-5xl border-border/70 bg-card/60">
+      <Card className="w-full border-border/70 bg-card/60">
         <CardContent className="overflow-x-auto p-0">
           <Table className="admin-data-table admin-balanced-table">
             <colgroup>

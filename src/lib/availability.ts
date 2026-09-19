@@ -1,4 +1,10 @@
-import { addDays, intervalsOverlap, isSlotBookable, timeToMinutes } from "./shop";
+import {
+  addDays,
+  intervalsOverlap,
+  isBookingTimeRangeWithinHours,
+  isSlotBookable,
+  timeToMinutes,
+} from "./shop";
 
 export type TimeSlot = {
   id: string;
@@ -140,7 +146,9 @@ function computeAvailableSlotsFromSource(
       parseInt(slot.startTime.slice(0, 2)) * 60 + parseInt(slot.startTime.slice(3, 5));
     const slotEndMin = slotStartMin + totalDuration;
 
-    const notBookable = !isSlotBookable(date, slot.startTime, availability.minimumBookingLeadHours);
+    const notBookable =
+      !isSlotBookable(date, slot.startTime, availability.minimumBookingLeadHours) ||
+      !isBookingTimeRangeWithinHours(slot.startTime, totalDuration);
 
     const blocked = availability.blocks.some((b) => {
       if (b.date !== date) return false;

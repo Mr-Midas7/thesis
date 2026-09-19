@@ -18,7 +18,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { supabase } from "@/integrations/supabase/client";
-import { SHOP, formatPHP } from "@/lib/shop";
+import { SHOP } from "@/lib/shop";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -49,7 +49,6 @@ function Home() {
         .select("*")
         .eq("is_active", true)
         .eq("is_archived", false)
-        .neq("category", "motorcycle")
         .order("is_featured", { ascending: false })
         .order("sort_order")
         .limit(8);
@@ -199,16 +198,8 @@ function Home() {
               {services.data?.map((s) => (
                 <Card key={s.id} className="border-border/70 bg-background/60">
                   <CardContent className="p-5">
-                    <div className="flex items-start justify-between gap-3">
-                      <h3 className="font-display text-lg tracking-wide uppercase">{s.name}</h3>
-                      <span className="font-display text-lg text-primary">
-                        {formatPHP(s.price)}
-                      </span>
-                    </div>
+                    <h3 className="font-display text-lg tracking-wide uppercase">{s.name}</h3>
                     <p className="mt-2 text-sm text-muted-foreground">{s.description}</p>
-                    <p className="mt-3 text-xs text-muted-foreground">
-                      Approx. {s.duration_minutes} minutes
-                    </p>
                   </CardContent>
                 </Card>
               ))}
