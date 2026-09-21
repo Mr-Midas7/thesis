@@ -1,7 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Clock } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
@@ -104,7 +104,7 @@ function ServicesPage() {
                     </Badge>
                     <h2 className="font-display text-lg tracking-wide uppercase">{s.name}</h2>
                   </div>
-                  <p className="mt-2 text-sm text-muted-foreground">{s.description}</p>
+                  <ExpandableServiceDescription description={s.description} serviceName={s.name} />
                 </CardContent>
               </Card>
             ))}
@@ -122,6 +122,58 @@ function ServicesPage() {
         </div>
       </main>
       <SiteFooter />
+    </div>
+  );
+}
+
+function ExpandableServiceDescription({
+  description,
+  serviceName,
+}: {
+  description: string | null;
+  serviceName: string;
+}) {
+  const descriptionRef = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [canExpand, setCanExpand] = useState(false);
+  const details = description?.trim() ?? "";
+
+  useEffect(() => {
+    const element = descriptionRef.current;
+    if (!element || !details) return;
+
+    const checkOverflow = () => {
+      if (!expanded) setCanExpand(element.scrollHeight > element.clientHeight + 1);
+    };
+
+    checkOverflow();
+    if (typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(checkOverflow);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [details, expanded]);
+
+  if (!details) return null;
+
+  return (
+    <div className="mt-2 text-sm text-muted-foreground">
+      <p ref={descriptionRef} className={expanded ? "break-words" : "line-clamp-3 break-words"}>
+        {details}
+      </p>
+      {canExpand && (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="mt-1 h-auto p-0 text-sm"
+          onClick={() => setExpanded((current) => !current)}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Collapse" : "Expand"} details for ${serviceName}`}
+        >
+          {expanded ? "See Less" : "See More"}
+        </Button>
+      )}
     </div>
   );
 }
