@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { CalendarDays } from "lucide-react";
 import { useDeferredValue, useEffect, useState } from "react";
+import { z } from "zod";
 
 import { PageHeader } from "@/components/admin/page-header";
 import { ActiveFilterChips } from "@/components/admin/active-filter-chips";
@@ -24,6 +25,9 @@ import { formatDateLong, formatPHP, formatTime, statusLabel, statusTone } from "
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/admin/customers")({
+  validateSearch: z.object({
+    phone: z.string().min(1).optional(),
+  }),
   component: CustomersPage,
 });
 
@@ -39,6 +43,7 @@ type Customer = {
 type CustomerPage = { rows: Customer[]; total: number };
 
 function CustomersPage() {
+  const search = Route.useSearch();
   const pageSize = 10;
   const historyPageSize = 10;
   const [term, setTerm] = useState("");
@@ -83,6 +88,14 @@ function CustomersPage() {
   useEffect(() => {
     setPage(0);
   }, [term]);
+
+  useEffect(() => {
+    if (!search.phone) return;
+    setTerm(search.phone);
+    setPage(0);
+    setHistoryCustomer(search.phone);
+    setHistoryPage(0);
+  }, [search.phone]);
 
   const rows = customers.data?.rows ?? [];
 

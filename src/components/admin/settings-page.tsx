@@ -16,6 +16,16 @@ import { useEffect, useState } from "react";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/admin/page-header";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
@@ -202,6 +212,7 @@ export function SettingsPage() {
   const [accountErrors, setAccountErrors] = useState<
     Partial<Record<AccountErrorField, string | undefined>>
   >({});
+  const [pendingSave, setPendingSave] = useState<SettingsTab | null>(null);
 
   const savedSettings = useQuery({
     queryKey: ["shop-settings"],
@@ -443,6 +454,21 @@ export function SettingsPage() {
     return Object.keys(nextErrors).length === 0;
   }
 
+  function requestSave(section: SettingsTab) {
+    if (section === "account") {
+      if (validateAccount()) setPendingSave(section);
+      return;
+    }
+    if (validateSettings(section)) setPendingSave(section);
+  }
+
+  function confirmSave() {
+    if (!pendingSave) return;
+    if (pendingSave === "account") saveAccount.mutate();
+    else saveSettings.mutate(pendingSave);
+    setPendingSave(null);
+  }
+
   function validateAccount() {
     const nextErrors: Partial<Record<AccountErrorField, string | undefined>> = {};
     if (account.name.trim().length < 2) {
@@ -480,6 +506,12 @@ export function SettingsPage() {
   }
 
   const avatar = avatarPreview ?? account.avatarUrl;
+  const pendingSaveLabel =
+    pendingSave === "account"
+      ? "account changes"
+      : pendingSave
+        ? tabLabels[pendingSave]
+        : "settings";
 
   return (
     <div className="mx-auto w-full max-w-5xl">
@@ -564,9 +596,7 @@ export function SettingsPage() {
               </Card>
               <SaveButton
                 loading={saveSettings.isPending}
-                onClick={() => {
-                  if (validateSettings("shop")) saveSettings.mutate("shop");
-                }}
+                onClick={() => requestSave("shop")}
                 label="Save shop information"
               />
             </TabsContent>
@@ -717,9 +747,7 @@ export function SettingsPage() {
               </p>
               <SaveButton
                 loading={saveSettings.isPending}
-                onClick={() => {
-                  if (validateSettings("appointments")) saveSettings.mutate("appointments");
-                }}
+                onClick={() => requestSave("appointments")}
                 label="Save appointment settings"
               />
             </TabsContent>
@@ -896,15 +924,31 @@ export function SettingsPage() {
               </SettingsCard>
               <SaveButton
                 loading={saveAccount.isPending}
-                onClick={() => {
-                  if (validateAccount()) saveAccount.mutate();
-                }}
+                onClick={() => requestSave("account")}
                 label="Save account changes"
               />
             </TabsContent>
           </>
         )}
       </Tabs>
+      <AlertDialog
+        open={pendingSave !== null}
+        onOpenChange={(open) => !open && setPendingSave(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Save {pendingSaveLabel}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Confirm that you want to apply these changes. The updated settings will take effect
+              immediately.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmSave}>Save changes</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

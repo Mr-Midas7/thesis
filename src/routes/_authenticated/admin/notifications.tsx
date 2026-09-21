@@ -34,7 +34,7 @@ function NotificationsPage() {
       const { data, error } = await supabase
         .from("notifications")
         .select(
-          "*, appointments(status, reference_code, reschedule_count, pending_reschedule_request_id, pending_reschedule_date, pending_reschedule_start_time, pending_reschedule_reason)",
+          "*, appointments(status, reference_code, customer_name, phone, reschedule_count, pending_reschedule_request_id, pending_reschedule_date, pending_reschedule_start_time, pending_reschedule_reason)",
         )
         .order("created_at", { ascending: false })
         .limit(100);
@@ -330,6 +330,23 @@ function NotificationsPage() {
                       </Button>
                     </>
                   )}
+                {n.type === "customer_cancellation_threshold" && n.appointments?.phone && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      const customerPhone = n.appointments?.phone;
+                      if (!customerPhone) return;
+                      if (!n.is_read) markOne.mutate(n.id);
+                      void navigate({
+                        to: "/admin/customers",
+                        search: { phone: customerPhone },
+                      });
+                    }}
+                  >
+                    Review customer history
+                  </Button>
+                )}
                 <Button
                   size="sm"
                   variant="outline"

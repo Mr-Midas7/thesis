@@ -1,7 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Filter, Loader2, Plus, RotateCcw } from "lucide-react";
+import { format } from "date-fns";
+import { CalendarRange, ChevronDown, Filter, Loader2, Plus, RotateCcw } from "lucide-react";
 import { useMemo, useState } from "react";
+import type { DateRange } from "react-day-picker";
 import { toast } from "sonner";
 
 import { PageHeader } from "@/components/admin/page-header";
@@ -18,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -95,6 +98,10 @@ function dateToKey(date: Date) {
   return `${y}-${m}-${d}`;
 }
 
+function dateFromKey(value: string) {
+  return new Date(`${value}T12:00:00`);
+}
+
 function assignmentPeriodBounds(filter: AssignmentFilter) {
   if (filter.period === "custom") {
     return { from: filter.customStart, to: filter.customEnd };
@@ -114,6 +121,184 @@ function assignmentPeriodBounds(filter: AssignmentFilter) {
     from: dateToKey(monday),
     to: dateToKey(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6)),
   };
+}
+
+function AvailabilityDateRangeFilter({
+  period,
+  dateFrom,
+  dateTo,
+  onPeriodChange,
+  onCustomDateRangeChange,
+}: {
+  period: AssignmentFilter["period"];
+  dateFrom: string;
+  dateTo: string;
+  onPeriodChange: (period: AssignmentFilter["period"]) => void;
+  onCustomDateRangeChange: (dateFrom: string, dateTo: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [isPickingCustomRange, setIsPickingCustomRange] = useState(false);
+  const [draftRange, setDraftRange] = useState<DateRange>();
+  const selectedRange = dateFrom
+    ? { from: dateFromKey(dateFrom), to: dateTo ? dateFromKey(dateTo) : undefined }
+    : undefined;
+
+  const selectPeriod = (nextPeriod: Exclude<AssignmentFilter["period"], "custom">) => {
+    onPeriodChange(nextPeriod);
+    setIsPickingCustomRange(false);
+    setOpen(false);
+  };
+
+  const cancelCustomRange = () => {
+    setDraftRange(selectedRange);
+    setIsPickingCustomRange(false);
+    setOpen(false);
+  };
+
+  const applyCustomRange = () => {
+    if (!draftRange?.from || !draftRange.to) return;
+    onCustomDateRangeChange(dateToKey(draftRange.from), dateToKey(draftRange.to));
+    onPeriodChange("custom");
+    setIsPickingCustomRange(false);
+    setOpen(false);
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) setIsPickingCustomRange(false);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          aria-label="Select availability date range"
+          title={availabilityDatePeriodLabel(period, dateFrom, dateTo)}
+          className="w-full justify-between gap-2 px-3 text-left font-normal"
+        >
+          <span className="flex min-w-0 items-center gap-2 truncate">
+            <CalendarRange className="size-4 shrink-0" aria-hidden="true" />
+            {availabilityDatePeriodLabel(period, dateFrom, dateTo)}
+          </span>
+          <ChevronDown className="size-4 shrink-0" aria-hidden="true" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 p-2">
+        {isPickingCustomRange ? (
+          <div>
+            <div className="px-2 pb-2">
+              <p className="text-sm font-medium">Custom date range</p>
+              <p className="text-xs text-muted-foreground">Select a start date and an end date.</p>
+            </div>
+            <Calendar
+              mode="range"
+              selected={draftRange}
+              onSelect={setDraftRange}
+              className="mx-auto p-0"
+              classNames={{
+                nav: "inset-x-auto left-1/2 w-48 -translate-x-1/2 justify-between",
+              }}
+            />
+            <div className="mt-2 grid grid-cols-2 gap-2 px-2 text-xs">
+              <AvailabilityDateRangeValue label="Start date" value={draftRange?.from} />
+              <AvailabilityDateRangeValue label="End date" value={draftRange?.to} />
+            </div>
+            <div className="mt-3 flex justify-end gap-2 border-t border-border pt-3">
+              <Button type="button" variant="outline" size="sm" onClick={cancelCustomRange}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={applyCustomRange}
+                disabled={!draftRange?.from || !draftRange.to}
+              >
+                Apply
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            <p className="px-2 pb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Date range
+            </p>
+            <AvailabilityDateOption
+              active={period === "weekly"}
+              label="This Week"
+              onClick={() => selectPeriod("weekly")}
+            />
+            <AvailabilityDateOption
+              active={period === "monthly"}
+              label="This Month"
+              onClick={() => selectPeriod("monthly")}
+            />
+            <AvailabilityDateOption
+              active={period === "custom"}
+              label="Custom Date Range"
+              onClick={() => {
+                setDraftRange(selectedRange);
+                setIsPickingCustomRange(true);
+              }}
+            />
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function AvailabilityDateOption({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className={cn("h-9 w-full justify-start text-sm", active && "bg-muted")}
+      onClick={onClick}
+    >
+      {label}
+    </Button>
+  );
+}
+
+function AvailabilityDateRangeValue({ label, value }: { label: string; value: Date | undefined }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/30 px-2 py-1.5">
+      <p className="text-[10px] tracking-wide text-muted-foreground uppercase">{label}</p>
+      <p className="mt-0.5 truncate font-medium text-foreground">
+        {value ? format(value, "MMM d, yyyy") : "Not selected"}
+      </p>
+    </div>
+  );
+}
+
+function availabilityDatePeriodLabel(
+  period: AssignmentFilter["period"],
+  dateFrom: string,
+  dateTo: string,
+) {
+  if (period === "weekly") return "This Week";
+  if (period === "monthly") return "This Month";
+  if (!dateFrom) return "Custom Date Range";
+
+  const fromDate = dateFromKey(dateFrom);
+  const fromLabel = format(fromDate, "MMM d, yyyy");
+  if (!dateTo) return `${fromLabel} – Select end date`;
+
+  const toDate = dateFromKey(dateTo);
+  return fromDate.getFullYear() === toDate.getFullYear()
+    ? `${format(fromDate, "MMM d")} – ${format(toDate, "MMM d, yyyy")}`
+    : `${fromLabel} – ${format(toDate, "MMM d, yyyy")}`;
 }
 
 function AvailabilityPage() {
@@ -448,20 +633,18 @@ function AvailabilityPage() {
               </Select>
             </div>
             <div className="space-y-1.5">
-              <Label>Period</Label>
-              <Select
-                value={filterPeriod}
-                onValueChange={(value) => setFilterPeriod(value as AssignmentFilter["period"])}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="weekly">This week</SelectItem>
-                  <SelectItem value="monthly">This month</SelectItem>
-                  <SelectItem value="custom">Custom period</SelectItem>
-                </SelectContent>
-              </Select>
+              <Label>Date range</Label>
+              <AvailabilityDateRangeFilter
+                period={filterPeriod}
+                dateFrom={customPeriodStart}
+                dateTo={customPeriodEnd}
+                onPeriodChange={setFilterPeriod}
+                onCustomDateRangeChange={(dateFrom, dateTo) => {
+                  setCustomPeriodStart(dateFrom);
+                  setCustomPeriodEnd(dateTo);
+                  setFilterErrors({});
+                }}
+              />
             </div>
             <div className="flex gap-2 xl:self-end">
               <Button
@@ -481,38 +664,9 @@ function AvailabilityPage() {
               </Button>
             </div>
             {filterPeriod === "custom" && (
-              <>
-                <div className="space-y-1.5">
-                  <Label htmlFor="crew-period-start">Period start</Label>
-                  <Input
-                    id="crew-period-start"
-                    type="date"
-                    value={customPeriodStart}
-                    max={customPeriodEnd || undefined}
-                    onChange={(event) => {
-                      setCustomPeriodStart(event.target.value);
-                      setFilterErrors((current) => ({ ...current, customStart: undefined }));
-                    }}
-                    aria-invalid={!!filterErrors.customStart}
-                  />
-                  <FieldError message={filterErrors.customStart} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="crew-period-end">Period end</Label>
-                  <Input
-                    id="crew-period-end"
-                    type="date"
-                    value={customPeriodEnd}
-                    min={customPeriodStart || undefined}
-                    onChange={(event) => {
-                      setCustomPeriodEnd(event.target.value);
-                      setFilterErrors((current) => ({ ...current, customEnd: undefined }));
-                    }}
-                    aria-invalid={!!filterErrors.customEnd}
-                  />
-                  <FieldError message={filterErrors.customEnd} />
-                </div>
-              </>
+              <div className="sm:col-span-2">
+                <FieldError message={filterErrors.customStart ?? filterErrors.customEnd} />
+              </div>
             )}
           </div>
 

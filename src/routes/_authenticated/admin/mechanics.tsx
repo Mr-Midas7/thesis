@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Archive, Pencil, Plus } from "lucide-react";
+import { Archive, Pencil, Plus, RotateCcw } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
 
@@ -221,13 +221,14 @@ function MechanicsPage() {
         {(filterName || filterStatus !== "all") && (
           <Button
             size="sm"
-            variant="ghost"
+            variant="outline"
+            className="self-end whitespace-nowrap"
             onClick={() => {
               setFilterName("");
               setFilterStatus("all");
             }}
           >
-            Clear
+            <RotateCcw /> Reset
           </Button>
         )}
       </div>
@@ -273,10 +274,7 @@ function MechanicsPage() {
                         {c.phone ?? "-"}
                       </TableCell>
                       <TableCell data-label="Status" className="text-center">
-                        <Badge
-                          variant="outline"
-                          className={`text-[10px] uppercase ${status.tone}`}
-                        >
+                        <Badge variant="outline" className={`text-[10px] uppercase ${status.tone}`}>
                           {status.label}
                         </Badge>
                       </TableCell>

@@ -60,7 +60,6 @@ const blank = {
 };
 
 const ALL_BRANDS = "__all_brands__";
-const ALL_MODELS = "__all_models__";
 
 export interface MotorcycleCatalogManagerHandle {
   openNew: () => void;
@@ -74,7 +73,7 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
     const [form, setForm] = useState({ ...blank });
     const [formErrors, setFormErrors] = useState<Partial<Record<"brand" | "model", string>>>({});
     const [filterBrand, setFilterBrand] = useState(ALL_BRANDS);
-    const [filterModel, setFilterModel] = useState(ALL_MODELS);
+    const [modelSearch, setModelSearch] = useState("");
     const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
     const [saveConfirmationOpen, setSaveConfirmationOpen] = useState(false);
 
@@ -102,18 +101,9 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
       [catalog.data],
     );
 
-    const modelsForBrand = useMemo(
-      () =>
-        filterBrand === ALL_BRANDS
-          ? []
-          : Array.from(
-              new Set(
-                (catalog.data ?? [])
-                  .filter((item) => item.brand === filterBrand)
-                  .map((item) => item.model),
-              ),
-            ).sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" })),
-      [catalog.data, filterBrand],
+    const modelSearchTerms = useMemo(
+      () => modelSearch.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean),
+      [modelSearch],
     );
 
     const filteredItems = useMemo(
@@ -121,9 +111,9 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
         (catalog.data ?? []).filter(
           (item) =>
             (filterBrand === ALL_BRANDS || item.brand === filterBrand) &&
-            (filterModel === ALL_MODELS || item.model === filterModel),
+            modelSearchTerms.every((term) => item.model.toLocaleLowerCase().includes(term)),
         ),
-      [catalog.data, filterBrand, filterModel],
+      [catalog.data, filterBrand, modelSearchTerms],
     );
 
     const save = useMutation({
@@ -255,10 +245,7 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
             <Label className="text-sm">Brand</Label>
             <Select
               value={filterBrand}
-              onValueChange={(value) => {
-                setFilterBrand(value);
-                setFilterModel(ALL_MODELS);
-              }}
+              onValueChange={setFilterBrand}
             >
               <SelectTrigger className="w-full sm:w-48">
                 <SelectValue placeholder="All brands" />
@@ -274,35 +261,25 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label className="text-sm">Model</Label>
-            <Select
-              value={filterModel}
-              onValueChange={setFilterModel}
-              disabled={filterBrand === ALL_BRANDS}
-            >
-              <SelectTrigger className="w-full sm:w-56">
-                <SelectValue
-                  placeholder={filterBrand === ALL_BRANDS ? "Select a brand first" : "All models"}
-                />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL_MODELS}>All models</SelectItem>
-                {modelsForBrand.map((model) => (
-                  <SelectItem key={model} value={model}>
-                    {modelLabel(filterBrand, model)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label htmlFor="catalog-model-search" className="text-sm">
+              Model
+            </Label>
+            <Input
+              id="catalog-model-search"
+              value={modelSearch}
+              onChange={(event) => setModelSearch(event.target.value)}
+              placeholder="Search models..."
+              className="w-full sm:w-56"
+            />
           </div>
-          {(filterBrand !== ALL_BRANDS || filterModel !== ALL_MODELS) && (
+          {(filterBrand !== ALL_BRANDS || modelSearch.trim()) && (
             <Button
               size="sm"
               variant="outline"
               className="self-end whitespace-nowrap"
               onClick={() => {
                 setFilterBrand(ALL_BRANDS);
-                setFilterModel(ALL_MODELS);
+                setModelSearch("");
               }}
             >
               <RotateCcw /> Reset

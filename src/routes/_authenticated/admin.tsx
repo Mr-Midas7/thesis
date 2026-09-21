@@ -18,7 +18,7 @@ import {
   Users,
   Wrench,
 } from "lucide-react";
-import { useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 
 import logo from "@/assets/logo-shp.png.asset.json";
 import { ThemeToggle } from "@/components/site/theme-toggle";
@@ -92,10 +92,14 @@ const groups = [
   },
 ];
 
+const ADMIN_INACTIVITY_TIMEOUT_MS = 60_000;
+
 function AdminLayout() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const path = useRouterState({ select: (s) => s.location.pathname });
+  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const signingOutRef = useRef(false);
 
   const role = useQuery({
     queryKey: ["my-role"],
@@ -131,24 +135,66 @@ function AdminLayout() {
     };
   }, [queryClient]);
 
-  async function signOut() {
-    try {
-      await recordAdminActivityEvent({
+  const clearInactivityTimer = useCallback(() => {
+    if (inactivityTimerRef.current !== null) {
+      clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = null;
+    }
+  }, []);
+
+  const signOut = useCallback(async (reason: "manual" | "inactivity") => {
+    if (signingOutRef.current) return;
+    signingOutRef.current = true;
+    clearInactivityTimer();
+
+    void recordAdminActivityEvent({
         action: "signed out",
         resourceType: "Authentication",
         targetLabel: "Admin console",
-        summary: "Administrator signed out of the admin console.",
+        summary:
+          reason === "inactivity"
+            ? "Administrator was automatically signed out after 1 minute of inactivity."
+            : "Administrator signed out of the admin console.",
+      }).catch(() => {
+        // Sign-out should always complete, even if the audit service is unavailable.
       });
-    } catch {
-      // Sign-out should always complete, even if the audit service is unavailable.
+
+    try {
+      void queryClient.cancelQueries();
+      queryClient.clear();
+      await supabase.auth.signOut();
+    } finally {
+      if (reason === "inactivity") navigate({ to: "/auth", replace: true });
+      else navigate({ to: "/", replace: true });
     }
-    await queryClient.cancelQueries();
-    queryClient.clear();
-    await supabase.auth.signOut();
-    navigate({ to: "/", replace: true });
-  }
+  }, [clearInactivityTimer, navigate, queryClient]);
 
   const isAdmin = (role.data ?? []).includes("admin");
+
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    const resetInactivityTimer = () => {
+      if (signingOutRef.current) return;
+      clearInactivityTimer();
+      inactivityTimerRef.current = setTimeout(() => {
+        void signOut("inactivity");
+      }, ADMIN_INACTIVITY_TIMEOUT_MS);
+    };
+    const activityEvents = ["mousemove", "mousedown", "keydown", "scroll", "touchstart"] as const;
+
+    resetInactivityTimer();
+    for (const eventName of activityEvents) {
+      window.addEventListener(eventName, resetInactivityTimer, { passive: true });
+    }
+
+    return () => {
+      clearInactivityTimer();
+      for (const eventName of activityEvents) {
+        window.removeEventListener(eventName, resetInactivityTimer);
+      }
+    };
+  }, [clearInactivityTimer, isAdmin, signOut]);
 
   return (
     <SidebarProvider>
@@ -202,7 +248,7 @@ function AdminLayout() {
             <SidebarTrigger />
             <button
               type="button"
-              onClick={signOut}
+              onClick={() => void signOut("manual")}
               className="text-xs text-muted-foreground uppercase hover:text-foreground"
             >
               View public site
@@ -220,7 +266,7 @@ function AdminLayout() {
               <Button
                 variant="outline"
                 size="sm"
-                onClick={signOut}
+                onClick={() => void signOut("manual")}
                 className="font-display uppercase"
               >
                 <LogOut /> <span className="hidden sm:inline">Exit</span>
@@ -239,7 +285,11 @@ function AdminLayout() {
                 <p className="mt-2 text-sm text-muted-foreground">
                   This account is signed in but has no administrator role for the shop console.
                 </p>
-                <Button className="mt-5 font-display uppercase" variant="outline" onClick={signOut}>
+                <Button
+                  className="mt-5 font-display uppercase"
+                  variant="outline"
+                  onClick={() => void signOut("manual")}
+                >
                   Exit
                 </Button>
               </div>

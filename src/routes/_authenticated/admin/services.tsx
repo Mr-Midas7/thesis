@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Archive, EllipsisVertical, Eye, Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
@@ -468,9 +468,10 @@ function ServicesAdmin() {
                     </TableCell>
                     <TableCell data-label="Service" className="align-middle">
                       <span className="block font-medium text-sm">{service.name}</span>
-                      <span className="mt-0.5 block max-w-md text-xs leading-relaxed text-muted-foreground">
-                        Details: {service.description || "No details provided."}
-                      </span>
+                      <ExpandableServiceDescription
+                        description={service.description}
+                        serviceName={service.name}
+                      />
                     </TableCell>
                     <TableCell
                       data-label="Category"
@@ -755,6 +756,58 @@ function ServicesAdmin() {
   );
 }
 
+function ExpandableServiceDescription({
+  description,
+  serviceName,
+}: {
+  description: string | null;
+  serviceName: string;
+}) {
+  const descriptionRef = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [canExpand, setCanExpand] = useState(false);
+  const details = description?.trim() || "No details provided.";
+
+  useEffect(() => {
+    const element = descriptionRef.current;
+    if (!element) return;
+
+    const checkOverflow = () => {
+      // While expanded, retain the previous overflow result so the customer
+      // can still collapse the row after reading the full description.
+      if (!expanded) setCanExpand(element.scrollHeight > element.clientHeight + 1);
+    };
+
+    checkOverflow();
+    if (typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(checkOverflow);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [details, expanded]);
+
+  return (
+    <div className="mt-0.5 max-w-md text-xs leading-relaxed text-muted-foreground">
+      <p ref={descriptionRef} className={expanded ? "break-words" : "line-clamp-2 break-words"}>
+        Details: {details}
+      </p>
+      {canExpand && (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="mt-0.5 h-auto p-0 text-xs"
+          onClick={() => setExpanded((current) => !current)}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Collapse" : "Expand"} details for ${serviceName}`}
+        >
+          {expanded ? "See Less" : "See More"}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 /* Legacy configuration view removed.
 function ServiceViewDialog({
   service,
@@ -857,40 +910,76 @@ function ServiceViewDialog({
     <Dialog open={Boolean(service)} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-4xl">
         <DialogHeader>
-          <DialogTitle className="font-display uppercase">
-            {service ? `${service.name} model overrides` : "Model overrides"}
-          </DialogTitle>
+          <DialogTitle className="font-display uppercase">View service</DialogTitle>
         </DialogHeader>
-        <div className="overflow-x-auto">
-          <Table className="admin-data-table admin-balanced-table min-w-[700px]">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Brand</TableHead>
-                <TableHead>Model</TableHead>
-                <TableHead className="text-center">Duration</TableHead>
-                <TableHead className="text-right">Price</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {overrides.map((override, index) => (
-                <TableRow key={override.id ?? index}>
-                  <TableCell>{override.brand}</TableCell>
-                  <TableCell>{modelLabel(override.brand, override.model)}</TableCell>
-                  <TableCell className="text-center">{override.duration_minutes} min</TableCell>
-                  <TableCell className="text-right text-primary">
-                    {formatPHP(override.price)}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {overrides.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
-                    No model overrides configured.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
+        <div className="space-y-6">
+          <section className="rounded-lg border border-border/70 bg-muted/20 p-4 sm:p-5">
+            <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Service Name
+            </p>
+            <p className="mt-1 font-display text-xl uppercase">{service?.name ?? "Service"}</p>
+
+            <div className="mt-5 grid gap-4 border-t border-border/70 pt-4 sm:grid-cols-2">
+              <div>
+                <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                  Default Duration
+                </p>
+                <p className="mt-1 text-sm font-medium">{service?.duration_minutes ?? 0} minutes</p>
+              </div>
+              <div>
+                <p className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                  Default Price
+                </p>
+                <p className="mt-1 text-sm font-medium text-primary">
+                  {formatPHP(service?.price ?? 0)}
+                </p>
+              </div>
+            </div>
+          </section>
+
+          <section className="space-y-3">
+            <div>
+              <h3 className="font-display text-base uppercase">Model Overrides</h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Custom duration and price details for specific motorcycle models.
+              </p>
+            </div>
+            <div className="overflow-x-auto rounded-lg border border-border/70">
+              <Table className="admin-data-table admin-balanced-table min-w-[640px]">
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Brand</TableHead>
+                    <TableHead>Model</TableHead>
+                    <TableHead className="text-center">Duration</TableHead>
+                    <TableHead className="text-right">Price</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {overrides.map((override, index) => (
+                    <TableRow key={override.id ?? index}>
+                      <TableCell data-label="Brand">{override.brand}</TableCell>
+                      <TableCell data-label="Model">
+                        {modelLabel(override.brand, override.model)}
+                      </TableCell>
+                      <TableCell data-label="Duration" className="text-center">
+                        {override.duration_minutes} min
+                      </TableCell>
+                      <TableCell data-label="Price" className="text-right text-primary">
+                        {formatPHP(override.price)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                  {overrides.length === 0 && (
+                    <TableRow>
+                      <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
+                        No model overrides configured.
+                      </TableCell>
+                    </TableRow>
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </section>
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

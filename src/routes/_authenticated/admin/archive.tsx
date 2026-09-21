@@ -1,8 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { format } from "date-fns";
-import { Archive, CalendarRange, RotateCcw, Search, SlidersHorizontal, Trash2 } from "lucide-react";
+import {
+  Archive,
+  CalendarRange,
+  ChevronDown,
+  RotateCcw,
+  Search,
+  SlidersHorizontal,
+  Trash2,
+} from "lucide-react";
 import { useDeferredValue, useState } from "react";
+import type { DateRange } from "react-day-picker";
 import { toast } from "sonner";
 
 import { PaginationControls } from "@/components/admin/pagination-controls";
@@ -10,7 +19,6 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
-import { FieldError } from "@/components/ui/field-error";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -40,7 +48,14 @@ import {
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
-import { formatDateLong, formatPHP, formatTime, statusLabel, statusTone } from "@/lib/shop";
+import {
+  formatDateLong,
+  formatPHP,
+  formatTime,
+  manilaNow,
+  statusLabel,
+  statusTone,
+} from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/admin/archive")({
@@ -68,15 +83,23 @@ const APPOINTMENT_STATUSES = [
 
 type ArchiveFilters = {
   term: string;
+  datePeriod: ArchiveDatePeriod;
   dateFrom: string;
   dateTo: string;
+  customDateFrom: string;
+  customDateTo: string;
   status: string;
 };
 
+type ArchiveDatePeriod = "all" | "today" | "week" | "month" | "custom";
+
 const EMPTY_FILTERS: ArchiveFilters = {
   term: "",
+  datePeriod: "all",
   dateFrom: "",
   dateTo: "",
+  customDateFrom: "",
+  customDateTo: "",
   status: "all",
 };
 
@@ -88,19 +111,8 @@ function ArchivePage() {
   const [activeTab, setActiveTab] = useState("appointments");
   const [page, setPage] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: string } | null>(null);
-  const [dateRangeOpen, setDateRangeOpen] = useState(false);
   const deferredTerm = useDeferredValue(filters.term);
   const searchTerm = cleanSearchTerm(deferredTerm);
-  const selectedDateRange = draftFilters.dateFrom
-    ? {
-        from: dateFromIso(draftFilters.dateFrom),
-        to: draftFilters.dateTo ? dateFromIso(draftFilters.dateTo) : undefined,
-      }
-    : undefined;
-  const dateRangeError =
-    draftFilters.dateFrom && draftFilters.dateTo && draftFilters.dateFrom > draftFilters.dateTo
-      ? "The end date must be on or after the start date."
-      : undefined;
 
   const archived = useQuery({
     queryKey: ["archived-appointments", { searchTerm, filters, page }],
@@ -471,7 +483,6 @@ function ArchivePage() {
   };
 
   const applyFilters = () => {
-    if (dateRangeError) return;
     setFilters({ ...draftFilters });
     setPage(0);
   };
@@ -556,67 +567,22 @@ function ArchivePage() {
                 <CalendarRange className="size-3.5" aria-hidden="true" />
                 Date range
               </label>
-              <Popover open={dateRangeOpen} onOpenChange={setDateRangeOpen}>
-                <PopoverTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    aria-invalid={Boolean(dateRangeError)}
-                    aria-label="Select archive date range"
-                    title={formatDateRange(draftFilters.dateFrom, draftFilters.dateTo)}
-                    className="w-full justify-start px-3 text-left font-normal"
-                  >
-                    <CalendarRange className="mr-2 size-4 shrink-0 text-muted-foreground" />
-                    <span
-                      className={cn("truncate", !draftFilters.dateFrom && "text-muted-foreground")}
-                    >
-                      {formatDateRange(draftFilters.dateFrom, draftFilters.dateTo)}
-                    </span>
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align="start"
-                  className="w-auto max-w-[calc(100vw-2rem)] overflow-hidden p-0"
-                >
-                  <Calendar
-                    mode="range"
-                    selected={selectedDateRange}
-                    {...(selectedDateRange?.from ? { defaultMonth: selectedDateRange.from } : {})}
-                    numberOfMonths={2}
-                    onSelect={(range) => {
-                      setDraftFilters((current) => ({
-                        ...current,
-                        dateFrom: range?.from ? format(range.from, "yyyy-MM-dd") : "",
-                        dateTo: range?.to ? format(range.to, "yyyy-MM-dd") : "",
-                      }));
-                    }}
-                  />
-                  <div className="flex items-center justify-between gap-3 border-t border-border px-3 py-2">
-                    <span className="min-w-0 truncate text-xs text-muted-foreground">
-                      {draftFilters.dateFrom
-                        ? formatDateRange(draftFilters.dateFrom, draftFilters.dateTo)
-                        : "Choose a start and end date"}
-                    </span>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="shrink-0"
-                      disabled={!draftFilters.dateFrom}
-                      onClick={() =>
-                        setDraftFilters((current) => ({
-                          ...current,
-                          dateFrom: "",
-                          dateTo: "",
-                        }))
-                      }
-                    >
-                      Clear
-                    </Button>
-                  </div>
-                </PopoverContent>
-              </Popover>
-              <FieldError message={dateRangeError} />
+              <ArchiveDateRangeFilter
+                period={draftFilters.datePeriod}
+                dateFrom={draftFilters.dateFrom}
+                dateTo={draftFilters.dateTo}
+                customDateFrom={draftFilters.customDateFrom}
+                customDateTo={draftFilters.customDateTo}
+                onPeriodChange={(datePeriod) =>
+                  setDraftFilters((current) => ({ ...current, datePeriod }))
+                }
+                onDateRangeChange={(dateFrom, dateTo) =>
+                  setDraftFilters((current) => ({ ...current, dateFrom, dateTo }))
+                }
+                onCustomDateRangeChange={(customDateFrom, customDateTo) =>
+                  setDraftFilters((current) => ({ ...current, customDateFrom, customDateTo }))
+                }
+              />
             </div>
 
             <div className="min-w-0 space-y-1.5">
@@ -643,12 +609,7 @@ function ArchivePage() {
             </div>
 
             <div className="flex gap-2 md:col-span-2 xl:col-span-1 xl:items-end">
-              <Button
-                type="button"
-                className="flex-1 xl:flex-none"
-                onClick={applyFilters}
-                disabled={Boolean(dateRangeError)}
-              >
+              <Button type="button" className="flex-1 xl:flex-none" onClick={applyFilters}>
                 <SlidersHorizontal /> Apply filters
               </Button>
               <Button
@@ -1087,6 +1048,226 @@ function cleanSearchTerm(value: string) {
 
 function dateFromIso(value: string) {
   return new Date(`${value}T12:00:00`);
+}
+
+function ArchiveDateRangeFilter({
+  period,
+  dateFrom,
+  dateTo,
+  customDateFrom,
+  customDateTo,
+  onPeriodChange,
+  onDateRangeChange,
+  onCustomDateRangeChange,
+}: {
+  period: ArchiveDatePeriod;
+  dateFrom: string;
+  dateTo: string;
+  customDateFrom: string;
+  customDateTo: string;
+  onPeriodChange: (period: ArchiveDatePeriod) => void;
+  onDateRangeChange: (dateFrom: string, dateTo: string) => void;
+  onCustomDateRangeChange: (dateFrom: string, dateTo: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [isPickingCustomRange, setIsPickingCustomRange] = useState(false);
+  const [draftRange, setDraftRange] = useState<DateRange>();
+  const selectedRange = customDateFrom
+    ? {
+        from: dateFromIso(customDateFrom),
+        to: customDateTo ? dateFromIso(customDateTo) : undefined,
+      }
+    : undefined;
+
+  const selectPeriod = (nextPeriod: Exclude<ArchiveDatePeriod, "all" | "custom">) => {
+    const range = buildArchiveDateRange(nextPeriod);
+    onDateRangeChange(range.from, range.to);
+    onPeriodChange(nextPeriod);
+    setIsPickingCustomRange(false);
+    setOpen(false);
+  };
+
+  const cancelCustomRange = () => {
+    setDraftRange(selectedRange);
+    setIsPickingCustomRange(false);
+    setOpen(false);
+  };
+
+  const applyCustomRange = () => {
+    if (!draftRange?.from || !draftRange.to) return;
+    const nextDateFrom = format(draftRange.from, "yyyy-MM-dd");
+    const nextDateTo = format(draftRange.to, "yyyy-MM-dd");
+    onDateRangeChange(nextDateFrom, nextDateTo);
+    onCustomDateRangeChange(nextDateFrom, nextDateTo);
+    onPeriodChange("custom");
+    setIsPickingCustomRange(false);
+    setOpen(false);
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) setIsPickingCustomRange(false);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          aria-label="Select archive date range"
+          title={archiveDatePeriodLabel(period, dateFrom, dateTo)}
+          className="w-full justify-between gap-2 px-3 text-left font-normal"
+        >
+          <span className="flex min-w-0 items-center gap-2 truncate">
+            <CalendarRange className="size-4 shrink-0" aria-hidden="true" />
+            <span className={cn(period === "all" && "text-muted-foreground")}>
+              {archiveDatePeriodLabel(period, dateFrom, dateTo)}
+            </span>
+          </span>
+          <ChevronDown className="size-4 shrink-0" aria-hidden="true" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 p-2">
+        {isPickingCustomRange ? (
+          <div>
+            <div className="px-2 pb-2">
+              <p className="text-sm font-medium">Custom date range</p>
+              <p className="text-xs text-muted-foreground">Select a start date and an end date.</p>
+            </div>
+            <Calendar
+              mode="range"
+              selected={draftRange}
+              onSelect={setDraftRange}
+              className="mx-auto p-0"
+              classNames={{
+                nav: "inset-x-auto left-1/2 w-48 -translate-x-1/2 justify-between",
+              }}
+            />
+            <div className="mt-2 grid grid-cols-2 gap-2 px-2 text-xs">
+              <ArchiveDateRangeValue label="Start date" value={draftRange?.from} />
+              <ArchiveDateRangeValue label="End date" value={draftRange?.to} />
+            </div>
+            <div className="mt-3 flex justify-end gap-2 border-t border-border pt-3">
+              <Button type="button" variant="outline" size="sm" onClick={cancelCustomRange}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={applyCustomRange}
+                disabled={!draftRange?.from || !draftRange.to}
+              >
+                Apply
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            <p className="px-2 pb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Archive date
+            </p>
+            <ArchiveDateOption
+              active={period === "today"}
+              label="Today"
+              onClick={() => selectPeriod("today")}
+            />
+            <ArchiveDateOption
+              active={period === "week"}
+              label="This Week"
+              onClick={() => selectPeriod("week")}
+            />
+            <ArchiveDateOption
+              active={period === "month"}
+              label="This Month"
+              onClick={() => selectPeriod("month")}
+            />
+            <ArchiveDateOption
+              active={period === "custom"}
+              label="Custom Date Range"
+              onClick={() => {
+                setDraftRange(selectedRange);
+                setIsPickingCustomRange(true);
+              }}
+            />
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function ArchiveDateOption({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className={cn("h-9 w-full justify-start text-sm", active && "bg-muted")}
+      onClick={onClick}
+    >
+      {label}
+    </Button>
+  );
+}
+
+function ArchiveDateRangeValue({ label, value }: { label: string; value: Date | undefined }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/30 px-2 py-1.5">
+      <p className="text-[10px] tracking-wide text-muted-foreground uppercase">{label}</p>
+      <p className="mt-0.5 truncate font-medium text-foreground">
+        {value ? format(value, "MMM d, yyyy") : "Not selected"}
+      </p>
+    </div>
+  );
+}
+
+function buildArchiveDateRange(period: Exclude<ArchiveDatePeriod, "all" | "custom">): {
+  from: string;
+  to: string;
+} {
+  const today = manilaNow().date;
+  const selectedDate = dateFromIso(today);
+
+  if (period === "today") return { from: today, to: today };
+  if (period === "week") {
+    const mondayOffset = (selectedDate.getDay() + 6) % 7;
+    const monday = new Date(
+      selectedDate.getFullYear(),
+      selectedDate.getMonth(),
+      selectedDate.getDate() - mondayOffset,
+      12,
+    );
+    const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6, 12);
+    return { from: format(monday, "yyyy-MM-dd"), to: format(sunday, "yyyy-MM-dd") };
+  }
+
+  return {
+    from: format(
+      new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1, 12),
+      "yyyy-MM-dd",
+    ),
+    to: format(
+      new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0, 12),
+      "yyyy-MM-dd",
+    ),
+  };
+}
+
+function archiveDatePeriodLabel(period: ArchiveDatePeriod, dateFrom: string, dateTo: string) {
+  if (period === "all") return "Date range";
+  if (period === "today") return "Today";
+  if (period === "week") return "This Week";
+  if (period === "month") return "This Month";
+  return dateFrom ? formatDateRange(dateFrom, dateTo) : "Custom Date Range";
 }
 
 function formatDateRange(from: string, to: string) {
