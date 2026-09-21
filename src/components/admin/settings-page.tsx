@@ -1,9 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
 import {
-  Bell,
   Building2,
   CalendarClock,
+  Eye,
+  EyeOff,
   ImageUp,
   Loader2,
   LockKeyhole,
@@ -20,41 +21,34 @@ import { Card, CardContent } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import { recordAdminActivityEvent } from "@/lib/admin-activity";
-import { DEFAULT_BOOKING_TERMS, SHOP } from "@/lib/shop";
+import {
+  DEFAULT_BOOKING_HOURS,
+  DEFAULT_BOOKING_TERMS,
+  isValidBookingHours,
+  SHOP,
+} from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
-type SettingsTab = "shop" | "appointments" | "notifications" | "account";
+type SettingsTab = "shop" | "appointments" | "account";
 
 type ShopSettingsForm = {
-  shopName: string;
   address: string;
   contactNumber: string;
   contactEmail: string;
   bookingTerms: string;
-  logoUrl: string | null;
+  openingTime: string;
+  closingTime: string;
   minimumBookingLeadHours: number;
   maxAdvanceBookingDays: number;
   defaultAppointmentDurationMinutes: number;
   allowSameDayAppointments: boolean;
   cancellationNoticeHours: number;
   reschedulingNoticeHours: number;
-  notifyConfirmation: boolean;
-  notifyCancellation: boolean;
-  notifyReminder: boolean;
-  reminderHoursBefore: number;
-  notifyAdmin: boolean;
 };
 
 type AccountForm = {
@@ -67,65 +61,57 @@ type AccountForm = {
 };
 
 type SettingsErrorField =
-  | "shopName"
   | "contactEmail"
-  | "shopLogo"
+  | "operatingHours"
   | "minimumBookingLeadHours"
   | "maxAdvanceBookingDays"
   | "defaultAppointmentDurationMinutes"
   | "cancellationNoticeHours"
-  | "reschedulingNoticeHours"
-  | "reminderHoursBefore";
+  | "reschedulingNoticeHours";
+
+type AccountErrorField =
+  "name" | "email" | "currentPassword" | "newPassword" | "confirmNewPassword" | "profilePicture";
 
 const defaultSettings: ShopSettingsForm = {
-  shopName: SHOP.name,
   address: SHOP.address,
   contactNumber: SHOP.phone,
   contactEmail: SHOP.email,
   bookingTerms: DEFAULT_BOOKING_TERMS,
-  logoUrl: null,
+  openingTime: DEFAULT_BOOKING_HOURS.openingTime,
+  closingTime: DEFAULT_BOOKING_HOURS.closingTime,
   minimumBookingLeadHours: SHOP.noticeHours,
   maxAdvanceBookingDays: 30,
   defaultAppointmentDurationMinutes: 90,
   allowSameDayAppointments: false,
   cancellationNoticeHours: SHOP.noticeHours,
   reschedulingNoticeHours: SHOP.noticeHours,
-  notifyConfirmation: true,
-  notifyCancellation: true,
-  notifyReminder: true,
-  reminderHoursBefore: 24,
-  notifyAdmin: true,
 };
 
 const settingFieldLabels: Array<[keyof ShopSettingsForm, string]> = [
-  ["shopName", "Shop name"],
   ["address", "Address"],
   ["contactNumber", "Contact number"],
   ["contactEmail", "Contact email"],
   ["bookingTerms", "Booking terms & conditions"],
-  ["logoUrl", "Shop logo"],
+  ["openingTime", "Opening time"],
+  ["closingTime", "Closing time"],
   ["minimumBookingLeadHours", "Minimum booking lead time"],
   ["maxAdvanceBookingDays", "Maximum advance booking"],
   ["defaultAppointmentDurationMinutes", "Default appointment duration"],
   ["allowSameDayAppointments", "Same-day appointments"],
   ["cancellationNoticeHours", "Cancellation rule"],
   ["reschedulingNoticeHours", "Rescheduling rule"],
-  ["notifyConfirmation", "Confirmation notifications"],
-  ["notifyCancellation", "Cancellation notifications"],
-  ["notifyReminder", "Reminder notifications"],
-  ["reminderHoursBefore", "Reminder timing"],
-  ["notifyAdmin", "Admin notifications"],
 ];
 
 const tabLabels: Record<Exclude<SettingsTab, "account">, string> = {
   shop: "Shop information",
   appointments: "Appointment settings",
-  notifications: "Notification settings",
 };
 
 const settingKeysByTab: Record<Exclude<SettingsTab, "account">, Array<keyof ShopSettingsForm>> = {
-  shop: ["shopName", "address", "contactNumber", "contactEmail", "bookingTerms", "logoUrl"],
+  shop: ["address", "contactNumber", "contactEmail", "bookingTerms"],
   appointments: [
+    "openingTime",
+    "closingTime",
     "minimumBookingLeadHours",
     "maxAdvanceBookingDays",
     "defaultAppointmentDurationMinutes",
@@ -133,52 +119,35 @@ const settingKeysByTab: Record<Exclude<SettingsTab, "account">, Array<keyof Shop
     "cancellationNoticeHours",
     "reschedulingNoticeHours",
   ],
-  notifications: [
-    "notifyConfirmation",
-    "notifyCancellation",
-    "notifyReminder",
-    "reminderHoursBefore",
-    "notifyAdmin",
-  ],
 };
 
 function fromDatabase(row: {
-  shop_name: string;
   address: string;
   contact_number: string;
   contact_email: string;
   booking_terms: string;
-  logo_url: string | null;
+  opening_time: string;
+  closing_time: string;
   minimum_booking_lead_hours: number;
   max_advance_booking_days: number;
   default_appointment_duration_minutes: number;
   allow_same_day_appointments: boolean;
   cancellation_notice_hours: number;
   rescheduling_notice_hours: number;
-  notify_confirmation: boolean;
-  notify_cancellation: boolean;
-  notify_reminder: boolean;
-  reminder_hours_before: number;
-  notify_admin: boolean;
 }): ShopSettingsForm {
   return {
-    shopName: row.shop_name,
     address: row.address,
     contactNumber: row.contact_number,
     contactEmail: row.contact_email,
     bookingTerms: row.booking_terms,
-    logoUrl: row.logo_url,
+    openingTime: row.opening_time.slice(0, 5),
+    closingTime: row.closing_time.slice(0, 5),
     minimumBookingLeadHours: row.minimum_booking_lead_hours,
     maxAdvanceBookingDays: row.max_advance_booking_days,
     defaultAppointmentDurationMinutes: row.default_appointment_duration_minutes,
     allowSameDayAppointments: row.allow_same_day_appointments,
     cancellationNoticeHours: row.cancellation_notice_hours,
     reschedulingNoticeHours: row.rescheduling_notice_hours,
-    notifyConfirmation: row.notify_confirmation,
-    notifyCancellation: row.notify_cancellation,
-    notifyReminder: row.notify_reminder,
-    reminderHoursBefore: row.reminder_hours_before,
-    notifyAdmin: row.notify_admin,
   };
 }
 
@@ -213,8 +182,6 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<SettingsTab>("shop");
   const [settings, setSettings] = useState<ShopSettingsForm>(defaultSettings);
-  const [shopLogoFile, setShopLogoFile] = useState<File | null>(null);
-  const [shopLogoPreview, setShopLogoPreview] = useState<string | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [account, setAccount] = useState<AccountForm>({
     name: "",
@@ -226,21 +193,14 @@ export function SettingsPage() {
   });
   const [avatarFile, setAvatarFile] = useState<File | null>(null);
   const [avatarPreview, setAvatarPreview] = useState<string | null>(null);
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false);
   const [settingsErrors, setSettingsErrors] = useState<
     Partial<Record<SettingsErrorField, string | undefined>>
   >({});
   const [accountErrors, setAccountErrors] = useState<
-    Partial<
-      Record<
-        | "name"
-        | "email"
-        | "currentPassword"
-        | "newPassword"
-        | "confirmNewPassword"
-        | "profilePicture",
-        string | undefined
-      >
-    >
+    Partial<Record<AccountErrorField, string | undefined>>
   >({});
 
   const savedSettings = useQuery({
@@ -285,13 +245,6 @@ export function SettingsPage() {
 
   useEffect(
     () => () => {
-      if (shopLogoPreview?.startsWith("blob:")) URL.revokeObjectURL(shopLogoPreview);
-    },
-    [shopLogoPreview],
-  );
-
-  useEffect(
-    () => () => {
       if (avatarPreview?.startsWith("blob:")) URL.revokeObjectURL(avatarPreview);
     },
     [avatarPreview],
@@ -300,37 +253,25 @@ export function SettingsPage() {
   const saveSettings = useMutation({
     mutationFn: async (section: Exclude<SettingsTab, "account">) => {
       const previous = savedSettings.data ?? defaultSettings;
-      const logoUrl =
-        section === "shop" && shopLogoFile
-          ? await uploadAsset(shopLogoFile, "shop-logo")
-          : settings.logoUrl;
-      const next = { ...settings, logoUrl };
+      const next = settings;
       const updates =
         section === "shop"
           ? {
-              shop_name: next.shopName.trim(),
               address: next.address.trim(),
               contact_number: next.contactNumber.trim(),
               contact_email: next.contactEmail.trim().toLowerCase(),
               booking_terms: next.bookingTerms.trim(),
-              logo_url: next.logoUrl,
             }
-          : section === "appointments"
-            ? {
-                minimum_booking_lead_hours: next.minimumBookingLeadHours,
-                max_advance_booking_days: next.maxAdvanceBookingDays,
-                default_appointment_duration_minutes: next.defaultAppointmentDurationMinutes,
-                allow_same_day_appointments: next.allowSameDayAppointments,
-                cancellation_notice_hours: next.cancellationNoticeHours,
-                rescheduling_notice_hours: next.reschedulingNoticeHours,
-              }
-            : {
-                notify_confirmation: next.notifyConfirmation,
-                notify_cancellation: next.notifyCancellation,
-                notify_reminder: next.notifyReminder,
-                reminder_hours_before: next.reminderHoursBefore,
-                notify_admin: next.notifyAdmin,
-              };
+          : {
+              opening_time: next.openingTime,
+              closing_time: next.closingTime,
+              minimum_booking_lead_hours: next.minimumBookingLeadHours,
+              max_advance_booking_days: next.maxAdvanceBookingDays,
+              default_appointment_duration_minutes: next.defaultAppointmentDurationMinutes,
+              allow_same_day_appointments: next.allowSameDayAppointments,
+              cancellation_notice_hours: next.cancellationNoticeHours,
+              rescheduling_notice_hours: next.reschedulingNoticeHours,
+            };
       const { error } = await supabase
         .from("shop_settings")
         .upsert({ id: true, ...updates }, { onConflict: "id" });
@@ -350,10 +291,6 @@ export function SettingsPage() {
         ...current,
         ...Object.fromEntries(settingKeysByTab[section].map((key) => [key, persisted[key]])),
       }));
-      if (section === "shop") {
-        setShopLogoFile(null);
-        setShopLogoPreview(null);
-      }
       queryClient.setQueryData(["shop-settings"], persisted);
       queryClient.invalidateQueries({ queryKey: ["public-shop-settings"] });
       if (changedFields.length) {
@@ -374,13 +311,9 @@ export function SettingsPage() {
     },
     onError: (error: Error, section) => {
       const message = error.message || "Could not save settings.";
-      if (message.includes("JPG, PNG") || message.includes("Images must be")) {
-        setSettingsErrors({ shopLogo: message });
-      } else if (message.includes("shop name")) setSettingsErrors({ shopName: message });
-      else if (message.includes("contact email")) setSettingsErrors({ contactEmail: message });
+      if (message.includes("contact email")) setSettingsErrors({ contactEmail: message });
       else if (section === "appointments") setSettingsErrors({ minimumBookingLeadHours: message });
-      else if (section === "notifications") setSettingsErrors({ reminderHoursBefore: message });
-      else setSettingsErrors({ shopName: message });
+      else setSettingsErrors({ contactEmail: message });
     },
   });
 
@@ -476,13 +409,16 @@ export function SettingsPage() {
     const nextErrors: Partial<Record<SettingsErrorField, string | undefined>> = {};
 
     if (section === "shop") {
-      if (!settings.shopName.trim()) nextErrors.shopName = "Enter the shop name.";
       if (!/^\S+@\S+\.\S+$/.test(settings.contactEmail.trim())) {
         nextErrors.contactEmail = "Enter a valid shop contact email.";
       }
     }
 
     if (section === "appointments") {
+      if (!isValidBookingHours(settings.openingTime, settings.closingTime)) {
+        nextErrors.operatingHours =
+          "Choose 30-minute times with an opening time before the closing time.";
+      }
       if (settings.minimumBookingLeadHours < 0 || settings.minimumBookingLeadHours > 168) {
         nextErrors.minimumBookingLeadHours = "Enter a value from 0 to 168 hours.";
       }
@@ -503,14 +439,33 @@ export function SettingsPage() {
       }
     }
 
-    if (
-      section === "notifications" &&
-      (settings.reminderHoursBefore < 1 || settings.reminderHoursBefore > 168)
-    ) {
-      nextErrors.reminderHoursBefore = "Choose a reminder time from 1 to 168 hours.";
+    setSettingsErrors(nextErrors);
+    return Object.keys(nextErrors).length === 0;
+  }
+
+  function validateAccount() {
+    const nextErrors: Partial<Record<AccountErrorField, string | undefined>> = {};
+    if (account.name.trim().length < 2) {
+      nextErrors.name = "Enter an administrator name with at least 2 characters.";
+    }
+    if (!/^\S+@\S+\.\S+$/.test(account.email.trim())) {
+      nextErrors.email = "Enter a valid email address.";
     }
 
-    setSettingsErrors(nextErrors);
+    const changingPassword = Boolean(
+      account.currentPassword || account.newPassword || account.confirmNewPassword,
+    );
+    if (changingPassword) {
+      if (!account.currentPassword) nextErrors.currentPassword = "Enter your current password.";
+      if (account.newPassword.length < 8) {
+        nextErrors.newPassword = "Your new password needs at least 8 characters.";
+      }
+      if (account.newPassword !== account.confirmNewPassword) {
+        nextErrors.confirmNewPassword = "The new passwords do not match.";
+      }
+    }
+
+    setAccountErrors(nextErrors);
     return Object.keys(nextErrors).length === 0;
   }
 
@@ -524,26 +479,22 @@ export function SettingsPage() {
     setPreview(file ? URL.createObjectURL(file) : null);
   }
 
-  const shopLogo = shopLogoPreview ?? settings.logoUrl;
   const avatar = avatarPreview ?? account.avatarUrl;
 
   return (
     <div className="mx-auto w-full max-w-5xl">
       <PageHeader
         title="Settings"
-        description="Manage customer-facing shop details, booking rules, notifications, and your administrator account."
+        description="Manage customer-facing shop details, booking rules, and your administrator account."
       />
 
       <Tabs value={tab} onValueChange={(value) => setTab(value as SettingsTab)}>
-        <TabsList className="grid h-auto w-full grid-cols-2 bg-secondary/50 p-1 md:inline-flex md:w-auto">
+        <TabsList className="grid h-auto w-full grid-cols-3 bg-secondary/50 p-1 md:inline-flex md:w-auto">
           <TabsTrigger value="shop" className="w-full gap-2 md:w-auto">
             <Store className="h-4 w-4" /> Shop information
           </TabsTrigger>
           <TabsTrigger value="appointments" className="w-full gap-2 md:w-auto">
             <CalendarClock className="h-4 w-4" /> Appointments
-          </TabsTrigger>
-          <TabsTrigger value="notifications" className="w-full gap-2 md:w-auto">
-            <Bell className="h-4 w-4" /> Notifications
           </TabsTrigger>
           <TabsTrigger value="account" className="w-full gap-2 md:w-auto">
             <UserRound className="h-4 w-4" /> Account
@@ -572,46 +523,7 @@ export function SettingsPage() {
             <TabsContent value="shop" className="mt-6 space-y-5">
               <Card className="border-border/70 bg-card/60">
                 <CardContent className="p-5 sm:p-6">
-                  <div className="mb-6 flex flex-wrap items-center gap-4 border-b border-border/70 pb-5">
-                    <div className="grid h-16 w-16 overflow-hidden rounded-xl border border-border bg-secondary/50">
-                      {shopLogo ? (
-                        <img
-                          src={shopLogo}
-                          alt="Shop logo preview"
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <Store className="m-auto h-7 w-7 text-primary" />
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="font-medium">Shop logo</p>
-                      <p className="mt-1 text-xs text-muted-foreground">
-                        JPG, PNG, or WebP. Maximum 5 MB.
-                      </p>
-                    </div>
-                    <UploadButton
-                      label="Upload / change"
-                      invalid={!!settingsErrors.shopLogo}
-                      onChange={(event) => {
-                        chooseImage(event, setShopLogoFile, setShopLogoPreview);
-                        setSettingsErrors((current) => ({ ...current, shopLogo: undefined }));
-                      }}
-                    />
-                    <FieldError message={settingsErrors.shopLogo} className="w-full basis-full" />
-                  </div>
                   <div className="grid gap-5 md:grid-cols-2">
-                    <Field label="Shop name">
-                      <Input
-                        value={settings.shopName}
-                        onChange={(e) => {
-                          setSetting("shopName", e.target.value);
-                          setSettingsErrors((current) => ({ ...current, shopName: undefined }));
-                        }}
-                        aria-invalid={!!settingsErrors.shopName}
-                      />
-                      <FieldError message={settingsErrors.shopName} />
-                    </Field>
                     <Field label="Contact email">
                       <Input
                         type="email"
@@ -665,6 +577,42 @@ export function SettingsPage() {
                   title="Booking window"
                   icon={<CalendarClock className="h-5 w-5 text-primary" />}
                 >
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <Field label="Shop opens">
+                      <Input
+                        type="time"
+                        step="1800"
+                        value={settings.openingTime}
+                        onChange={(event) => {
+                          setSetting("openingTime", event.target.value);
+                          setSettingsErrors((current) => ({
+                            ...current,
+                            operatingHours: undefined,
+                          }));
+                        }}
+                        aria-invalid={!!settingsErrors.operatingHours}
+                      />
+                    </Field>
+                    <Field label="Shop closes">
+                      <Input
+                        type="time"
+                        step="1800"
+                        value={settings.closingTime}
+                        onChange={(event) => {
+                          setSetting("closingTime", event.target.value);
+                          setSettingsErrors((current) => ({
+                            ...current,
+                            operatingHours: undefined,
+                          }));
+                        }}
+                        aria-invalid={!!settingsErrors.operatingHours}
+                      />
+                    </Field>
+                  </div>
+                  <FieldError message={settingsErrors.operatingHours} />
+                  <p className="text-xs text-muted-foreground">
+                    Customer appointment starts and service durations must fit within these hours.
+                  </p>
                   <Field label="Minimum booking lead time">
                     <NumberInput
                       value={settings.minimumBookingLeadHours}
@@ -776,72 +724,6 @@ export function SettingsPage() {
               />
             </TabsContent>
 
-            <TabsContent value="notifications" className="mt-6 space-y-5">
-              <SettingsCard
-                title="Customer and admin alerts"
-                icon={<Bell className="h-5 w-5 text-primary" />}
-              >
-                <ToggleRow
-                  label="Appointment confirmation"
-                  description="Send an alert when an appointment is confirmed."
-                  checked={settings.notifyConfirmation}
-                  onCheckedChange={(value) => setSetting("notifyConfirmation", value)}
-                />
-                <ToggleRow
-                  label="Appointment cancellation"
-                  description="Send an alert when an appointment is cancelled."
-                  checked={settings.notifyCancellation}
-                  onCheckedChange={(value) => setSetting("notifyCancellation", value)}
-                />
-                <ToggleRow
-                  label="Appointment reminder"
-                  description="Send customers a reminder before their appointment."
-                  checked={settings.notifyReminder}
-                  onCheckedChange={(value) => setSetting("notifyReminder", value)}
-                />
-                <Field label="Reminder timing">
-                  <Select
-                    value={String(settings.reminderHoursBefore)}
-                    onValueChange={(value) => {
-                      setSetting("reminderHoursBefore", Number(value));
-                      setSettingsErrors((current) => ({
-                        ...current,
-                        reminderHoursBefore: undefined,
-                      }));
-                    }}
-                  >
-                    <SelectTrigger aria-invalid={!!settingsErrors.reminderHoursBefore}>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="2">2 hours before</SelectItem>
-                      <SelectItem value="12">12 hours before</SelectItem>
-                      <SelectItem value="24">24 hours before</SelectItem>
-                      <SelectItem value="48">48 hours before</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <FieldError message={settingsErrors.reminderHoursBefore} />
-                </Field>
-                <ToggleRow
-                  label="Admin notifications"
-                  description="Keep the administrator informed about new booking activity."
-                  checked={settings.notifyAdmin}
-                  onCheckedChange={(value) => setSetting("notifyAdmin", value)}
-                />
-              </SettingsCard>
-              <p className="rounded-lg border border-border bg-card/60 p-4 text-sm text-muted-foreground">
-                These preferences are saved for the shop’s notification workflow. Connect an email
-                or SMS provider before enabling outbound customer messages.
-              </p>
-              <SaveButton
-                loading={saveSettings.isPending}
-                onClick={() => {
-                  if (validateSettings("notifications")) saveSettings.mutate("notifications");
-                }}
-                label="Save notification settings"
-              />
-            </TabsContent>
-
             <TabsContent value="account" className="mt-6 space-y-5">
               <Card className="border-border/70 bg-card/60">
                 <CardContent className="p-5 sm:p-6">
@@ -912,55 +794,111 @@ export function SettingsPage() {
                 </p>
                 <div className="grid gap-5 md:grid-cols-3">
                   <Field label="Current password">
-                    <Input
-                      type="password"
-                      autoComplete="current-password"
-                      value={account.currentPassword}
-                      onChange={(e) => {
-                        setAccount((current) => ({ ...current, currentPassword: e.target.value }));
-                        setAccountErrors((current) => ({ ...current, currentPassword: undefined }));
-                      }}
-                      aria-invalid={!!accountErrors.currentPassword}
-                    />
+                    <div className="relative">
+                      <Input
+                        type={showCurrentPassword ? "text" : "password"}
+                        autoComplete="current-password"
+                        value={account.currentPassword}
+                        onChange={(e) => {
+                          setAccount((current) => ({
+                            ...current,
+                            currentPassword: e.target.value,
+                          }));
+                          setAccountErrors((current) => ({
+                            ...current,
+                            currentPassword: undefined,
+                          }));
+                        }}
+                        aria-invalid={!!accountErrors.currentPassword}
+                        className="pr-11"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute top-0 right-0 text-muted-foreground hover:text-foreground"
+                        onClick={() => setShowCurrentPassword((visible) => !visible)}
+                        aria-label={
+                          showCurrentPassword ? "Hide current password" : "Show current password"
+                        }
+                        aria-pressed={showCurrentPassword}
+                      >
+                        {showCurrentPassword ? <EyeOff /> : <Eye />}
+                      </Button>
+                    </div>
                     <FieldError message={accountErrors.currentPassword} />
                   </Field>
                   <Field label="New password">
-                    <Input
-                      type="password"
-                      autoComplete="new-password"
-                      value={account.newPassword}
-                      onChange={(e) => {
-                        setAccount((current) => ({ ...current, newPassword: e.target.value }));
-                        setAccountErrors((current) => ({ ...current, newPassword: undefined }));
-                      }}
-                      aria-invalid={!!accountErrors.newPassword}
-                    />
+                    <div className="relative">
+                      <Input
+                        type={showNewPassword ? "text" : "password"}
+                        autoComplete="new-password"
+                        value={account.newPassword}
+                        onChange={(e) => {
+                          setAccount((current) => ({ ...current, newPassword: e.target.value }));
+                          setAccountErrors((current) => ({ ...current, newPassword: undefined }));
+                        }}
+                        aria-invalid={!!accountErrors.newPassword}
+                        className="pr-11"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute top-0 right-0 text-muted-foreground hover:text-foreground"
+                        onClick={() => setShowNewPassword((visible) => !visible)}
+                        aria-label={showNewPassword ? "Hide new password" : "Show new password"}
+                        aria-pressed={showNewPassword}
+                      >
+                        {showNewPassword ? <EyeOff /> : <Eye />}
+                      </Button>
+                    </div>
                     <FieldError message={accountErrors.newPassword} />
                   </Field>
                   <Field label="Confirm new password">
-                    <Input
-                      type="password"
-                      autoComplete="new-password"
-                      value={account.confirmNewPassword}
-                      onChange={(e) => {
-                        setAccount((current) => ({
-                          ...current,
-                          confirmNewPassword: e.target.value,
-                        }));
-                        setAccountErrors((current) => ({
-                          ...current,
-                          confirmNewPassword: undefined,
-                        }));
-                      }}
-                      aria-invalid={!!accountErrors.confirmNewPassword}
-                    />
+                    <div className="relative">
+                      <Input
+                        type={showConfirmNewPassword ? "text" : "password"}
+                        autoComplete="new-password"
+                        value={account.confirmNewPassword}
+                        onChange={(e) => {
+                          setAccount((current) => ({
+                            ...current,
+                            confirmNewPassword: e.target.value,
+                          }));
+                          setAccountErrors((current) => ({
+                            ...current,
+                            confirmNewPassword: undefined,
+                          }));
+                        }}
+                        aria-invalid={!!accountErrors.confirmNewPassword}
+                        className="pr-11"
+                      />
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="absolute top-0 right-0 text-muted-foreground hover:text-foreground"
+                        onClick={() => setShowConfirmNewPassword((visible) => !visible)}
+                        aria-label={
+                          showConfirmNewPassword
+                            ? "Hide confirmed password"
+                            : "Show confirmed password"
+                        }
+                        aria-pressed={showConfirmNewPassword}
+                      >
+                        {showConfirmNewPassword ? <EyeOff /> : <Eye />}
+                      </Button>
+                    </div>
                     <FieldError message={accountErrors.confirmNewPassword} />
                   </Field>
                 </div>
               </SettingsCard>
               <SaveButton
                 loading={saveAccount.isPending}
-                onClick={() => saveAccount.mutate()}
+                onClick={() => {
+                  if (validateAccount()) saveAccount.mutate();
+                }}
                 label="Save account changes"
               />
             </TabsContent>

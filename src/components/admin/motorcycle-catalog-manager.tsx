@@ -1,9 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, Pencil } from "lucide-react";
+import { Archive, Pencil, RotateCcw } from "lucide-react";
 import { forwardRef, useImperativeHandle, useMemo, useState } from "react";
 import { toast } from "sonner";
 
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
@@ -33,7 +43,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
-import { cn } from "@/lib/utils";
 
 type MotorcycleCatalogItem = {
   id: string;
@@ -67,6 +76,7 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
     const [filterBrand, setFilterBrand] = useState(ALL_BRANDS);
     const [filterModel, setFilterModel] = useState(ALL_MODELS);
     const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
+    const [saveConfirmationOpen, setSaveConfirmationOpen] = useState(false);
 
     const catalog = useQuery({
       queryKey: ["admin-motorcycle-catalog"],
@@ -138,10 +148,12 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
         toast.success(
           editing ? "Motorcycle catalog item updated." : "Motorcycle catalog item added.",
         );
+        setSaveConfirmationOpen(false);
         closeEditor();
         invalidateCatalogQueries(queryClient);
       },
       onError: (error: Error) => {
+        setSaveConfirmationOpen(false);
         const duplicate = /duplicate key|unique/i.test(error.message);
         setFormErrors({
           model: duplicate
@@ -170,6 +182,7 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
     useImperativeHandle(ref, () => ({ openNew }));
 
     function closeEditor() {
+      setSaveConfirmationOpen(false);
       setOpen(false);
       setEditing(null);
       setForm({ ...blank });
@@ -216,6 +229,15 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
 
       setFormErrors(errors);
       return Object.keys(errors).length === 0;
+    }
+
+    function requestSave() {
+      if (!validateForm()) return;
+      if (editing) {
+        setSaveConfirmationOpen(true);
+        return;
+      }
+      save.mutate();
     }
 
     function clearFormError(field: keyof typeof formErrors) {
@@ -276,13 +298,14 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
           {(filterBrand !== ALL_BRANDS || filterModel !== ALL_MODELS) && (
             <Button
               size="sm"
-              variant="ghost"
+              variant="outline"
+              className="self-end whitespace-nowrap"
               onClick={() => {
                 setFilterBrand(ALL_BRANDS);
                 setFilterModel(ALL_MODELS);
               }}
             >
-              Clear
+              <RotateCcw /> Reset
             </Button>
           )}
         </div>
@@ -328,13 +351,28 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
                 />
                 <FieldError message={formErrors.model} />
               </div>
-              <label className="flex items-center gap-2 text-sm">
-                <Switch
-                  checked={form.is_active}
-                  onCheckedChange={(is_active) => setForm({ ...form, is_active })}
-                />
-                Visible in booking
-              </label>
+              <div className="space-y-1.5">
+                <Label>Status</Label>
+                <label className="flex items-center gap-2 text-sm">
+                  <Switch
+                    id="motorcycle-active"
+                    checked={form.is_active}
+                    onCheckedChange={(is_active) => setForm({ ...form, is_active })}
+                  />
+                  <span
+                    className={
+                      form.is_active
+                        ? "font-medium text-emerald-600 dark:text-emerald-300"
+                        : "font-medium text-muted-foreground"
+                    }
+                  >
+                    {form.is_active ? "Active" : "Inactive"}
+                  </span>
+                </label>
+                <p className="text-xs text-muted-foreground">
+                  Inactive motorcycles are hidden from customer booking.
+                </p>
+              </div>
             </div>
 
             <DialogFooter>
@@ -343,7 +381,7 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
               </Button>
               <Button
                 type="button"
-                onClick={() => validateForm() && save.mutate()}
+                onClick={requestSave}
                 disabled={save.isPending}
               >
                 {save.isPending ? "Saving..." : editing ? "Update" : "Save motorcycle"}
@@ -357,15 +395,17 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
             <Table className="admin-data-table admin-balanced-table">
               <colgroup>
                 <col style={{ width: "20%" }} />
-                <col style={{ width: "24%" }} />
-                <col style={{ width: "44%" }} />
-                <col style={{ width: "12%" }} />
+                <col style={{ width: "20%" }} />
+                <col style={{ width: "20%" }} />
+                <col style={{ width: "20%" }} />
+                <col style={{ width: "20%" }} />
               </colgroup>
               <TableHeader>
                 <TableRow>
                   <TableHead>Date Created</TableHead>
                   <TableHead>Brand</TableHead>
                   <TableHead>Model</TableHead>
+                  <TableHead className="text-center">Status</TableHead>
                   <TableHead className="text-center">Actions</TableHead>
                 </TableRow>
               </TableHeader>
@@ -383,6 +423,17 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
                     </TableCell>
                     <TableCell data-label="Model" className="text-sm">
                       {modelLabel(item.brand, item.model)}
+                    </TableCell>
+                    <TableCell data-label="Status" className="text-center">
+                      <span
+                        className={
+                          item.is_active
+                            ? "text-sm font-medium text-emerald-600 dark:text-emerald-300"
+                            : "text-sm font-medium text-muted-foreground"
+                        }
+                      >
+                        {item.is_active ? "Active" : "Inactive"}
+                      </span>
                     </TableCell>
                     <TableCell
                       data-label="Actions"
@@ -419,6 +470,22 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
             )}
           </CardContent>
         </Card>
+        <AlertDialog open={saveConfirmationOpen} onOpenChange={setSaveConfirmationOpen}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Save motorcycle changes?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will update the selected motorcycle record and its customer booking visibility.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={save.isPending}>Cancel</AlertDialogCancel>
+              <AlertDialogAction disabled={save.isPending} onClick={() => save.mutate()}>
+                Save Changes
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
         <ArchiveConfirmationDialog
           open={Boolean(archiveTarget)}
           recordLabel="motorcycle catalog item"

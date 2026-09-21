@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, Pencil } from "lucide-react";
+import { Archive, Pencil, RotateCcw } from "lucide-react";
 import { forwardRef, useImperativeHandle, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -307,13 +307,14 @@ export const ProductManager = forwardRef<ProductManagerHandle, { category: "part
           {(filterBrand !== ALL_BRANDS || filterStock !== "all") && (
             <Button
               size="sm"
-              variant="ghost"
+              variant="outline"
+              className="self-end whitespace-nowrap"
               onClick={() => {
                 setFilterBrand(ALL_BRANDS);
                 setFilterStock("all");
               }}
             >
-              Clear
+              <RotateCcw /> Reset
             </Button>
           )}
         </div>
@@ -500,35 +501,60 @@ export const ProductManager = forwardRef<ProductManagerHandle, { category: "part
               </div>
               <div className="flex flex-wrap gap-6 pt-1">
                 <div className="space-y-1.5">
-                  <Label>Status</Label>
-                  <Select
-                    value={form.is_active ? "active" : "deactivated"}
-                    onValueChange={(value) =>
-                      setForm((current) => ({ ...current, is_active: value === "active" }))
-                    }
-                  >
-                    <SelectTrigger className="w-40">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="active">Active</SelectItem>
-                      <SelectItem value="deactivated">Deactivated</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Label htmlFor="product-active">Status</Label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Switch
+                      id="product-active"
+                      checked={form.is_active}
+                      onCheckedChange={(is_active) =>
+                        setForm((current) => ({ ...current, is_active }))
+                      }
+                    />
+                    <span
+                      className={
+                        form.is_active
+                          ? "font-medium text-emerald-600 dark:text-emerald-300"
+                          : "font-medium text-muted-foreground"
+                      }
+                    >
+                      {form.is_active ? "Active" : "Inactive"}
+                    </span>
+                  </label>
                 </div>
-                <label className="flex items-center gap-2 self-end pb-2 text-sm">
-                  <Switch
-                    checked={form.is_featured}
-                    onCheckedChange={(value) =>
-                      setForm((current) => ({ ...current, is_featured: value }))
-                    }
-                  />
-                  Featured product
-                </label>
+                <div className="space-y-1.5">
+                  <Label htmlFor="product-featured">Featured product</Label>
+                  <label className="flex items-center gap-2 text-sm">
+                    <Switch
+                      id="product-featured"
+                      checked={form.is_featured}
+                      onCheckedChange={(is_featured) =>
+                        setForm((current) => ({ ...current, is_featured }))
+                      }
+                    />
+                    <span
+                      className={
+                        form.is_featured
+                          ? "font-medium text-emerald-600 dark:text-emerald-300"
+                          : "font-medium text-muted-foreground"
+                      }
+                    >
+                      {form.is_featured ? "Featured" : "Unfeatured"}
+                    </span>
+                  </label>
+                </div>
               </div>
             </div>
             <DialogFooter>
               <Button
+                type="button"
+                variant="outline"
+                onClick={closeEditor}
+                disabled={save.isPending || uploading}
+              >
+                Close
+              </Button>
+              <Button
+                type="button"
                 disabled={save.isPending || uploading}
                 onClick={() => validateForm() && save.mutate()}
               >
@@ -572,7 +598,7 @@ export const ProductManager = forwardRef<ProductManagerHandle, { category: "part
                         variant="outline"
                         className={`uppercase ${activeStatusTone(item.is_active)}`}
                       >
-                        {item.is_active ? "Active" : "Deactivated"}
+                        {item.is_active ? "Active" : "Inactive"}
                       </Badge>
                     </TableCell>
                     <TableCell data-label="Featured">

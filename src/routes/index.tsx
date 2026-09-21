@@ -81,7 +81,7 @@ function Home() {
           <div
             aria-hidden="true"
             className="absolute inset-0 bg-cover bg-center"
-            style={{ backgroundImage: "url('/fake-rider-shop.jpg')" }}
+            style={{ backgroundImage: "url('/shopfront.jpg')" }}
           />
           <div
             aria-hidden="true"

@@ -130,6 +130,7 @@ export type Database = {
           assigned_crew_id: string | null;
           booking_request_id: string | null;
           cancelled_at: string | null;
+          archived_at: string | null;
           created_at: string;
           booking_duration_minutes: number;
           customer_name: string;
@@ -168,6 +169,7 @@ export type Database = {
           assigned_crew_id?: string | null;
           booking_request_id?: string | null;
           cancelled_at?: string | null;
+          archived_at?: string | null;
           created_at?: string;
           booking_duration_minutes?: number;
           customer_name: string;
@@ -206,6 +208,7 @@ export type Database = {
           assigned_crew_id?: string | null;
           booking_request_id?: string | null;
           cancelled_at?: string | null;
+          archived_at?: string | null;
           created_at?: string;
           booking_duration_minutes?: number;
           customer_name?: string;
@@ -310,6 +313,7 @@ export type Database = {
       };
       blocked_numbers: {
         Row: {
+          archived_at: string | null;
           id: string;
           phone: string;
           reason: string | null;
@@ -318,6 +322,7 @@ export type Database = {
           is_archived: boolean;
         };
         Insert: {
+          archived_at?: string | null;
           id?: string;
           phone: string;
           reason?: string | null;
@@ -326,6 +331,7 @@ export type Database = {
           is_archived?: boolean;
         };
         Update: {
+          archived_at?: string | null;
           id?: string;
           phone?: string;
           reason?: string | null;
@@ -384,6 +390,7 @@ export type Database = {
       };
       crew_members: {
         Row: {
+          archived_at: string | null;
           created_at: string;
           id: string;
           is_active: boolean;
@@ -393,6 +400,7 @@ export type Database = {
           role: string;
         };
         Insert: {
+          archived_at?: string | null;
           created_at?: string;
           id?: string;
           is_active?: boolean;
@@ -402,6 +410,7 @@ export type Database = {
           role?: string;
         };
         Update: {
+          archived_at?: string | null;
           created_at?: string;
           id?: string;
           is_active?: boolean;
@@ -640,6 +649,7 @@ export type Database = {
       };
       schedule_blocks: {
         Row: {
+          archived_at: string | null;
           block_date: string;
           created_at: string;
           id: string;
@@ -648,6 +658,7 @@ export type Database = {
           start_time: string | null;
         };
         Insert: {
+          archived_at?: string | null;
           block_date: string;
           created_at?: string;
           id?: string;
@@ -656,6 +667,7 @@ export type Database = {
           start_time?: string | null;
         };
         Update: {
+          archived_at?: string | null;
           block_date?: string;
           created_at?: string;
           id?: string;
@@ -678,6 +690,8 @@ export type Database = {
           logo_url: string | null;
           max_advance_booking_days: number;
           minimum_booking_lead_hours: number;
+          opening_time: string;
+          closing_time: string;
           notify_admin: boolean;
           notify_cancellation: boolean;
           notify_confirmation: boolean;
@@ -699,6 +713,8 @@ export type Database = {
           logo_url?: string | null;
           max_advance_booking_days?: number;
           minimum_booking_lead_hours?: number;
+          opening_time?: string;
+          closing_time?: string;
           notify_admin?: boolean;
           notify_cancellation?: boolean;
           notify_confirmation?: boolean;
@@ -720,6 +736,8 @@ export type Database = {
           logo_url?: string | null;
           max_advance_booking_days?: number;
           minimum_booking_lead_hours?: number;
+          opening_time?: string;
+          closing_time?: string;
           notify_admin?: boolean;
           notify_cancellation?: boolean;
           notify_confirmation?: boolean;

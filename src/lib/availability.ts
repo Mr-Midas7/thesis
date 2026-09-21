@@ -4,6 +4,7 @@ import {
   isBookingTimeRangeWithinHours,
   isSlotBookable,
   timeToMinutes,
+  type BookingHours,
 } from "./shop";
 
 export type TimeSlot = {
@@ -49,6 +50,7 @@ export type Assignment = {
 export type AvailabilitySource = {
   from: string;
   to: string;
+  operatingHours?: BookingHours;
   minimumBookingLeadHours?: number;
   totalDurationMinutes?: number;
   slots: TimeSlot[];
@@ -148,7 +150,7 @@ function computeAvailableSlotsFromSource(
 
     const notBookable =
       !isSlotBookable(date, slot.startTime, availability.minimumBookingLeadHours) ||
-      !isBookingTimeRangeWithinHours(slot.startTime, totalDuration);
+      !isBookingTimeRangeWithinHours(slot.startTime, totalDuration, availability.operatingHours);
 
     const blocked = availability.blocks.some((b) => {
       if (b.date !== date) return false;

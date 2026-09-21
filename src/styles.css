@@ -152,10 +152,6 @@
 @layer base {
   body {
     font-family: var(--font-sans);
-    background-image:
-      radial-gradient(circle at 15% -10%, oklch(0.84 0.18 92 / 0.12), transparent 45%),
-      radial-gradient(circle at 90% 0%, oklch(0.68 0.2 45 / 0.1), transparent 40%);
-    background-attachment: fixed;
   }
   h1,
   h2,

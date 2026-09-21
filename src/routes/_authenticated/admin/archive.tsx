@@ -416,6 +416,11 @@ function ArchivePage() {
       queryClient.invalidateQueries({ queryKey: ["archived-blocked-numbers"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
+      // The customer list is derived from appointment history. Refresh it after
+      // a permanent appointment deletion so a customer with no appointments
+      // is removed immediately.
+      queryClient.invalidateQueries({ queryKey: ["customers"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["customer-history"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-services"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-products"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["crew-all"], exact: false });
@@ -493,7 +498,8 @@ function ArchivePage() {
           <h1 className="font-display text-2xl tracking-wide uppercase md:text-3xl">Archive</h1>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
             Archived bookings, services, products, crew, schedule blocks, and blocked numbers.
-            Restore records or delete them permanently.
+            Restore records or delete them permanently. Archived records are automatically deleted
+            after 30 days.
           </p>
         </div>
       </header>

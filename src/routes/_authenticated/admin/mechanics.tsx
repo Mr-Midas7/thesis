@@ -57,7 +57,7 @@ type CrewMember = {
   is_archived: boolean;
 };
 
-const blank = { name: "", role: "Mechanic", phone: "" };
+const blank = { name: "", role: "Mechanic", phone: "", is_active: true };
 
 function MechanicsPage() {
   const qc = useQueryClient();
@@ -68,7 +68,7 @@ function MechanicsPage() {
   const [formErrors, setFormErrors] = useState<
     Partial<Record<"name" | "phone", string | undefined>>
   >({});
-  const [filterStatus, setFilterStatus] = useState<"all" | "active" | "deactivated">("all");
+  const [filterStatus, setFilterStatus] = useState<"all" | "active" | "inactive">("all");
   const [filterName, setFilterName] = useState("");
 
   const crew = useQuery({
@@ -112,21 +112,6 @@ function MechanicsPage() {
     },
   });
 
-  const update = useMutation({
-    mutationFn: async ({ id, patch }: { id: string; patch: Record<string, unknown> }) => {
-      const { error } = await supabase
-        .from("crew_members")
-        .update(patch as never)
-        .eq("id", id);
-      if (error) throw error;
-    },
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["crew-all"] }),
-    onError: (err: Error) => {
-      console.error("Update failed:", err);
-      toast.error(`Update failed: ${err.message}`);
-    },
-  });
-
   const archive = useMutation({
     mutationFn: async (id: string) => {
       const { error } = await supabase
@@ -149,9 +134,9 @@ function MechanicsPage() {
     },
   });
 
-  const getStatus = (c: CrewMember) => ({
-    label: c.is_active ? "Active" : "Deactivated",
-    tone: activeStatusTone(c.is_active),
+  const getStatus = (member: CrewMember) => ({
+    label: member.is_active ? "Active" : "Inactive",
+    tone: activeStatusTone(member.is_active),
   });
 
   const handleSave = async () => {
@@ -171,6 +156,7 @@ function MechanicsPage() {
           name: form.name.trim(),
           role: form.role.trim() || "Mechanic",
           phone: form.phone.trim() || null,
+          is_active: form.is_active,
         })
         .eq("id", editing.id);
       if (error) throw error;
@@ -219,7 +205,7 @@ function MechanicsPage() {
           <Label className="text-sm">Status</Label>
           <Select
             value={filterStatus}
-            onValueChange={(value) => setFilterStatus(value as "all" | "active" | "deactivated")}
+            onValueChange={(value) => setFilterStatus(value as "all" | "active" | "inactive")}
           >
             <SelectTrigger className="w-full sm:w-40">
               <SelectValue />
@@ -227,7 +213,7 @@ function MechanicsPage() {
             <SelectContent>
               <SelectItem value="all">All</SelectItem>
               <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="deactivated">Deactivated</SelectItem>
+              <SelectItem value="inactive">Inactive</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -250,12 +236,11 @@ function MechanicsPage() {
         <CardContent className="overflow-x-auto p-0">
           <Table className="admin-data-table admin-balanced-table">
             <colgroup>
-              <col style={{ width: "22.222%" }} />
-              <col style={{ width: "22.222%" }} />
+              <col style={{ width: "27%" }} />
+              <col style={{ width: "27%" }} />
+              <col style={{ width: "22%" }} />
+              <col style={{ width: "12%" }} />
               <col style={{ width: "15%" }} />
-              <col style={{ width: "11.111%" }} />
-              <col style={{ width: "11.111%" }} />
-              <col style={{ width: "11.112%" }} />
             </colgroup>
             <TableHeader>
               <TableRow>
@@ -263,7 +248,6 @@ function MechanicsPage() {
                 <TableHead>Role</TableHead>
                 <TableHead>Phone</TableHead>
                 <TableHead className="text-center">Status</TableHead>
-                <TableHead className="text-center">Active</TableHead>
                 <TableHead className="text-center">Action</TableHead>
               </TableRow>
             </TableHeader>
@@ -289,17 +273,12 @@ function MechanicsPage() {
                         {c.phone ?? "-"}
                       </TableCell>
                       <TableCell data-label="Status" className="text-center">
-                        <Badge variant="outline" className={`text-[10px] uppercase ${status.tone}`}>
+                        <Badge
+                          variant="outline"
+                          className={`text-[10px] uppercase ${status.tone}`}
+                        >
                           {status.label}
                         </Badge>
-                      </TableCell>
-                      <TableCell data-label="Active" className="text-center">
-                        <Switch
-                          checked={c.is_active}
-                          onCheckedChange={(v) =>
-                            update.mutate({ id: c.id, patch: { is_active: v } })
-                          }
-                        />
                       </TableCell>
                       <TableCell data-label="Actions" className="space-x-1 text-center">
                         <Button
@@ -311,6 +290,7 @@ function MechanicsPage() {
                               name: c.name,
                               role: c.role,
                               phone: c.phone ? toLocalPhilippineMobile(c.phone) : "",
+                              is_active: c.is_active,
                             });
                             setFormErrors({});
                             setOpen(true);
@@ -383,6 +363,29 @@ function MechanicsPage() {
               />
               <FieldError message={formErrors.phone} />
             </div>
+            {editing && (
+              <div className="space-y-1.5 rounded-lg border border-border/70 bg-muted/20 p-3">
+                <Label htmlFor="mechanic-active">Status</Label>
+                <label className="flex items-center gap-2 text-sm" htmlFor="mechanic-active">
+                  <Switch
+                    id="mechanic-active"
+                    checked={form.is_active}
+                    onCheckedChange={(is_active) =>
+                      setForm((current) => ({ ...current, is_active }))
+                    }
+                  />
+                  <span
+                    className={
+                      form.is_active
+                        ? "font-medium text-emerald-600 dark:text-emerald-300"
+                        : "font-medium text-muted-foreground"
+                    }
+                  >
+                    {form.is_active ? "Active" : "Inactive"}
+                  </span>
+                </label>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>

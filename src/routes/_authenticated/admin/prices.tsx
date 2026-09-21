@@ -98,6 +98,7 @@ type PriceHistoryRecord = {
 };
 
 type PriceDraft = { price: string; reason: string };
+type PriceDraftErrors = { price?: string; reason?: string; form?: string };
 type HistoryTarget = {
   table: PriceTableName;
   item: PriceItem;
@@ -157,7 +158,7 @@ function PriceCatalog({ table, archived }: { table: PriceTableName; archived: bo
   const [historyTarget, setHistoryTarget] = useState<HistoryTarget | null>(null);
   const [archiveViewTarget, setArchiveViewTarget] = useState<PriceItem | null>(null);
   const [drafts, setDrafts] = useState<Record<string, PriceDraft>>({});
-  const [priceErrors, setPriceErrors] = useState<Record<string, string>>({});
+  const [priceErrors, setPriceErrors] = useState<Record<string, PriceDraftErrors>>({});
   const [saveTarget, setSaveTarget] = useState<PriceConfiguration | null>(null);
 
   const items = useQuery({
@@ -352,7 +353,7 @@ function PriceCatalog({ table, archived }: { table: PriceTableName; archived: bo
       setSaveTarget(null);
       setPriceErrors((current) => ({
         ...current,
-        [variables.configuration.id]: `Could not save price: ${error.message}`,
+        [variables.configuration.id]: { form: `Could not save price: ${error.message}` },
       }));
     },
   });
@@ -366,31 +367,29 @@ function PriceCatalog({ table, archived }: { table: PriceTableName; archived: bo
       ...current,
       [configuration.id]: { ...draftFor(configuration), ...changes },
     }));
-    setPriceErrors((current) => ({ ...current, [configuration.id]: "" }));
+    setPriceErrors((current) => ({
+      ...current,
+      [configuration.id]: {
+        ...current[configuration.id],
+        ...Object.fromEntries(Object.keys(changes).map((key) => [key, undefined])),
+      },
+    }));
   }
 
   function requestSave(configuration: PriceConfiguration) {
     const draft = draftFor(configuration);
     const nextPrice = Number(draft.price);
+    const nextErrors: PriceDraftErrors = {};
     if (!Number.isFinite(nextPrice) || nextPrice < 0) {
-      setPriceErrors((current) => ({
-        ...current,
-        [configuration.id]: "Enter a valid price of PHP 0 or more.",
-      }));
-      return;
-    }
-    if (nextPrice === configuration.price) {
-      setPriceErrors((current) => ({
-        ...current,
-        [configuration.id]: "Enter a changed price to save.",
-      }));
-      return;
+      nextErrors.price = "Enter a valid price of PHP 0 or more.";
+    } else if (nextPrice === configuration.price) {
+      nextErrors.price = "Enter a changed price to save.";
     }
     if (!draft.reason.trim()) {
-      setPriceErrors((current) => ({
-        ...current,
-        [configuration.id]: "Enter a reason for the price change.",
-      }));
+      nextErrors.reason = "Enter a reason for the price change.";
+    }
+    if (Object.keys(nextErrors).length > 0) {
+      setPriceErrors((current) => ({ ...current, [configuration.id]: nextErrors }));
       return;
     }
     setSaveTarget(configuration);
@@ -459,7 +458,7 @@ function PriceCatalog({ table, archived }: { table: PriceTableName; archived: bo
   return (
     <>
       <Card className="mt-4 border-border/70 bg-card/60">
-        <CardContent className="overflow-x-auto p-0">
+        <CardContent className={archived ? "overflow-hidden p-0" : "overflow-x-auto p-0"}>
           {archived ? (
             <ArchivedPriceTable
               table={table}
@@ -602,7 +601,7 @@ function ConfigurationPriceTable({
   item: PriceItem;
   configurations: PriceConfiguration[];
   draftFor: (configuration: PriceConfiguration) => PriceDraft;
-  errors: Record<string, string>;
+  errors: Record<string, PriceDraftErrors>;
   onDraftChange: (configuration: PriceConfiguration, changes: Partial<PriceDraft>) => void;
   onSave: (configuration: PriceConfiguration) => void;
   onViewHistory: (configuration: PriceConfiguration) => void;
@@ -687,7 +686,9 @@ function ConfigurationPriceTable({
                         aria-label={`Reason for ${configuration.label} price change`}
                         aria-invalid={!!errors[configuration.id]}
                       />
-                      <FieldError message={errors[configuration.id]} />
+                      <FieldError
+                        message={errors[configuration.id]?.reason ?? errors[configuration.id]?.form}
+                      />
                     </TableCell>
                     <TableCell data-label="Actions" className="align-middle">
                       <div className="flex items-center gap-1 whitespace-nowrap">
@@ -734,7 +735,7 @@ function ServicePriceTables({
   item: PriceItem;
   configurations: PriceConfiguration[];
   draftFor: (configuration: PriceConfiguration) => PriceDraft;
-  errors: Record<string, string>;
+  errors: Record<string, PriceDraftErrors>;
   onDraftChange: (configuration: PriceConfiguration, changes: Partial<PriceDraft>) => void;
   onSave: (configuration: PriceConfiguration) => void;
   onViewHistory: (configuration: PriceConfiguration) => void;
@@ -873,7 +874,7 @@ function PriceEditRow({
 }: {
   configuration: PriceConfiguration;
   draft: PriceDraft;
-  error: string | undefined;
+  error: PriceDraftErrors | undefined;
   date: string | null;
   brand?: string | undefined;
   model?: string | undefined;
@@ -899,9 +900,10 @@ function PriceEditRow({
           value={draft.price}
           onChange={(event) => onDraftChange(configuration, { price: event.target.value })}
           aria-label={`New price for ${configuration.label}`}
-          aria-invalid={Boolean(error)}
+          aria-invalid={Boolean(error?.price)}
           tabIndex={0}
         />
+        <FieldError message={error?.price} />
       </TableCell>
       <TableCell>
         <Input
@@ -910,9 +912,9 @@ function PriceEditRow({
           value={draft.reason}
           onChange={(event) => onDraftChange(configuration, { reason: event.target.value })}
           aria-label={`Reason for ${configuration.label} price change`}
-          aria-invalid={Boolean(error)}
+          aria-invalid={Boolean(error?.reason || error?.form)}
         />
-        <FieldError message={error} />
+        <FieldError message={error?.reason || error?.form} />
       </TableCell>
       <TableCell className="align-middle text-center">{actions}</TableCell>
     </TableRow>
@@ -936,27 +938,27 @@ function ArchivedPriceTable({
 }) {
   const label = table === "services" ? "services" : "parts or accessories";
   return (
-    <Table className="admin-data-table admin-balanced-table min-w-[880px]">
+    <Table className="admin-data-table admin-balanced-table w-full table-fixed">
       <colgroup>
-        <col style={{ width: "17%" }} />
-        <col style={{ width: "27%" }} />
-        <col style={{ width: "17%" }} />
+        <col style={{ width: "15%" }} />
+        <col style={{ width: "24%" }} />
+        <col style={{ width: "14%" }} />
         <col style={{ width: "15%" }} />
         <col style={{ width: "12%" }} />
-        <col style={{ width: "12%" }} />
+        <col style={{ width: "20%" }} />
       </colgroup>
       <TableHeader>
         <TableRow>
-          <TableHead className="text-left">Archived Date</TableHead>
-          <TableHead className="text-left">
+          <TableHead className="align-middle text-left">Archived Date</TableHead>
+          <TableHead className="align-middle text-left">
             {table === "services" ? "Service" : "Part / Accessory"}
           </TableHead>
-          <TableHead className="text-left">Category</TableHead>
-          <TableHead className="text-left">
+          <TableHead className="align-middle text-left">Category</TableHead>
+          <TableHead className="align-middle text-center">
             {table === "services" ? "Model Overrides" : "Configurations"}
           </TableHead>
-          <TableHead className="text-left">Status</TableHead>
-          <TableHead className="text-left">Actions</TableHead>
+          <TableHead className="align-middle text-center">Status</TableHead>
+          <TableHead className="align-middle text-center">Actions</TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
@@ -964,38 +966,46 @@ function ArchivedPriceTable({
           <TableRow key={item.id}>
             <TableCell
               data-label="Archived Date"
-              className="whitespace-nowrap text-xs text-muted-foreground"
+              className="align-middle text-xs leading-snug text-muted-foreground"
             >
               {formatDateTime(item.archived_at ?? item.updated_at)}
             </TableCell>
             <TableCell
               data-label={table === "services" ? "Service" : "Part / Accessory"}
-              className="text-sm"
+              className="align-middle break-words text-sm"
             >
               {item.name}
             </TableCell>
-            <TableCell data-label="Category" className="text-sm capitalize">
+            <TableCell
+              data-label="Category"
+              className="align-middle break-words text-sm capitalize"
+            >
               {item.category}
             </TableCell>
             <TableCell
               data-label={table === "services" ? "Model Overrides" : "Configurations"}
-              className="text-sm"
+              className="align-middle text-center text-sm"
             >
               {table === "services"
                 ? configurationsFor(item).filter((row) => row.kind === "service-override").length
                 : 1}
             </TableCell>
-            <TableCell data-label="Status">
+            <TableCell data-label="Status" className="align-middle text-center">
               <Badge variant="outline" className="uppercase text-muted-foreground">
                 Archived
               </Badge>
             </TableCell>
-            <TableCell data-label="Actions" className="align-middle">
-              <div className="flex items-center gap-1 whitespace-nowrap">
-                <Button size="sm" variant="ghost" onClick={() => onView(item)}>
+            <TableCell data-label="Actions" className="align-middle text-center">
+              <div className="flex flex-wrap items-center justify-center gap-1">
+                <Button size="sm" variant="ghost" className="px-2" onClick={() => onView(item)}>
                   <Eye className="h-4 w-4" /> View
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => onViewHistory(item)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="px-2"
+                  onClick={() => onViewHistory(item)}
+                >
                   View History
                 </Button>
               </div>

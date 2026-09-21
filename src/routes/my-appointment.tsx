@@ -280,6 +280,10 @@ function MyAppointment() {
   });
 
   function beginReschedule() {
+    if (!appt || !["pending", "confirmed"].includes(appt.status)) {
+      toast.error("This appointment can no longer be rescheduled online. Please call the shop.");
+      return;
+    }
     if ((appt?.rescheduleCount ?? 0) >= 3) {
       toast.error("This appointment has reached the maximum of 3 reschedules.");
       return;
@@ -894,16 +898,17 @@ function MyAppointment() {
                                 </AlertDialogFooter>
                               </AlertDialogContent>
                             </AlertDialog>
-                            {appt.rescheduleCount < 3 && (
-                              <Button
-                                type="button"
-                                variant="outline"
-                                className="font-display uppercase"
-                                onClick={beginReschedule}
-                              >
-                                Reschedule
-                              </Button>
-                            )}
+                            {["pending", "confirmed"].includes(appt.status) &&
+                              appt.rescheduleCount < 3 && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="font-display uppercase"
+                                  onClick={beginReschedule}
+                                >
+                                  Reschedule
+                                </Button>
+                              )}
                           </>
                         )}
                       <AlertDialog>

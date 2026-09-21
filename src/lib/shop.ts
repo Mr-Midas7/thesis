@@ -79,20 +79,16 @@ export function formatTime(value: string) {
   return `${display}:${m} ${suffix}`;
 }
 
-export function shopTimeOptions() {
-  const options: { value: string; label: string }[] = [];
-  for (let h = 8; h <= 17; h++) {
-    for (const m of [0, 30]) {
-      if (h === 17 && m > 0) continue;
-      const time24 = `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-      options.push({ value: time24, label: formatTime(time24) });
-    }
-  }
-  return options;
-}
+export const DEFAULT_BOOKING_HOURS = {
+  openingTime: "08:00",
+  closingTime: "17:00",
+} as const;
 
-const BOOKING_OPEN_MINUTES = 8 * 60;
-const BOOKING_CLOSE_MINUTES = 17 * 60;
+export type BookingHours = {
+  openingTime: string;
+  closingTime: string;
+};
+
 const BOOKING_INTERVAL_MINUTES = 30;
 
 export type BookingCapacityConfig = {
@@ -109,7 +105,16 @@ export type BookingTimeSlot = {
 
 export function timeToMinutes(time: string) {
   const [hours = Number.NaN, minutes = Number.NaN] = time.slice(0, 5).split(":").map(Number);
-  if (!Number.isInteger(hours) || !Number.isInteger(minutes)) return Number.NaN;
+  if (
+    !Number.isInteger(hours) ||
+    !Number.isInteger(minutes) ||
+    hours < 0 ||
+    hours > 23 ||
+    minutes < 0 ||
+    minutes > 59
+  ) {
+    return Number.NaN;
+  }
   return hours * 60 + minutes;
 }
 
@@ -117,25 +122,68 @@ function minutesToTime(minutes: number) {
   return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
+/** Operating hours must use the public booking grid's 30-minute increments. */
+export function isValidBookingHours(openingTime: string, closingTime: string) {
+  const openingMinutes = timeToMinutes(openingTime);
+  const closingMinutes = timeToMinutes(closingTime);
+  return (
+    Number.isFinite(openingMinutes) &&
+    Number.isFinite(closingMinutes) &&
+    openingMinutes < closingMinutes &&
+    openingMinutes % BOOKING_INTERVAL_MINUTES === 0 &&
+    closingMinutes % BOOKING_INTERVAL_MINUTES === 0
+  );
+}
+
+function resolveBookingHours(hours: BookingHours = DEFAULT_BOOKING_HOURS): BookingHours {
+  return isValidBookingHours(hours.openingTime, hours.closingTime)
+    ? { openingTime: hours.openingTime.slice(0, 5), closingTime: hours.closingTime.slice(0, 5) }
+    : DEFAULT_BOOKING_HOURS;
+}
+
+export function shopTimeOptions(hours: BookingHours = DEFAULT_BOOKING_HOURS) {
+  const { openingTime, closingTime } = resolveBookingHours(hours);
+  const openingMinutes = timeToMinutes(openingTime);
+  const closingMinutes = timeToMinutes(closingTime);
+  const options: { value: string; label: string }[] = [];
+  for (
+    let minutes = openingMinutes;
+    minutes <= closingMinutes;
+    minutes += BOOKING_INTERVAL_MINUTES
+  ) {
+    const time24 = minutesToTime(minutes);
+    options.push({ value: time24, label: formatTime(time24) });
+  }
+  return options;
+}
+
 /** True for a 30-minute booking start within the 8 AM–5 PM operating window. */
-export function isBookingStartTime(time: string) {
+export function isBookingStartTime(time: string, hours: BookingHours = DEFAULT_BOOKING_HOURS) {
+  const { openingTime, closingTime } = resolveBookingHours(hours);
   const minutes = timeToMinutes(time);
+  const openingMinutes = timeToMinutes(openingTime);
+  const closingMinutes = timeToMinutes(closingTime);
   return (
     Number.isFinite(minutes) &&
-    minutes >= BOOKING_OPEN_MINUTES &&
-    minutes < BOOKING_CLOSE_MINUTES &&
-    (minutes - BOOKING_OPEN_MINUTES) % BOOKING_INTERVAL_MINUTES === 0
+    minutes >= openingMinutes &&
+    minutes < closingMinutes &&
+    (minutes - openingMinutes) % BOOKING_INTERVAL_MINUTES === 0
   );
 }
 
 /** True when the entire appointment fits inside the shop's operating hours. */
-export function isBookingTimeRangeWithinHours(time: string, durationMinutes: number) {
+export function isBookingTimeRangeWithinHours(
+  time: string,
+  durationMinutes: number,
+  hours: BookingHours = DEFAULT_BOOKING_HOURS,
+) {
+  const { closingTime } = resolveBookingHours(hours);
   const startMinutes = timeToMinutes(time);
   return (
-    isBookingStartTime(time) &&
+    isBookingStartTime(time, hours) &&
     Number.isFinite(durationMinutes) &&
     durationMinutes > 0 &&
-    startMinutes + durationMinutes <= BOOKING_CLOSE_MINUTES
+    startMinutes + durationMinutes <= timeToMinutes(closingTime)
   );
 }
 
@@ -156,11 +204,17 @@ export function isShopOpenDate(dateIso: string) {
  * Build the public booking grid. The configured hourly slot capacity applies
  * to both half-hour starts within that hour.
  */
-export function buildBookingTimeSlots(config: BookingCapacityConfig[]): BookingTimeSlot[] {
+export function buildBookingTimeSlots(
+  config: BookingCapacityConfig[],
+  hours: BookingHours = DEFAULT_BOOKING_HOURS,
+): BookingTimeSlot[] {
+  const { openingTime, closingTime } = resolveBookingHours(hours);
+  const openingMinutes = timeToMinutes(openingTime);
+  const closingMinutes = timeToMinutes(closingTime);
   return Array.from(
-    { length: (BOOKING_CLOSE_MINUTES - BOOKING_OPEN_MINUTES) / BOOKING_INTERVAL_MINUTES },
+    { length: (closingMinutes - openingMinutes) / BOOKING_INTERVAL_MINUTES },
     (_, index) => {
-      const startMinutes = BOOKING_OPEN_MINUTES + index * BOOKING_INTERVAL_MINUTES;
+      const startMinutes = openingMinutes + index * BOOKING_INTERVAL_MINUTES;
       const startTime = minutesToTime(startMinutes);
       const hourStart = minutesToTime(Math.floor(startMinutes / 60) * 60);
       const configured = config.find((slot) => slot.startTime.slice(0, 5) === startTime);

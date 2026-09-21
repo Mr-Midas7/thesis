@@ -6,6 +6,7 @@ import { buildPublicAvailability } from "./availability";
 import {
   addDays,
   buildBookingTimeSlots,
+  DEFAULT_BOOKING_HOURS,
   decodeBlockReason,
   earliestBookableDate,
   formatDateLong,
@@ -24,6 +25,10 @@ import {
 } from "./shop";
 
 type BookingRules = {
+  operatingHours: {
+    openingTime: string;
+    closingTime: string;
+  };
   minimumBookingLeadHours: number;
   maxAdvanceBookingDays: number;
   allowSameDayAppointments: boolean;
@@ -32,6 +37,7 @@ type BookingRules = {
 };
 
 const defaultBookingRules: BookingRules = {
+  operatingHours: DEFAULT_BOOKING_HOURS,
   minimumBookingLeadHours: 48,
   maxAdvanceBookingDays: 30,
   allowSameDayAppointments: false,
@@ -45,7 +51,7 @@ async function getBookingRules(): Promise<BookingRules> {
     const { data, error } = await supabaseAdmin
       .from("shop_settings")
       .select(
-        "minimum_booking_lead_hours,max_advance_booking_days,allow_same_day_appointments,cancellation_notice_hours,rescheduling_notice_hours",
+        "opening_time,closing_time,minimum_booking_lead_hours,max_advance_booking_days,allow_same_day_appointments,cancellation_notice_hours,rescheduling_notice_hours",
       )
       .eq("id", true)
       .maybeSingle();
@@ -54,6 +60,10 @@ async function getBookingRules(): Promise<BookingRules> {
       return defaultBookingRules;
     }
     return {
+      operatingHours: {
+        openingTime: String(data.opening_time).slice(0, 5),
+        closingTime: String(data.closing_time).slice(0, 5),
+      },
       minimumBookingLeadHours: data.minimum_booking_lead_hours,
       maxAdvanceBookingDays: data.max_advance_booking_days,
       allowSameDayAppointments: data.allow_same_day_appointments,
@@ -548,7 +558,8 @@ export const getAvailability = createServerFn({ method: "GET" })
         ? bookingRules.reschedulingNoticeHours
         : bookingRules.minimumBookingLeadHours,
       totalDurationMinutes: totalDuration || 90,
-      slots: buildBookingTimeSlots(capacityConfig),
+      slots: buildBookingTimeSlots(capacityConfig, bookingRules.operatingHours),
+      operatingHours: bookingRules.operatingHours,
       blocks: (blocksRes.data ?? []).map((b) => {
         const { endTime, userReason } = decodeBlockReason(b.reason);
         return {
@@ -752,10 +763,10 @@ export const createBooking = createServerFn({ method: "POST" })
       };
     }
 
-    if (!isBookingStartTime(startTime)) {
+    if (!isBookingStartTime(startTime, bookingRules.operatingHours)) {
       return {
         ok: false as const,
-        error: "Choose a booking start time from 8:00 AM to 4:30 PM in 30-minute intervals.",
+        error: `Choose a booking start time from ${formatTime(bookingRules.operatingHours.openingTime)} to ${formatTime(bookingRules.operatingHours.closingTime)} in 30-minute intervals.`,
       };
     }
 
@@ -805,6 +816,7 @@ export const createBooking = createServerFn({ method: "POST" })
         startTime: String(configuredSlot.start_time).slice(0, 5),
         capacity: configuredSlot.capacity,
       })),
+      bookingRules.operatingHours,
     ).find((configuredSlot) => configuredSlot.startTime === startTime);
     if (!slot || slot.capacity <= 0)
       return { ok: false as const, error: "That time slot is not available." };
@@ -823,6 +835,26 @@ export const createBooking = createServerFn({ method: "POST" })
       services.data.length !== data.serviceIds.length
     ) {
       return { ok: false as const, error: "Please select available services and try again." };
+    }
+
+    // The catalog is the source of truth for customer-selectable motorcycles.
+    // Validate again here so a stale page or altered request cannot book an
+    // inactive or archived model after the customer has reached checkout.
+    if (!rescheduledFrom) {
+      const motorcycleRecord = await supabaseAdmin
+        .from("motorcycle_catalog")
+        .select("id")
+        .eq("brand", data.motoBrand)
+        .eq("model", data.motoModel)
+        .eq("is_active", true)
+        .eq("is_archived", false)
+        .maybeSingle();
+      if (motorcycleRecord.error || !motorcycleRecord.data) {
+        return {
+          ok: false as const,
+          error: "Please select an available motorcycle from the Motorcycle Catalog.",
+        };
+      }
     }
 
     const overrides = await supabaseAdmin
@@ -850,7 +882,7 @@ export const createBooking = createServerFn({ method: "POST" })
       30,
     );
 
-    if (!isBookingTimeRangeWithinHours(startTime, totalDuration)) {
+    if (!isBookingTimeRangeWithinHours(startTime, totalDuration, bookingRules.operatingHours)) {
       return {
         ok: false as const,
         error:
@@ -1252,7 +1284,10 @@ export const getRescheduleDetails = createServerFn({ method: "POST" })
         error: "A reschedule request for this appointment is already awaiting the shop's review.",
       };
     }
-    if (!["pending", "confirmed", "rescheduled"].includes(appt.status)) {
+    // A completed reschedule retains the original appointment for history,
+    // but only pending and confirmed appointments are valid reschedule
+    // sources for the database RPC.
+    if (!["pending", "confirmed"].includes(appt.status)) {
       return {
         ok: false as const,
         error: "This appointment can no longer be rescheduled online. Please call the shop.",

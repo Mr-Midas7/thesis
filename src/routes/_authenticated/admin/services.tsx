@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Archive, Eye, Pencil, Plus, Trash2 } from "lucide-react";
+import { Archive, EllipsisVertical, Eye, Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -19,6 +19,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { FieldError } from "@/components/ui/field-error";
 import {
   Dialog,
@@ -36,6 +42,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import {
   Table,
   TableBody,
@@ -45,6 +52,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { supabase } from "@/integrations/supabase/client";
 import { activeStatusTone, formatPHP } from "@/lib/shop";
 
@@ -75,7 +83,7 @@ type ModelOverride = {
 
 type MotorcycleCatalogItem = {
   brand: string;
-  name: string;
+  model: string;
 };
 
 type ServiceForm = {
@@ -84,6 +92,7 @@ type ServiceForm = {
   description: string;
   defaultPrice: number;
   defaultDuration: number;
+  isActive: boolean;
 };
 
 const blank: ServiceForm = {
@@ -92,6 +101,7 @@ const blank: ServiceForm = {
   description: "",
   defaultPrice: 0,
   defaultDuration: 60,
+  isActive: true,
 };
 const ALL_CATEGORIES = "__all_categories__";
 const NEW_CATEGORY = "__new_category__";
@@ -109,7 +119,7 @@ function ServicesAdmin() {
   const [editingOverride, setEditingOverride] = useState<number | null>(null);
   const [isCustomCategory, setIsCustomCategory] = useState(false);
   const [formErrors, setFormErrors] = useState<
-    Partial<Record<"name" | "category", string | undefined>>
+    Partial<Record<"name" | "category" | "defaultPrice" | "defaultDuration", string | undefined>>
   >({});
   const [filterCategory, setFilterCategory] = useState<string>(ALL_CATEGORIES);
   const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
@@ -124,9 +134,7 @@ function ServicesAdmin() {
         .eq("is_archived", false)
         .order("sort_order");
       if (error) throw error;
-      return Array.from(
-        new Map((data ?? []).map((service) => [service.name.trim(), service])).values(),
-      ) as Service[];
+      return (data ?? []) as Service[];
     },
   });
 
@@ -146,19 +154,18 @@ function ServicesAdmin() {
     queryKey: ["admin-service-model-catalog"],
     queryFn: async (): Promise<MotorcycleCatalogItem[]> => {
       const { data, error } = await supabase
-        .from("products")
-        .select("brand,name")
-        .eq("category", "motorcycle")
+        .from("motorcycle_catalog")
+        .select("brand,model")
         .eq("is_active", true)
         .eq("is_archived", false)
         .order("brand")
-        .order("name");
+        .order("model");
       if (error) throw error;
       return Array.from(
         new Map(
           (data ?? [])
-            .filter((item): item is { brand: string; name: string } => Boolean(item.brand))
-            .map((item) => [`${item.brand}:${item.name}`, item]),
+            .filter((item): item is MotorcycleCatalogItem => Boolean(item.brand && item.model))
+            .map((item) => [`${item.brand}:${item.model}`, item]),
         ).values(),
       );
     },
@@ -182,7 +189,7 @@ function ServicesAdmin() {
   const motorcycleModelsForBrand = (brand: string) =>
     (motorcycleCatalog.data ?? [])
       .filter((item) => item.brand === brand)
-      .map((item) => item.name)
+      .map((item) => item.model)
       .filter((name, index, values) => values.indexOf(name) === index)
       .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }));
 
@@ -197,6 +204,7 @@ function ServicesAdmin() {
         category: form.category.trim().toLowerCase(),
         description: form.description.trim() || null,
         duration_minutes: form.defaultDuration,
+        is_active: form.isActive,
       };
 
       let serviceId = editing?.id;
@@ -206,7 +214,7 @@ function ServicesAdmin() {
       } else {
         const { data, error } = await supabase
           .from("services")
-          .insert({ ...payload, price: form.defaultPrice, is_active: true })
+          .insert({ ...payload, price: form.defaultPrice })
           .select("id")
           .single();
         if (error) throw error;
@@ -299,6 +307,7 @@ function ServicesAdmin() {
             description: service.description ?? "",
             defaultPrice: Number(service.price),
             defaultDuration: service.duration_minutes ?? 60,
+            isActive: service.is_active,
           }
         : { ...blank },
     );
@@ -312,18 +321,24 @@ function ServicesAdmin() {
   }
 
   function validateForm() {
-    const nextErrors: Partial<Record<"name" | "category", string>> = {};
+    const nextErrors: Partial<
+      Record<"name" | "category" | "defaultPrice" | "defaultDuration", string>
+    > = {};
     if (form.name.trim().length < 2)
       nextErrors.name = "Enter a service name with at least 2 characters.";
     if (form.category.trim().length < 2)
       nextErrors.category = "Enter a service category with at least 2 characters.";
+    if (!editing && (!Number.isFinite(form.defaultPrice) || form.defaultPrice < 0)) {
+      nextErrors.defaultPrice = "Enter a valid default price of PHP 0 or more.";
+    }
     if (
-      (!editing && (!Number.isFinite(form.defaultPrice) || form.defaultPrice < 0)) ||
       !Number.isInteger(form.defaultDuration) ||
       form.defaultDuration < 15 ||
       form.defaultDuration > 480
     ) {
-      toast.error("Enter a valid default price and duration.");
+      nextErrors.defaultDuration = "Enter a whole duration from 15 to 480 minutes.";
+    }
+    if (Object.keys(nextErrors).length > 0) {
       setFormErrors(nextErrors);
       return false;
     }
@@ -399,8 +414,13 @@ function ServicesAdmin() {
         </div>
 
         {filterCategory !== ALL_CATEGORIES && (
-          <Button size="sm" variant="ghost" onClick={() => setFilterCategory(ALL_CATEGORIES)}>
-            Clear
+          <Button
+            size="sm"
+            variant="outline"
+            className="self-end whitespace-nowrap"
+            onClick={() => setFilterCategory(ALL_CATEGORIES)}
+          >
+            <RotateCcw /> Reset
           </Button>
         )}
       </div>
@@ -410,11 +430,11 @@ function ServicesAdmin() {
           <Table className="admin-data-table admin-balanced-table w-full">
             <colgroup>
               <col style={{ width: "13%" }} />
-              <col style={{ width: "29%" }} />
+              <col style={{ width: "37%" }} />
               <col style={{ width: "13%" }} />
               <col style={{ width: "11%" }} />
               <col style={{ width: "12%" }} />
-              <col style={{ width: "22%" }} />
+              <col style={{ width: "14%" }} />
             </colgroup>
             <TableHeader>
               <TableRow>
@@ -423,7 +443,9 @@ function ServicesAdmin() {
                 <TableHead className="text-left">Category</TableHead>
                 <TableHead className="text-center">Model Overrides</TableHead>
                 <TableHead className="text-center">Status</TableHead>
-                <TableHead className="text-center">Actions</TableHead>
+                <TableHead className="text-center" aria-label="Actions">
+                  <span className="sr-only">Actions</span>
+                </TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -467,36 +489,39 @@ function ServicesAdmin() {
                         variant="outline"
                         className={`uppercase ${activeStatusTone(service.is_active)}`}
                       >
-                        {service.is_active ? "Active" : "Deactivated"}
+                        {service.is_active ? "Active" : "Inactive"}
                       </Badge>
                     </TableCell>
                     <TableCell data-label="Actions" className="align-middle text-center">
-                      <div className="flex items-center justify-center gap-1 whitespace-nowrap">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-8 px-2 text-xs"
-                          onClick={() => setViewing(service)}
-                        >
-                          <Eye className="h-4 w-4" /> View
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="h-8 px-2 text-xs"
-                          onClick={() => openEditor(service)}
-                        >
-                          <Pencil className="h-4 w-4" /> Edit
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          className="h-8 px-2 text-xs"
-                          onClick={() => setArchiveTarget(service.id)}
-                        >
-                          <Archive className="h-4 w-4" /> Archive
-                        </Button>
-                      </div>
+                      <DropdownMenu>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <DropdownMenuTrigger asChild>
+                              <Button
+                                type="button"
+                                size="icon"
+                                variant="ghost"
+                                aria-label={`More actions for ${service.name}`}
+                              >
+                                <EllipsisVertical className="size-4" />
+                                <span className="sr-only">More actions</span>
+                              </Button>
+                            </DropdownMenuTrigger>
+                          </TooltipTrigger>
+                          <TooltipContent>More actions</TooltipContent>
+                        </Tooltip>
+                        <DropdownMenuContent align="end">
+                          <DropdownMenuItem onSelect={() => setViewing(service)}>
+                            <Eye /> View
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => openEditor(service)}>
+                            <Pencil /> Edit
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onSelect={() => setArchiveTarget(service.id)}>
+                            <Archive /> Archive
+                          </DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
                     </TableCell>
                   </TableRow>
                 ))}
@@ -590,18 +615,55 @@ function ServicesAdmin() {
                 onChange={(event) => setForm({ ...form, description: event.target.value })}
               />
             </div>
-            <div className="space-y-1.5">
-              <Label>Default Duration (minutes)</Label>
-              <Input
-                type="number"
-                min="15"
-                max="480"
-                step="15"
-                value={form.defaultDuration}
-                onChange={(event) =>
-                  setForm({ ...form, defaultDuration: Number(event.target.value) })
-                }
-              />
+            <div className={editing ? "grid gap-3 md:grid-cols-2" : undefined}>
+              <div className="space-y-1.5">
+                <Label>Default Duration (minutes)</Label>
+                <Input
+                  type="number"
+                  min="15"
+                  max="480"
+                  step="15"
+                  value={Number.isFinite(form.defaultDuration) ? form.defaultDuration : ""}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setForm({
+                      ...form,
+                      defaultDuration: value === "" ? Number.NaN : Number(value),
+                    });
+                    setFormErrors((current) => ({ ...current, defaultDuration: undefined }));
+                  }}
+                  aria-invalid={!!formErrors.defaultDuration}
+                />
+                <FieldError message={formErrors.defaultDuration} />
+              </div>
+              {editing && (
+                <div className="rounded-md border border-primary/20 bg-primary/5 p-4">
+                  <p className="text-sm font-medium">Status</p>
+                  <div className="mt-2 flex items-center gap-3">
+                    <Switch
+                      id="service-active"
+                      checked={form.isActive}
+                      aria-label={`Service is ${form.isActive ? "active" : "inactive"}`}
+                      onCheckedChange={(isActive) =>
+                        setForm((current) => ({ ...current, isActive }))
+                      }
+                    />
+                    <span
+                      className={
+                        form.isActive
+                          ? "text-sm font-medium text-primary"
+                          : "text-sm font-medium text-muted-foreground"
+                      }
+                    >
+                      {form.isActive ? "Active" : "Inactive"}
+                    </span>
+                  </div>
+                  <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
+                    Use the switch to control customer booking visibility. Inactive services are
+                    hidden and cannot be selected for new bookings.
+                  </p>
+                </div>
+              )}
             </div>
             {!editing && (
               <div className="space-y-1.5">
@@ -610,11 +672,18 @@ function ServicesAdmin() {
                   type="number"
                   min="0"
                   step="0.01"
-                  value={form.defaultPrice}
-                  onChange={(event) =>
-                    setForm({ ...form, defaultPrice: Number(event.target.value) })
-                  }
+                  value={Number.isFinite(form.defaultPrice) ? form.defaultPrice : ""}
+                  onChange={(event) => {
+                    const value = event.target.value;
+                    setForm({
+                      ...form,
+                      defaultPrice: value === "" ? Number.NaN : Number(value),
+                    });
+                    setFormErrors((current) => ({ ...current, defaultPrice: undefined }));
+                  }}
+                  aria-invalid={!!formErrors.defaultPrice}
                 />
+                <FieldError message={formErrors.defaultPrice} />
               </div>
             )}
           </section>

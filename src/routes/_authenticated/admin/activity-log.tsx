@@ -1,6 +1,8 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Download, FileText, RefreshCw, Search } from "lucide-react";
+import { format } from "date-fns";
+import { CalendarRange, ChevronDown, Download, FileText, RefreshCw, Search } from "lucide-react";
+import type { DateRange } from "react-day-picker";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -19,6 +21,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   DropdownMenu,
@@ -28,6 +31,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -51,6 +55,8 @@ import {
   SHOP_OWNER_NAME,
 } from "@/lib/export-branding";
 import { recordAdminActivityEvent } from "@/lib/admin-activity";
+import { addDays, manilaNow } from "@/lib/shop";
+import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/admin/activity-log")({
   component: ActivityLogPage,
@@ -107,30 +113,30 @@ type ActivityLog = {
 };
 
 type ExportFormat = "pdf" | "docx";
+type ActivityPeriod = "all" | "today" | "7d" | "month" | "year" | "custom";
+type ActivityDateRange = { from: string; to: string };
 
 function ActivityLogPage() {
   const pageSize = 10;
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
-  
   const [action, setAction] = useState("all");
   const [resource, setResource] = useState("all");
-  const [fromDate, setFromDate] = useState("");
-  const [toDate, setToDate] = useState("");
-  
+  const [activityPeriod, setActivityPeriod] = useState<ActivityPeriod>("all");
+  const [activityCustomDateRange, setActivityCustomDateRange] = useState<DateRange>();
   const [page, setPage] = useState(0);
   const [pendingExport, setPendingExport] = useState<ExportFormat | null>(null);
   const deferredSearch = useDeferredValue(search);
- 
+  const today = manilaNow().date;
+  const activityDateRange = useMemo(
+    () => activityRangeFromPeriod(activityPeriod, today, activityCustomDateRange),
+    [activityCustomDateRange, activityPeriod, today],
+  );
+  const fromDate = activityDateRange?.from ?? "";
+  const toDate = activityDateRange?.to ?? "";
 
   const hasFilters = Boolean(
-    search.trim() ||
-    
-    action !== "all" ||
-    resource !== "all" ||
-    fromDate ||
-    toDate
-    ,
+    search.trim() || action !== "all" || resource !== "all" || activityPeriod !== "all",
   );
 
   const logs = useQuery({
@@ -142,7 +148,6 @@ function ActivityLogPage() {
         resource,
         fromDate,
         toDate,
-        
         page,
       },
     ],
@@ -157,7 +162,7 @@ function ActivityLogPage() {
 
       if (fromDate) query = query.gte("activity_date", fromDate);
       if (toDate) query = query.lte("activity_date", toDate);
-      
+
       if (action !== "all") query = query.eq("action", action);
       if (resource !== "all") query = query.eq("resource_type", resource);
       if (deferredSearch.trim()) {
@@ -185,9 +190,18 @@ function ActivityLogPage() {
     ...(resource !== "all"
       ? [{ label: "Category", value: resource, onClear: () => setResource("all") }]
       : []),
-    ...(fromDate ? [{ label: "From", value: fromDate, onClear: () => setFromDate("") }] : []),
-    ...(toDate ? [{ label: "To", value: toDate, onClear: () => setToDate("") }] : []),
-    
+    ...(activityPeriod !== "all"
+      ? [
+          {
+            label: "Activity date",
+            value: activityPeriodLabel(activityPeriod, activityCustomDateRange),
+            onClear: () => {
+              setActivityPeriod("all");
+              setActivityCustomDateRange(undefined);
+            },
+          },
+        ]
+      : []),
   ];
   const filterDescription = useMemo(() => {
     if (!hasFilters) return "Showing 10 records per page from the last 50 days.";
@@ -196,7 +210,7 @@ function ActivityLogPage() {
 
   useEffect(() => {
     setPage(0);
-  }, [search, action, resource, fromDate, toDate]);
+  }, [search, action, resource, activityPeriod, activityCustomDateRange]);
 
   function refresh() {
     queryClient.invalidateQueries({ queryKey: ["admin-activity-logs"] });
@@ -206,8 +220,8 @@ function ActivityLogPage() {
     setSearch("");
     setAction("all");
     setResource("all");
-    setFromDate("");
-    setToDate("");
+    setActivityPeriod("all");
+    setActivityCustomDateRange(undefined);
     setPage(0);
   }
 
@@ -434,8 +448,8 @@ function ActivityLogPage() {
       />
 
       <Card className="mb-6 border-border/70 bg-card/60">
-        <CardContent className="grid gap-4 p-5 md:grid-cols-2 xl:grid-cols-4">
-          <div className="space-y-1.5 xl:col-span-2">
+        <CardContent className="grid gap-4 p-5 lg:grid-cols-[minmax(15rem,2fr)_minmax(9rem,1fr)_minmax(10rem,1.1fr)_minmax(11rem,1.25fr)]">
+          <div className="min-w-0 space-y-1.5">
             <Label htmlFor="activity-search">Search</Label>
             <div className="relative">
               <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -448,7 +462,7 @@ function ActivityLogPage() {
               />
             </div>
           </div>
-          
+
           <div className="space-y-1.5">
             <Label>Action</Label>
             <Select value={action} onValueChange={setAction}>
@@ -481,27 +495,16 @@ function ActivityLogPage() {
               </SelectContent>
             </Select>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="activity-from-date">From date</Label>
-            <Input
-              id="activity-from-date"
-              type="date"
-              value={fromDate}
-              max={toDate || undefined}
-              onChange={(event) => setFromDate(event.target.value)}
+          <div className="min-w-0 space-y-1.5">
+            <Label>Activity date</Label>
+            <ActivityPeriodFilter
+              period={activityPeriod}
+              customDateRange={activityCustomDateRange}
+              onPeriodChange={setActivityPeriod}
+              onCustomDateRangeChange={setActivityCustomDateRange}
+              className="w-full justify-between"
             />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="activity-to-date">To date</Label>
-            <Input
-              id="activity-to-date"
-              type="date"
-              value={toDate}
-              min={fromDate || undefined}
-              onChange={(event) => setToDate(event.target.value)}
-            />
-          </div>
-          
         </CardContent>
       </Card>
       <ActiveFilterChips filters={activeFilters} onReset={clearFilters} />
@@ -621,6 +624,210 @@ function ActivityLogPage() {
       </AlertDialog>
     </div>
   );
+}
+
+function ActivityPeriodFilter({
+  period,
+  customDateRange,
+  onPeriodChange,
+  onCustomDateRangeChange,
+  className,
+}: {
+  period: ActivityPeriod;
+  customDateRange: DateRange | undefined;
+  onPeriodChange: (period: ActivityPeriod) => void;
+  onCustomDateRangeChange: (range: DateRange | undefined) => void;
+  className?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const [isPickingCustomRange, setIsPickingCustomRange] = useState(false);
+  const [draftCustomDateRange, setDraftCustomDateRange] = useState<DateRange>();
+
+  const selectPeriod = (nextPeriod: Exclude<ActivityPeriod, "custom">) => {
+    onPeriodChange(nextPeriod);
+    setIsPickingCustomRange(false);
+    setOpen(false);
+  };
+
+  const cancelCustomRange = () => {
+    setDraftCustomDateRange(customDateRange);
+    setIsPickingCustomRange(false);
+    setOpen(false);
+  };
+
+  const applyCustomRange = () => {
+    if (!draftCustomDateRange?.from || !draftCustomDateRange.to) return;
+    onCustomDateRangeChange(draftCustomDateRange);
+    onPeriodChange("custom");
+    setIsPickingCustomRange(false);
+    setOpen(false);
+  };
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        setOpen(nextOpen);
+        if (!nextOpen) setIsPickingCustomRange(false);
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button type="button" variant="outline" className={cn("gap-1.5", className)}>
+          <CalendarRange className="size-3.5" aria-hidden="true" />
+          {activityPeriodLabel(period, customDateRange)}
+          <ChevronDown className="size-3.5" aria-hidden="true" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="w-72 p-2">
+        {isPickingCustomRange ? (
+          <div>
+            <div className="px-2 pb-2">
+              <p className="text-sm font-medium">Custom activity date range</p>
+              <p className="text-xs text-muted-foreground">Select a start date and an end date.</p>
+            </div>
+            <Calendar
+              mode="range"
+              selected={draftCustomDateRange}
+              onSelect={setDraftCustomDateRange}
+              className="mx-auto p-0"
+              classNames={{
+                nav: "inset-x-auto left-1/2 w-48 -translate-x-1/2 justify-between",
+              }}
+            />
+            <div className="mt-2 grid grid-cols-2 gap-2 px-2 text-xs">
+              <ActivityDateRangeValue label="Start date" value={draftCustomDateRange?.from} />
+              <ActivityDateRangeValue label="End date" value={draftCustomDateRange?.to} />
+            </div>
+            <div className="mt-3 flex justify-end gap-2 border-t border-border pt-3">
+              <Button type="button" variant="outline" size="sm" onClick={cancelCustomRange}>
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                onClick={applyCustomRange}
+                disabled={!draftCustomDateRange?.from || !draftCustomDateRange.to}
+              >
+                Apply
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-1">
+            <p className="px-2 pb-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+              Activity date
+            </p>
+            <ActivityPeriodOption
+              active={period === "all"}
+              label="All activity dates"
+              onClick={() => selectPeriod("all")}
+            />
+            <ActivityPeriodOption
+              active={period === "today"}
+              label="Today"
+              onClick={() => selectPeriod("today")}
+            />
+            <ActivityPeriodOption
+              active={period === "7d"}
+              label="Last 7 days"
+              onClick={() => selectPeriod("7d")}
+            />
+            <ActivityPeriodOption
+              active={period === "month"}
+              label="This month"
+              onClick={() => selectPeriod("month")}
+            />
+            <ActivityPeriodOption
+              active={period === "year"}
+              label="This year"
+              onClick={() => selectPeriod("year")}
+            />
+            <ActivityPeriodOption
+              active={period === "custom"}
+              label="Custom date range"
+              onClick={() => {
+                setDraftCustomDateRange(customDateRange);
+                setIsPickingCustomRange(true);
+              }}
+            />
+          </div>
+        )}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function ActivityPeriodOption({
+  active,
+  label,
+  onClick,
+}: {
+  active: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <Button
+      type="button"
+      variant="ghost"
+      className={cn("h-9 w-full justify-start text-sm", active && "bg-muted")}
+      onClick={onClick}
+    >
+      {label}
+    </Button>
+  );
+}
+
+function ActivityDateRangeValue({ label, value }: { label: string; value: Date | undefined }) {
+  return (
+    <div className="rounded-md border border-border bg-muted/30 px-2 py-1.5">
+      <p className="text-[10px] tracking-wide text-muted-foreground uppercase">{label}</p>
+      <p className="mt-0.5 truncate font-medium text-foreground">
+        {value ? format(value, "MMM d, yyyy") : "Not selected"}
+      </p>
+    </div>
+  );
+}
+
+function activityPeriodLabel(period: ActivityPeriod, customRange?: DateRange) {
+  if (period === "all") return "All activity dates";
+  if (period === "today") return "Today";
+  if (period === "7d") return "Last 7 days";
+  if (period === "month") return "This month";
+  if (period === "year") return "This year";
+  if (!customRange?.from || !customRange.to) return "Custom date range";
+  return `${format(customRange.from, "MMM d")} – ${format(customRange.to, "MMM d, yyyy")}`;
+}
+
+function activityRangeFromPeriod(
+  period: ActivityPeriod,
+  today: string,
+  customRange?: DateRange,
+): ActivityDateRange | undefined {
+  if (period === "all") return undefined;
+  if (period === "today") return { from: today, to: today };
+  if (period === "7d") return { from: addDays(today, -6), to: today };
+
+  const date = dateFromIso(today);
+  if (period === "month") {
+    return {
+      from: format(new Date(date.getFullYear(), date.getMonth(), 1, 12), "yyyy-MM-dd"),
+      to: format(new Date(date.getFullYear(), date.getMonth() + 1, 0, 12), "yyyy-MM-dd"),
+    };
+  }
+  if (period === "year") {
+    return { from: `${date.getFullYear()}-01-01`, to: `${date.getFullYear()}-12-31` };
+  }
+  if (customRange?.from && customRange.to) {
+    const from = format(customRange.from, "yyyy-MM-dd");
+    const to = format(customRange.to, "yyyy-MM-dd");
+    return from <= to ? { from, to } : { from: to, to: from };
+  }
+  return undefined;
+}
+
+function dateFromIso(value: string) {
+  return new Date(`${value}T12:00:00`);
 }
 
 function cleanSearchTerm(value: string) {

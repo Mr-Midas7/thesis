@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Loader2, Plus } from "lucide-react";
+import { Filter, Loader2, Plus, RotateCcw } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 
@@ -463,17 +463,21 @@ function AvailabilityPage() {
                 </SelectContent>
               </Select>
             </div>
-            <div className="flex flex-wrap items-end gap-2">
+            <div className="flex gap-2 xl:self-end">
+              <Button
+                type="button"
+                className="flex-1 whitespace-nowrap xl:flex-none"
+                onClick={applyAssignmentFilter}
+              >
+                <Filter /> Apply filters
+              </Button>
               <Button
                 type="button"
                 variant="outline"
+                className="flex-1 whitespace-nowrap xl:flex-none"
                 onClick={clearAssignmentFilter}
-                className="flex-1"
               >
-                Clear
-              </Button>
-              <Button type="button" onClick={applyAssignmentFilter} className="flex-1">
-                Apply filter
+                <RotateCcw /> Reset
               </Button>
             </div>
             {filterPeriod === "custom" && (
