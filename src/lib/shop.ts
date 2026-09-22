@@ -118,7 +118,7 @@ export function timeToMinutes(time: string) {
   return hours * 60 + minutes;
 }
 
-function minutesToTime(minutes: number) {
+export function minutesToTime(minutes: number) {
   return `${String(Math.floor(minutes / 60)).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
 }
 
@@ -185,6 +185,32 @@ export function isBookingTimeRangeWithinHours(
     durationMinutes > 0 &&
     startMinutes + durationMinutes <= timeToMinutes(closingTime)
   );
+}
+
+/** Minutes of a booking that would fall after the configured closing time. */
+export function bookingDurationOverflowMinutes(
+  time: string,
+  durationMinutes: number,
+  hours: BookingHours = DEFAULT_BOOKING_HOURS,
+) {
+  const { closingTime } = resolveBookingHours(hours);
+  const startMinutes = timeToMinutes(time);
+  const closingMinutes = timeToMinutes(closingTime);
+  if (!Number.isFinite(startMinutes) || !Number.isFinite(durationMinutes)) return 0;
+  return Math.max(0, startMinutes + durationMinutes - closingMinutes);
+}
+
+/** The portion of a booking that can be completed on its selected first day. */
+export function bookingDurationForFirstDay(
+  time: string,
+  durationMinutes: number,
+  hours: BookingHours = DEFAULT_BOOKING_HOURS,
+) {
+  const { closingTime } = resolveBookingHours(hours);
+  const startMinutes = timeToMinutes(time);
+  const closingMinutes = timeToMinutes(closingTime);
+  if (!Number.isFinite(startMinutes) || !Number.isFinite(durationMinutes)) return 0;
+  return Math.max(0, Math.min(durationMinutes, closingMinutes - startMinutes));
 }
 
 /** True for a valid Monday-Saturday Manila calendar date. */
@@ -298,7 +324,7 @@ export function decodeBlockReason(reason: string | null): {
   return { endTime: rest.slice(0, 5), userReason: rest.slice(pipeIdx + 1) };
 }
 
-export const PHONE_VALIDATION_MESSAGE = "Enter a valid 11-digit mobile number that starts with 09.";
+export const PHONE_VALIDATION_MESSAGE = "Enter a valid mobile number.";
 
 /** Keep the mobile-number field to its local 11-digit format while the user types. */
 export function sanitizePhilippineMobileInput(value: string) {

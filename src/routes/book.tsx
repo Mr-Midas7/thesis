@@ -57,6 +57,7 @@ import {
   DEFAULT_BOOKING_TERMS,
   PHONE_VALIDATION_MESSAGE,
   SHOP,
+  bookingDurationOverflowMinutes,
   formatDateLong,
   formatPHP,
   formatTime,
@@ -216,8 +217,14 @@ function BookPage() {
   const [errors, setErrors] = useState<Errors>({});
   const [focusRequest, setFocusRequest] = useState<keyof Errors | null>(null);
   const [bookingConfirmationOpen, setBookingConfirmationOpen] = useState(false);
+  const [multiDayContinuationOpen, setMultiDayContinuationOpen] = useState(false);
+  const [multiDayContinuationAccepted, setMultiDayContinuationAccepted] = useState(false);
   const [duplicateBookingMessage, setDuplicateBookingMessage] = useState<string | null>(null);
-  const [result, setResult] = useState<{ reference: string; total: number } | null>(null);
+  const [result, setResult] = useState<{
+    reference: string;
+    total: number;
+    continuationSegments?: Array<{ date: string; startTime: string; durationMinutes: number }>;
+  } | null>(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [bookingRequestId, setBookingRequestId] = useState(() => crypto.randomUUID());
   const isReschedule = Boolean(search.reschedule && search.phone);
@@ -350,13 +357,21 @@ function BookPage() {
   const motorcycleSelectionReady = Boolean(form.motoBrand && form.motoModel);
 
   const availability = useQuery<Availability>({
-    queryKey: ["availability", serviceIds, form.motoBrand, form.motoModel, isReschedule],
+    queryKey: [
+      "availability",
+      serviceIds,
+      form.motoBrand,
+      form.motoModel,
+      isReschedule,
+      serviceIds.length > 1,
+    ],
     queryFn: () =>
       availabilityFn({
         data: {
           days: 45,
           serviceIds,
           rescheduling: isReschedule,
+          allowMultiDayContinuation: !isReschedule && serviceIds.length > 1,
           motorcycle: { brand: form.motoBrand, model: form.motoModel },
           ...(isReschedule
             ? { rescheduleReference: search.reschedule, reschedulePhone: search.phone }
@@ -418,6 +433,11 @@ function BookPage() {
     (sum, service) => sum + service.durationMinutes,
     estimatedServices.length > 0 ? 30 : 0,
   );
+  const multiDayOverflowMinutes =
+    !isReschedule && date && startTime && serviceIds.length > 1
+      ? bookingDurationOverflowMinutes(startTime, totalDuration, availability.data?.operatingHours)
+      : 0;
+  const needsMultiDayContinuationConfirmation = multiDayOverflowMinutes > 30;
   const bookingTerms = shopSettings.data?.booking_terms || DEFAULT_BOOKING_TERMS;
 
   useEffect(() => {
@@ -474,6 +494,7 @@ function BookPage() {
           turnstileToken,
           idempotencyKey: bookingRequestId,
           termsAccepted: true as const,
+          multiDayContinuationAccepted,
           ...(isReschedule ? { rescheduleReference: search.reschedule } : {}),
           ...(isReschedule ? { rescheduleReason: rescheduleReason.trim() } : {}),
         },
@@ -499,7 +520,15 @@ function BookPage() {
         availability.refetch();
         return;
       }
-      setResult({ reference: res.reference, total: res.total });
+      setResult(
+        "continuationSegments" in res
+          ? {
+              reference: res.reference,
+              total: res.total,
+              continuationSegments: res.continuationSegments,
+            }
+          : { reference: res.reference, total: res.total },
+      );
       window.scrollTo({ top: 0, behavior: "smooth" });
     },
     onError: (err: Error) => {
@@ -590,7 +619,24 @@ function BookPage() {
   function continueMobileBooking() {
     const e = validationErrors([mobileStep]);
     if (!showValidationErrors(e)) return;
+    // Date and time are selected in step 4, so this is the first Continue
+    // action where an accurate shop-hours comparison is possible.
+    if (
+      mobileStep === 4 &&
+      needsMultiDayContinuationConfirmation &&
+      !multiDayContinuationAccepted
+    ) {
+      setMultiDayContinuationOpen(true);
+      return;
+    }
     setMobileStep((step) => Math.min(step + 1, 5));
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+
+  function continueWithMultiDayBooking() {
+    setMultiDayContinuationAccepted(true);
+    setMultiDayContinuationOpen(false);
+    setMobileStep(5);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -663,6 +709,19 @@ function BookPage() {
                 <p>Estimated total: {formatPHP(result.total)}</p>
                 <p>Status: pending confirmation by the shop</p>
                 <p>The shop will review your request and confirm your appointment.</p>
+                {(result.continuationSegments?.length ?? 0) > 0 && (
+                  <div className="mt-4 rounded-lg border border-primary/30 bg-primary/5 p-3 text-left">
+                    <p className="font-medium text-foreground">Continued service schedule</p>
+                    <ul className="mt-2 space-y-1 text-xs">
+                      {result.continuationSegments?.map((segment) => (
+                        <li key={`${segment.date}-${segment.startTime}`}>
+                          {formatDateLong(segment.date)} at {formatTime(segment.startTime)} (
+                          {segment.durationMinutes} min)
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
               <div className="mt-7 flex flex-wrap justify-center gap-3">
                 <Button asChild className="font-display uppercase">
@@ -968,6 +1027,7 @@ function BookPage() {
                       );
                       setDate("");
                       setStartTime("");
+                      setMultiDayContinuationAccepted(false);
                     }}
                     className={cn(
                       "flex items-center rounded-lg border p-4 text-left transition-colors",
@@ -1061,6 +1121,7 @@ function BookPage() {
                             const iso = format(d, "yyyy-MM-dd");
                             setDate(iso);
                             setStartTime("");
+                            setMultiDayContinuationAccepted(false);
                           }}
                           disabled={(d) => !availableDateSet.has(format(d, "yyyy-MM-dd"))}
                           modifiers={{
@@ -1106,7 +1167,10 @@ function BookPage() {
                               type="button"
                               key={slot.id}
                               disabled={slot.disabled}
-                              onClick={() => setStartTime(slot.startTime)}
+                              onClick={() => {
+                                setStartTime(slot.startTime);
+                                setMultiDayContinuationAccepted(false);
+                              }}
                               className={cn(
                                 "rounded-lg border p-3 text-center transition-colors",
                                 slot.disabled && "cursor-not-allowed opacity-40",
@@ -1216,6 +1280,11 @@ function BookPage() {
                 Estimated appointment time: {totalDuration} minutes, including arrival and
                 post-service buffers.
               </p>
+              {multiDayContinuationAccepted && needsMultiDayContinuationConfirmation && (
+                <p className="mt-2 text-xs text-primary">
+                  The remaining service time will be reserved on the next available shop day.
+                </p>
+              )}
             </div>
             <div
               className={cn(
@@ -1317,6 +1386,28 @@ function BookPage() {
                     className="bg-primary text-primary-foreground hover:bg-primary/90"
                   >
                     {mutation.isPending && <Loader2 className="animate-spin" />} Confirm Booking
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+            <AlertDialog open={multiDayContinuationOpen} onOpenChange={setMultiDayContinuationOpen}>
+              <AlertDialogContent className="sm:max-w-md">
+                <AlertDialogHeader>
+                  <AlertDialogTitle className="font-display text-2xl uppercase">
+                    Multi-day service
+                  </AlertDialogTitle>
+                  <AlertDialogDescription>
+                    The services you selected may require more than one day to complete. Do you want
+                    to continue?
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Close</AlertDialogCancel>
+                  <AlertDialogAction
+                    onClick={continueWithMultiDayBooking}
+                    className="bg-primary text-primary-foreground hover:bg-primary/90"
+                  >
+                    Continue
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>

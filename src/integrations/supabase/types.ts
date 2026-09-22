@@ -123,6 +123,54 @@ export type Database = {
           },
         ];
       };
+      appointment_continuations: {
+        Row: {
+          appointment_date: string;
+          appointment_id: string;
+          assigned_crew_id: string;
+          booking_duration_minutes: number;
+          created_at: string;
+          id: string;
+          segment_number: number;
+          start_time: string;
+        };
+        Insert: {
+          appointment_date: string;
+          appointment_id: string;
+          assigned_crew_id: string;
+          booking_duration_minutes: number;
+          created_at?: string;
+          id?: string;
+          segment_number: number;
+          start_time: string;
+        };
+        Update: {
+          appointment_date?: string;
+          appointment_id?: string;
+          assigned_crew_id?: string;
+          booking_duration_minutes?: number;
+          created_at?: string;
+          id?: string;
+          segment_number?: number;
+          start_time?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "appointment_continuations_appointment_id_fkey";
+            columns: ["appointment_id"];
+            isOneToOne: false;
+            referencedRelation: "appointments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "appointment_continuations_assigned_crew_id_fkey";
+            columns: ["assigned_crew_id"];
+            isOneToOne: false;
+            referencedRelation: "crew_members";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       appointments: {
         Row: {
           admin_notes: string | null;
@@ -904,6 +952,7 @@ export type Database = {
           p_assigned_crew_id: string | null;
           p_booking_duration_minutes: number;
           p_booking_request_id: string;
+          p_continuation_segments: Json;
           p_customer_name: string;
           p_first_name: string;
           p_last_name: string;

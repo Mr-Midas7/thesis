@@ -53,6 +53,7 @@ export type AvailabilitySource = {
   operatingHours?: BookingHours;
   minimumBookingLeadHours?: number;
   totalDurationMinutes?: number;
+  allowMultiDayContinuation?: boolean;
   slots: TimeSlot[];
   blocks: DateBlock[];
   assignments: Assignment[];
@@ -79,6 +80,7 @@ export type Availability = {
   to: string;
   error?: string;
   totalDurationMinutes?: number;
+  operatingHours?: BookingHours;
   dates: string[];
   fullyBookedDates: string[];
   slotsByDate: Record<string, ComputedSlot[]>;
@@ -129,6 +131,7 @@ export function buildPublicAvailability(source: AvailabilitySource): Availabilit
     ...(source.totalDurationMinutes === undefined
       ? {}
       : { totalDurationMinutes: source.totalDurationMinutes }),
+    ...(source.operatingHours === undefined ? {} : { operatingHours: source.operatingHours }),
     dates: out,
     fullyBookedDates,
     slotsByDate,
@@ -146,11 +149,21 @@ function computeAvailableSlotsFromSource(
   const computedSlots = availability.slots.map((slot) => {
     const slotStartMin =
       parseInt(slot.startTime.slice(0, 2)) * 60 + parseInt(slot.startTime.slice(3, 5));
-    const slotEndMin = slotStartMin + totalDuration;
+    const configuredClosingMinutes = timeToMinutes(
+      availability.operatingHours?.closingTime ?? "17:00",
+    );
+    const continuationEligible =
+      availability.allowMultiDayContinuation &&
+      slotStartMin + totalDuration - configuredClosingMinutes > 30;
+    const slotDuration = continuationEligible
+      ? Math.min(totalDuration, Math.max(0, configuredClosingMinutes - slotStartMin))
+      : totalDuration;
+    const slotEndMin = slotStartMin + slotDuration;
 
     const notBookable =
       !isSlotBookable(date, slot.startTime, availability.minimumBookingLeadHours) ||
-      !isBookingTimeRangeWithinHours(slot.startTime, totalDuration, availability.operatingHours);
+      (!continuationEligible &&
+        !isBookingTimeRangeWithinHours(slot.startTime, totalDuration, availability.operatingHours));
 
     const blocked = availability.blocks.some((b) => {
       if (b.date !== date) return false;
