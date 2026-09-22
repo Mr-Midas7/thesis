@@ -55,8 +55,10 @@ import {
 import { createBooking, getAvailability, getRescheduleDetails } from "@/lib/booking.functions";
 import {
   DEFAULT_BOOKING_TERMS,
+  DEFAULT_BOOKING_HOURS,
   PHONE_VALIDATION_MESSAGE,
   SHOP,
+  MAX_BOOKING_SERVICE_SELECTIONS,
   bookingDurationOverflowMinutes,
   formatDateLong,
   formatPHP,
@@ -219,10 +221,13 @@ function BookPage() {
   const [bookingConfirmationOpen, setBookingConfirmationOpen] = useState(false);
   const [multiDayContinuationOpen, setMultiDayContinuationOpen] = useState(false);
   const [multiDayContinuationAccepted, setMultiDayContinuationAccepted] = useState(false);
+  const [multiDayConfirmationStep, setMultiDayConfirmationStep] = useState<number | null>(null);
   const [duplicateBookingMessage, setDuplicateBookingMessage] = useState<string | null>(null);
   const [result, setResult] = useState<{
     reference: string;
     total: number;
+    date: string;
+    startTime: string;
     continuationSegments?: Array<{ date: string; startTime: string; durationMinutes: number }>;
   } | null>(null);
   const [turnstileToken, setTurnstileToken] = useState("");
@@ -273,7 +278,7 @@ function BookPage() {
     queryFn: async () => {
       const { data, error } = await supabase
         .from("shop_settings")
-        .select("booking_terms")
+        .select("booking_terms,opening_time,closing_time")
         .eq("id", true)
         .maybeSingle();
       if (error) throw error;
@@ -433,9 +438,26 @@ function BookPage() {
     (sum, service) => sum + service.durationMinutes,
     estimatedServices.length > 0 ? 30 : 0,
   );
+  const operatingHours =
+    availability.data?.operatingHours ??
+    (shopSettings.data
+      ? {
+          openingTime: shopSettings.data.opening_time
+            ? String(shopSettings.data.opening_time).slice(0, 5)
+            : DEFAULT_BOOKING_HOURS.openingTime,
+          closingTime: shopSettings.data.closing_time
+            ? String(shopSettings.data.closing_time).slice(0, 5)
+            : DEFAULT_BOOKING_HOURS.closingTime,
+        }
+      : DEFAULT_BOOKING_HOURS);
+  const serviceStepOverflowMinutes =
+    !isReschedule && serviceIds.length > 1
+      ? bookingDurationOverflowMinutes(operatingHours.openingTime, totalDuration, operatingHours)
+      : 0;
+  const needsServiceStepMultiDayConfirmation = serviceStepOverflowMinutes > 30;
   const multiDayOverflowMinutes =
     !isReschedule && date && startTime && serviceIds.length > 1
-      ? bookingDurationOverflowMinutes(startTime, totalDuration, availability.data?.operatingHours)
+      ? bookingDurationOverflowMinutes(startTime, totalDuration, operatingHours)
       : 0;
   const needsMultiDayContinuationConfirmation = multiDayOverflowMinutes > 30;
   const bookingTerms = shopSettings.data?.booking_terms || DEFAULT_BOOKING_TERMS;
@@ -476,6 +498,7 @@ function BookPage() {
 
   const mutation = useMutation({
     mutationFn: async () => {
+      const submittedSchedule = { date, startTime };
       const res = await book({
         data: {
           firstName: form.firstName.trim(),
@@ -499,9 +522,9 @@ function BookPage() {
           ...(isReschedule ? { rescheduleReason: rescheduleReason.trim() } : {}),
         },
       });
-      return res;
+      return { res, submittedSchedule };
     },
-    onSuccess: (res) => {
+    onSuccess: ({ res, submittedSchedule }) => {
       if (!res.ok) {
         if (!isReschedule && isDuplicateBookingMessage(res.error)) {
           setBookingConfirmationOpen(false);
@@ -525,9 +548,16 @@ function BookPage() {
           ? {
               reference: res.reference,
               total: res.total,
+              date: submittedSchedule.date,
+              startTime: submittedSchedule.startTime,
               continuationSegments: res.continuationSegments,
             }
-          : { reference: res.reference, total: res.total },
+          : {
+              reference: res.reference,
+              total: res.total,
+              date: submittedSchedule.date,
+              startTime: submittedSchedule.startTime,
+            },
       );
       window.scrollTo({ top: 0, behavior: "smooth" });
     },
@@ -592,6 +622,9 @@ function BookPage() {
       if (form.plateNumber.trim().length < 2) e.plateNumber = "Required";
     }
     if (steps.includes(3) && serviceIds.length === 0) e.services = "Select at least one service.";
+    if (steps.includes(3) && serviceIds.length > MAX_BOOKING_SERVICE_SELECTIONS) {
+      e.services = `Select up to ${MAX_BOOKING_SERVICE_SELECTIONS} services per appointment.`;
+    }
     if (steps.includes(4) && !date) e.date = "Select your preferred date.";
     if (steps.includes(4) && date && !startTime) e.startTime = "Select your preferred time.";
     if (steps.includes(4) && isReschedule && !rescheduleReason.trim()) {
@@ -619,13 +652,11 @@ function BookPage() {
   function continueMobileBooking() {
     const e = validationErrors([mobileStep]);
     if (!showValidationErrors(e)) return;
-    // Date and time are selected in step 4, so this is the first Continue
-    // action where an accurate shop-hours comparison is possible.
-    if (
-      mobileStep === 4 &&
-      needsMultiDayContinuationConfirmation &&
-      !multiDayContinuationAccepted
-    ) {
+    const requiresMultiDayConfirmation =
+      (mobileStep === 3 && needsServiceStepMultiDayConfirmation) ||
+      (mobileStep === 4 && needsMultiDayContinuationConfirmation);
+    if (requiresMultiDayConfirmation && !multiDayContinuationAccepted) {
+      setMultiDayConfirmationStep(mobileStep);
       setMultiDayContinuationOpen(true);
       return;
     }
@@ -636,7 +667,8 @@ function BookPage() {
   function continueWithMultiDayBooking() {
     setMultiDayContinuationAccepted(true);
     setMultiDayContinuationOpen(false);
-    setMobileStep(5);
+    setMobileStep((multiDayConfirmationStep ?? mobileStep) + 1);
+    setMultiDayConfirmationStep(null);
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -704,7 +736,7 @@ function BookPage() {
               </div>
               <div className="mt-6 space-y-1 text-sm text-muted-foreground">
                 <p>
-                  {formatDateLong(date)} at {formatTime(startTime)}
+                  {formatDateLong(result.date)} at {formatTime(result.startTime)}
                 </p>
                 <p>Estimated total: {formatPHP(result.total)}</p>
                 <p>Status: pending confirmation by the shop</p>
@@ -1022,6 +1054,12 @@ function BookPage() {
                     key={s.id}
                     disabled={isReschedule}
                     onClick={() => {
+                      if (!checked && serviceIds.length >= MAX_BOOKING_SERVICE_SELECTIONS) {
+                        toast.error(
+                          `You can select up to ${MAX_BOOKING_SERVICE_SELECTIONS} services per appointment.`,
+                        );
+                        return;
+                      }
                       setServiceIds((prev) =>
                         checked ? prev.filter((id) => id !== s.id) : [...prev, s.id],
                       );
@@ -1121,7 +1159,6 @@ function BookPage() {
                             const iso = format(d, "yyyy-MM-dd");
                             setDate(iso);
                             setStartTime("");
-                            setMultiDayContinuationAccepted(false);
                           }}
                           disabled={(d) => !availableDateSet.has(format(d, "yyyy-MM-dd"))}
                           modifiers={{
@@ -1169,7 +1206,6 @@ function BookPage() {
                               disabled={slot.disabled}
                               onClick={() => {
                                 setStartTime(slot.startTime);
-                                setMultiDayContinuationAccepted(false);
                               }}
                               className={cn(
                                 "rounded-lg border p-3 text-center transition-colors",
@@ -1202,6 +1238,16 @@ function BookPage() {
                       ) : (
                         <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
                           Time slots will appear here after you choose a date.
+                        </div>
+                      )}
+                      {date && startTime && (
+                        <div className="mt-4 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+                          <p className="text-xs tracking-widest text-muted-foreground uppercase">
+                            Selected schedule
+                          </p>
+                          <p className="mt-1 font-medium text-foreground">
+                            {formatDateLong(date)} at {formatTime(startTime)}
+                          </p>
                         </div>
                       )}
                     </div>
@@ -1377,6 +1423,14 @@ function BookPage() {
                     if everything is correct.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
+                <div className="rounded-lg border border-border/70 bg-muted/20 p-3 text-sm">
+                  <p className="text-xs tracking-widest text-muted-foreground uppercase">
+                    Appointment schedule
+                  </p>
+                  <p className="mt-1 font-medium text-foreground">
+                    {formatDateLong(date)} at {formatTime(startTime)}
+                  </p>
+                </div>
 
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel / Go back</AlertDialogCancel>
@@ -1390,7 +1444,13 @@ function BookPage() {
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
-            <AlertDialog open={multiDayContinuationOpen} onOpenChange={setMultiDayContinuationOpen}>
+            <AlertDialog
+              open={multiDayContinuationOpen}
+              onOpenChange={(open) => {
+                setMultiDayContinuationOpen(open);
+                if (!open) setMultiDayConfirmationStep(null);
+              }}
+            >
               <AlertDialogContent className="sm:max-w-md">
                 <AlertDialogHeader>
                   <AlertDialogTitle className="font-display text-2xl uppercase">

@@ -91,6 +91,10 @@ export type BookingHours = {
 
 const BOOKING_INTERVAL_MINUTES = 30;
 
+// Keep the public booking request bounded while allowing a customer to select
+// the full current service catalog in one appointment.
+export const MAX_BOOKING_SERVICE_SELECTIONS = 20;
+
 export type BookingCapacityConfig = {
   startTime: string;
   capacity: number;

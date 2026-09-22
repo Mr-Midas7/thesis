@@ -21,6 +21,7 @@ import {
   isShopOpenDate,
   isSlotBookable,
   manilaNow,
+  MAX_BOOKING_SERVICE_SELECTIONS,
   normalizePhilippineMobile,
   phoneSchema,
   REFERENCE_CODE_PATTERN,
@@ -146,7 +147,7 @@ const availabilitySchema = z
     days: z.number().int().min(7).max(90).default(45),
     serviceIds: z
       .array(z.string().uuid())
-      .max(6)
+      .max(MAX_BOOKING_SERVICE_SELECTIONS)
       .refine((ids) => new Set(ids).size === ids.length, "Services must be unique")
       .default([]),
     // Administrators editing an appointment need to see the current slot as
@@ -193,7 +194,7 @@ const bookingSchema = z
     serviceIds: z
       .array(z.string().uuid())
       .min(1)
-      .max(6)
+      .max(MAX_BOOKING_SERVICE_SELECTIONS)
       .refine((ids) => new Set(ids).size === ids.length, "Services must be unique"),
     date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     startTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
@@ -571,7 +572,8 @@ async function hashRateLimitSubject(subject: string) {
 type RateLimitResult = "allowed" | "limited" | "unavailable";
 
 async function checkPublicRequestRateLimit(
-  scope: "availability" | "booking" | "lookup" | "cancellation" | "rescheduling",
+  scope:
+    "availability" | "booking" | "lookup" | "cancellation" | "rescheduling" | "reference_recovery",
   maxRequests: number,
   windowSeconds: number,
   subject?: string,
@@ -1648,6 +1650,98 @@ const lookupSchema = z.object({
     .transform(normalizeReferenceCode),
   phone: phoneSchema,
 });
+
+const referenceRecoverySchema = z.object({
+  lastName: namePartSchema.min(1, "Enter your last name."),
+  firstName: namePartSchema.min(1, "Enter your first name."),
+  phone: phoneSchema,
+});
+
+function normalizedName(value: string | null | undefined) {
+  return value?.trim().replace(/\s+/g, " ").toLocaleLowerCase() ?? "";
+}
+
+function appointmentMatchesRecoveryName(
+  appointment: { first_name: string | null; last_name: string | null; customer_name: string },
+  firstName: string,
+  lastName: string,
+) {
+  const normalizedFirstName = normalizedName(firstName);
+  const normalizedLastName = normalizedName(lastName);
+  const storedFirstName = normalizedName(appointment.first_name);
+  const storedLastName = normalizedName(appointment.last_name);
+  if (storedFirstName && storedLastName) {
+    return storedFirstName === normalizedFirstName && storedLastName === normalizedLastName;
+  }
+
+  // Appointments created before separate name fields existed retain a full
+  // customer name. Accept a matching first/last pair while allowing its middle
+  // name to remain optional in the recovery form.
+  const customerName = normalizedName(appointment.customer_name);
+  return (
+    customerName === `${normalizedFirstName} ${normalizedLastName}` ||
+    (customerName.startsWith(`${normalizedFirstName} `) &&
+      customerName.endsWith(` ${normalizedLastName}`))
+  );
+}
+
+/** Recover only reference codes after a rate-limited ownership verification. */
+export const recoverAppointmentReferences = createServerFn({ method: "POST" })
+  .validator((input: unknown) => referenceRecoverySchema.parse(input))
+  .handler(async ({ data }) => {
+    const rateLimit = await checkPublicRequestRateLimit(
+      "reference_recovery",
+      5,
+      15 * 60,
+      data.phone,
+    );
+    if (rateLimit !== "allowed") {
+      return {
+        ok: false as const,
+        error:
+          rateLimit === "limited"
+            ? "Too many recovery attempts. Please wait a few minutes before trying again."
+            : "Reference recovery is temporarily unavailable. Please try again shortly.",
+      };
+    }
+
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const { data: appointments, error } = await supabaseAdmin
+      .from("appointments")
+      .select("reference_code,first_name,last_name,customer_name")
+      .eq("phone", data.phone)
+      .eq("is_archived", false)
+      .order("created_at", { ascending: false })
+      .limit(20);
+    if (error) {
+      console.error("[Reference recovery] lookup failed", {
+        code: error.code,
+        message: error.message,
+      });
+      return {
+        ok: false as const,
+        error: "Reference recovery is temporarily unavailable. Please try again shortly.",
+      };
+    }
+
+    const references = Array.from(
+      new Set(
+        (appointments ?? [])
+          .filter((appointment) =>
+            appointmentMatchesRecoveryName(appointment, data.firstName, data.lastName),
+          )
+          .map((appointment) => appointment.reference_code),
+      ),
+    );
+    if (references.length === 0) {
+      return {
+        ok: false as const,
+        error: "No appointment was found for that name and mobile number.",
+      };
+    }
+
+    return { ok: true as const, references };
+  });
 
 async function findAppointment(reference: string, phone: string) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");

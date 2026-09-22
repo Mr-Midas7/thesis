@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { CircleAlert, Loader2, Search } from "lucide-react";
+import { CircleAlert, CircleHelp, Loader2, Search } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
@@ -46,6 +46,7 @@ import {
   getAvailability,
   lookupAppointment,
   cancelAppointment,
+  recoverAppointmentReferences,
 } from "@/lib/booking.functions";
 import {
   type Availability,
@@ -95,11 +96,21 @@ const turnstileEnabled = Boolean(import.meta.env["VITE_TURNSTILE_SITE_KEY"]);
 function MyAppointment() {
   const lookup = useServerFn(lookupAppointment);
   const cancel = useServerFn(cancelAppointment);
+  const recoverReferences = useServerFn(recoverAppointmentReferences);
   const createRescheduleRequest = useServerFn(createBooking);
   const availabilityFn = useServerFn(getAvailability);
   const [reference, setReference] = useState("");
   const [phone, setPhone] = useState("");
   const [errors, setErrors] = useState<{ reference?: string; phone?: string }>({});
+  const [referenceRecoveryOpen, setReferenceRecoveryOpen] = useState(false);
+  const [recoveryForm, setRecoveryForm] = useState({ lastName: "", firstName: "", phone: "" });
+  const [recoveryErrors, setRecoveryErrors] = useState<{
+    lastName?: string;
+    firstName?: string;
+    phone?: string;
+  }>({});
+  const [recoveryError, setRecoveryError] = useState<string | null>(null);
+  const [recoveredReferences, setRecoveredReferences] = useState<string[]>([]);
   const [appointmentPreviewError, setAppointmentPreviewError] = useState<string | null>(null);
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [newDate, setNewDate] = useState("");
@@ -205,6 +216,23 @@ function MyAppointment() {
       setAppointmentPreviewError(
         "We could not retrieve your appointment details right now. Please try again shortly.",
       );
+    },
+  });
+
+  const referenceRecovery = useMutation({
+    mutationFn: () => recoverReferences({ data: recoveryForm }),
+    onSuccess: (result) => {
+      if (!result.ok) {
+        setRecoveredReferences([]);
+        setRecoveryError(result.error);
+        return;
+      }
+      setRecoveryError(null);
+      setRecoveredReferences(result.references);
+    },
+    onError: () => {
+      setRecoveredReferences([]);
+      setRecoveryError("Reference recovery is temporarily unavailable. Please try again shortly.");
     },
   });
 
@@ -354,6 +382,38 @@ function MyAppointment() {
     return Object.keys(nextErrors).length === 0;
   }
 
+  function resetReferenceRecovery() {
+    setRecoveryForm({ lastName: "", firstName: "", phone: "" });
+    setRecoveryErrors({});
+    setRecoveryError(null);
+    setRecoveredReferences([]);
+  }
+
+  function validateReferenceRecovery() {
+    const nextErrors: typeof recoveryErrors = {};
+    const validName = (value: string) => /^[A-Za-z]+(?:\s+[A-Za-z]+)*$/.test(value.trim());
+    if (!validName(recoveryForm.lastName)) {
+      nextErrors.lastName = "Enter the last name used for the booking.";
+    }
+    if (!validName(recoveryForm.firstName)) {
+      nextErrors.firstName = "Enter the first name used for the booking.";
+    }
+    if (!normalizePhilippineMobile(recoveryForm.phone)) nextErrors.phone = PHONE_VALIDATION_MESSAGE;
+    setRecoveryErrors(nextErrors);
+    setRecoveryError(null);
+    setRecoveredReferences([]);
+    return Object.keys(nextErrors).length === 0;
+  }
+
+  function selectRecoveredReference(recoveredReference: string) {
+    setReference(recoveredReference);
+    setPhone(sanitizePhilippineMobileInput(recoveryForm.phone));
+    setErrors({});
+    setAppointmentPreviewError(null);
+    setReferenceRecoveryOpen(false);
+    resetReferenceRecovery();
+  }
+
   return (
     <div className="min-h-screen">
       <SiteHeader />
@@ -366,7 +426,7 @@ function MyAppointment() {
         </p>
 
         <form
-          className="mt-8 grid gap-4 rounded-xl border border-border/70 bg-card/50 p-6 sm:grid-cols-[1fr_1fr_auto] sm:items-end"
+          className="mt-8 grid gap-4 rounded-xl border border-border/70 bg-card/50 p-6 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-start"
           onSubmit={(e) => {
             e.preventDefault();
             if (validate()) {
@@ -375,7 +435,7 @@ function MyAppointment() {
             }
           }}
         >
-          <div className="relative space-y-1.5">
+          <div className="space-y-1.5">
             <Label>Reference code</Label>
             <Input
               value={reference}
@@ -392,17 +452,159 @@ function MyAppointment() {
               autoCapitalize="characters"
               aria-invalid={!!errors.reference}
             />
-            {errors.reference && (
-              <p
-                role="alert"
-                className="absolute -bottom-5 left-0 flex items-center gap-1 text-xs text-destructive"
+            <div className="space-y-1 pt-0.5 sm:min-h-7">
+              <FieldError message={errors.reference} />
+              <Dialog
+                open={referenceRecoveryOpen}
+                onOpenChange={(open) => {
+                  setReferenceRecoveryOpen(open);
+                  if (!open) resetReferenceRecovery();
+                }}
               >
-                <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
-                {errors.reference}
-              </p>
-            )}
+                <DialogTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="h-auto px-0 text-xs"
+                    onClick={() =>
+                      setRecoveryForm((current) => ({
+                        ...current,
+                        phone: current.phone || phone,
+                      }))
+                    }
+                  >
+                    <CircleHelp className="size-3" aria-hidden="true" /> Forgot Reference Code?
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle>Recover your reference code</DialogTitle>
+                    <DialogDescription>
+                      Enter the last name, first name, and mobile number used for your booking.
+                    </DialogDescription>
+                  </DialogHeader>
+                  <form
+                    className="space-y-4"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      if (validateReferenceRecovery()) referenceRecovery.mutate();
+                    }}
+                  >
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <div className="space-y-1.5">
+                        <Label htmlFor="recovery-last-name">Last name</Label>
+                        <Input
+                          id="recovery-last-name"
+                          value={recoveryForm.lastName}
+                          maxLength={40}
+                          autoComplete="family-name"
+                          onChange={(event) => {
+                            setRecoveryForm((current) => ({
+                              ...current,
+                              lastName: event.target.value.replace(/[^a-zA-Z\s]/g, ""),
+                            }));
+                            setRecoveryErrors((current) => ({ ...current, lastName: undefined }));
+                          }}
+                          aria-invalid={Boolean(recoveryErrors.lastName)}
+                        />
+                        <FieldError message={recoveryErrors.lastName} />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label htmlFor="recovery-first-name">First name</Label>
+                        <Input
+                          id="recovery-first-name"
+                          value={recoveryForm.firstName}
+                          maxLength={40}
+                          autoComplete="given-name"
+                          onChange={(event) => {
+                            setRecoveryForm((current) => ({
+                              ...current,
+                              firstName: event.target.value.replace(/[^a-zA-Z\s]/g, ""),
+                            }));
+                            setRecoveryErrors((current) => ({ ...current, firstName: undefined }));
+                          }}
+                          aria-invalid={Boolean(recoveryErrors.firstName)}
+                        />
+                        <FieldError message={recoveryErrors.firstName} />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="recovery-phone">Mobile number</Label>
+                      <Input
+                        id="recovery-phone"
+                        type="tel"
+                        value={recoveryForm.phone}
+                        maxLength={11}
+                        inputMode="numeric"
+                        autoComplete="tel"
+                        onChange={(event) => {
+                          setRecoveryForm((current) => ({
+                            ...current,
+                            phone: sanitizePhilippineMobileInput(event.target.value),
+                          }));
+                          setRecoveryErrors((current) => ({ ...current, phone: undefined }));
+                        }}
+                        placeholder="09171234567"
+                        aria-invalid={Boolean(recoveryErrors.phone)}
+                      />
+                      <FieldError message={recoveryErrors.phone} />
+                    </div>
+                    {recoveryError && (
+                      <Alert
+                        variant="destructive"
+                        className="border-destructive/40 bg-destructive/5"
+                      >
+                        <CircleAlert className="size-4" aria-hidden="true" />
+                        <AlertDescription>{recoveryError}</AlertDescription>
+                      </Alert>
+                    )}
+                    {recoveredReferences.length > 0 && (
+                      <div
+                        role="status"
+                        className="rounded-lg border border-primary/30 bg-primary/5 p-4"
+                      >
+                        <p className="text-sm font-medium">
+                          Reference code{recoveredReferences.length > 1 ? "s" : ""} found
+                        </p>
+                        <div className="mt-3 space-y-2">
+                          {recoveredReferences.map((recoveredReference) => (
+                            <div
+                              key={recoveredReference}
+                              className="flex items-center justify-between gap-3 rounded-md border border-border/70 bg-card/60 px-3 py-2"
+                            >
+                              <span className="font-display tracking-widest text-primary">
+                                {recoveredReference}
+                              </span>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                onClick={() => selectRecoveredReference(recoveredReference)}
+                              >
+                                Use code
+                              </Button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    <DialogFooter>
+                      <DialogClose asChild>
+                        <Button type="button" variant="outline">
+                          Close
+                        </Button>
+                      </DialogClose>
+                      <Button type="submit" disabled={referenceRecovery.isPending}>
+                        {referenceRecovery.isPending && <Loader2 className="animate-spin" />}{" "}
+                        Recover code
+                      </Button>
+                    </DialogFooter>
+                  </form>
+                </DialogContent>
+              </Dialog>
+            </div>
           </div>
-          <div className="relative space-y-1.5">
+          <div className="space-y-1.5">
             <Label>Mobile number</Label>
             <Input
               type="tel"
@@ -421,19 +623,19 @@ function MyAppointment() {
               placeholder="09171234567"
               aria-invalid={!!errors.phone}
             />
-            {errors.phone && (
-              <p
-                role="alert"
-                className="absolute -bottom-5 left-0 flex items-center gap-1 text-xs text-destructive"
-              >
-                <CircleAlert className="size-3.5 shrink-0" aria-hidden="true" />
-                {errors.phone}
-              </p>
-            )}
+            <div className="pt-0.5 sm:min-h-7">
+              <FieldError message={errors.phone} />
+            </div>
           </div>
-          <Button type="submit" disabled={search.isPending} className="font-display uppercase">
-            {search.isPending ? <Loader2 className="animate-spin" /> : <Search />} Find
-          </Button>
+          <div className="sm:pt-[1.625rem]">
+            <Button
+              type="submit"
+              disabled={search.isPending}
+              className="w-full font-display uppercase sm:w-auto"
+            >
+              {search.isPending ? <Loader2 className="animate-spin" /> : <Search />} Find
+            </Button>
+          </div>
         </form>
 
         {appointmentPreviewError && (
