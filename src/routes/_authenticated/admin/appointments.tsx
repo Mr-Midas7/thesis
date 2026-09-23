@@ -71,9 +71,13 @@ import {
   formatTime,
   intervalsOverlap,
   manilaNow,
+  normalizePhilippineMobile,
+  PHONE_VALIDATION_MESSAGE,
+  sanitizePhilippineMobileInput,
   statusLabel,
   statusTone,
   timeToMinutes,
+  toLocalPhilippineMobile,
 } from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
@@ -116,6 +120,7 @@ type AppointmentEditForm = {
   firstName: string;
   middleName: string;
   lastName: string;
+  phone: string;
   serviceIds: string[];
   appointmentDate: string;
   startTime: string;
@@ -129,6 +134,7 @@ type AppointmentEditErrors = Partial<
     | "firstName"
     | "middleName"
     | "lastName"
+    | "phone"
     | "services"
     | "appointmentDate"
     | "startTime"
@@ -220,6 +226,7 @@ function appointmentEditHasChanges(
     form.firstName.trim() !== (appointment.first_name ?? "").trim() ||
     form.middleName.trim() !== (appointment.middle_name ?? "").trim() ||
     form.lastName.trim() !== (appointment.last_name ?? "").trim() ||
+    normalizePhilippineMobile(form.phone) !== normalizePhilippineMobile(appointment.phone) ||
     [...form.serviceIds].sort().join(",") !== [...originalServiceIds].sort().join(",") ||
     form.appointmentDate !== appointment.appointment_date ||
     form.startTime !== String(appointment.start_time).slice(0, 5) ||
@@ -488,6 +495,7 @@ function AppointmentsPage() {
         p_first_name: form.firstName.trim(),
         p_middle_name: form.middleName.trim(),
         p_last_name: form.lastName.trim(),
+        p_phone: normalizePhilippineMobile(form.phone)!,
       });
       if (error) throw error;
     },
@@ -603,6 +611,7 @@ function AppointmentsPage() {
       firstName: appointment.first_name ?? "",
       middleName: appointment.middle_name ?? "",
       lastName: appointment.last_name ?? "",
+      phone: toLocalPhilippineMobile(appointment.phone),
       serviceIds: appointment.appointment_services
         .map((service) => service.service_id)
         .filter((serviceId): serviceId is string => Boolean(serviceId)),
@@ -654,11 +663,11 @@ function AppointmentsPage() {
     if (editForm.firstName.trim().length < 2) {
       nextErrors.firstName = "Enter a valid first name.";
     }
-    if (editForm.middleName.trim().length < 1) {
-      nextErrors.middleName = "Enter a valid middle name.";
-    }
     if (editForm.lastName.trim().length < 2) {
       nextErrors.lastName = "Enter a valid last name.";
+    }
+    if (!normalizePhilippineMobile(editForm.phone)) {
+      nextErrors.phone = PHONE_VALIDATION_MESSAGE;
     }
     if (editForm.serviceIds.length === 0) {
       nextErrors.services = "Select at least one service.";
@@ -921,11 +930,11 @@ function AppointmentsPage() {
                       notes.
                     </p>
                   </div>
-                  <div className="grid gap-4 sm:grid-cols-3">
+                  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
                     {(
                       [
                         ["First Name", "firstName"],
-                        ["Middle Name", "middleName"],
+                        ["Middle Name (Optional)", "middleName"],
                         ["Last Name", "lastName"],
                       ] as const
                     ).map(([label, field]) => (
@@ -947,6 +956,27 @@ function AppointmentsPage() {
                         <FieldError message={editErrors[field]} />
                       </div>
                     ))}
+                    <div className="space-y-1.5">
+                      <Label htmlFor="appointment-phone">Mobile number</Label>
+                      <Input
+                        id="appointment-phone"
+                        type="tel"
+                        value={editForm.phone}
+                        maxLength={11}
+                        inputMode="tel"
+                        autoComplete="tel"
+                        onChange={(event) => {
+                          setEditForm({
+                            ...editForm,
+                            phone: sanitizePhilippineMobileInput(event.target.value),
+                          });
+                          clearAppointmentEditErrors("phone", "form");
+                        }}
+                        placeholder="09171234567"
+                        aria-invalid={Boolean(editErrors.phone)}
+                      />
+                      <FieldError message={editErrors.phone} />
+                    </div>
                   </div>
                   <div className="space-y-2">
                     <Label>Services</Label>

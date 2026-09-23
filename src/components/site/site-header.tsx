@@ -19,7 +19,7 @@ export function SiteHeader() {
 
   return (
     <header className="sticky top-0 z-50 border-b border-border/70 bg-background/85 backdrop-blur">
-      <div className="site-container flex h-20 items-center gap-4">
+      <div className="site-container grid h-20 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 md:grid-cols-[auto_minmax(0,1fr)_auto]">
         <Link to="/" className="flex items-center">
           <img
             src={logo.url}
@@ -34,7 +34,10 @@ export function SiteHeader() {
           </span>
         </Link>
 
-        <nav className="ml-auto hidden items-center gap-1 md:flex">
+        <nav
+          aria-label="Primary navigation"
+          className="hidden items-center justify-self-center gap-1 md:flex"
+        >
           {links.map((l) => (
             <Link
               key={l.to}
@@ -46,17 +49,21 @@ export function SiteHeader() {
               {l.label}
             </Link>
           ))}
-          <ThemeToggle className="ml-1" />
           <Button asChild className="ml-2 font-display tracking-wide uppercase">
             <Link to="/book">Book Now</Link>
           </Button>
         </nav>
 
+        <div className="hidden justify-self-end md:block">
+          <ThemeToggle />
+        </div>
+
         <Button
           variant="ghost"
           size="icon"
-          className="ml-auto md:hidden"
+          className="justify-self-end md:hidden"
           aria-label="Toggle menu"
+          aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
         >
           <Menu />

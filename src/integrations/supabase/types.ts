@@ -1010,6 +1010,7 @@ export type Database = {
           p_first_name: string;
           p_last_name: string;
           p_middle_name: string;
+          p_phone: string;
           p_service_ids: string[];
           p_start_time: string;
           p_status: string;
