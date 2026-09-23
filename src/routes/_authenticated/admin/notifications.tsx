@@ -24,12 +24,6 @@ export const Route = createFileRoute("/_authenticated/admin/notifications")({
   component: NotificationsPage,
 });
 
-const SERVICE_PROGRESS_NOTIFICATION_TYPES = new Set(["service_arrival", "service_completion"]);
-
-function isServiceProgressNotification(type: string) {
-  return SERVICE_PROGRESS_NOTIFICATION_TYPES.has(type);
-}
-
 function NotificationsPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -89,17 +83,8 @@ function NotificationsPage() {
   });
 
   const viewAppointment = useMutation({
-    mutationFn: async ({
-      id,
-      isRead,
-      keepActive,
-    }: {
-      id: string;
-      isRead: boolean;
-      appointmentId: string;
-      keepActive: boolean;
-    }) => {
-      if (isRead || keepActive) return;
+    mutationFn: async ({ id, isRead }: { id: string; isRead: boolean; appointmentId: string }) => {
+      if (isRead) return;
       const { error } = await supabase.from("notifications").update({ is_read: true }).eq("id", id);
       if (error) throw error;
     },
@@ -229,9 +214,7 @@ function NotificationsPage() {
   const rows = list.data ?? [];
   const unread = rows.filter((n) => !n.is_read).length;
   const read = rows.length - unread;
-  const nonProgressUnreadIds = rows
-    .filter((n) => !n.is_read && !isServiceProgressNotification(n.type))
-    .map((n) => n.id);
+  const unreadIds = rows.filter((n) => !n.is_read).map((n) => n.id);
 
   return (
     <div>
@@ -243,10 +226,10 @@ function NotificationsPage() {
             <Button
               variant="outline"
               className="uppercase"
-              disabled={nonProgressUnreadIds.length === 0 || markAll.isPending}
-              onClick={() => markAll.mutate(nonProgressUnreadIds)}
+              disabled={unreadIds.length === 0 || markAll.isPending}
+              onClick={() => markAll.mutate(unreadIds)}
             >
-              <CheckCheck /> Mark other read
+              <CheckCheck /> Mark all read
             </Button>
             <AlertDialog>
               <AlertDialogTrigger asChild>
@@ -349,7 +332,6 @@ function NotificationsPage() {
 
       <div className="space-y-3">
         {rows.map((n) => {
-          const isServiceProgress = isServiceProgressNotification(n.type);
           const canStartService =
             n.type === "service_arrival" &&
             n.appointments?.status === "confirmed" &&
@@ -560,28 +542,25 @@ function NotificationsPage() {
                         id: n.id,
                         isRead: n.is_read,
                         appointmentId: n.appointment_id,
-                        keepActive: isServiceProgress,
                       });
                     }}
                   >
                     View appointment
                   </Button>
-                  {!n.is_read && !isServiceProgress && (
+                  {!n.is_read && (
                     <Button size="sm" variant="ghost" onClick={() => markOne.mutate(n.id)}>
                       Mark read
                     </Button>
                   )}
-                  {!isServiceProgress && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      disabled={deleteNotification.isPending}
-                      onClick={() => setDeleteTarget(n.id)}
-                      title="Remove notification"
-                    >
-                      <Trash2 className="h-4 w-4 text-destructive" />
-                    </Button>
-                  )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    disabled={deleteNotification.isPending}
+                    onClick={() => setDeleteTarget(n.id)}
+                    title="Remove notification"
+                  >
+                    <Trash2 className="h-4 w-4 text-destructive" />
+                  </Button>
                 </div>
               </CardContent>
             </Card>
