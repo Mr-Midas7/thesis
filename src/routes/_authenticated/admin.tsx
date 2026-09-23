@@ -92,7 +92,8 @@ const groups = [
   },
 ];
 
-const ADMIN_INACTIVITY_TIMEOUT_MS = 60_000;
+const ADMIN_INACTIVITY_TIMEOUT_MS = 120_000;
+const NOTIFICATION_POLL_INTERVAL_MS = 30_000;
 
 function AdminLayout() {
   const navigate = useNavigate();
@@ -118,13 +119,13 @@ function AdminLayout() {
         .eq("is_read", false);
       return count ?? 0;
     },
-    refetchInterval: 30000,
+    refetchInterval: NOTIFICATION_POLL_INTERVAL_MS,
   });
 
   useEffect(() => {
     const channel = supabase
       .channel("admin-notifications")
-      .on("postgres_changes", { event: "INSERT", schema: "public", table: "notifications" }, () => {
+      .on("postgres_changes", { event: "*", schema: "public", table: "notifications" }, () => {
         queryClient.invalidateQueries({ queryKey: ["unread-notifications"] });
         queryClient.invalidateQueries({ queryKey: ["notifications"] });
         queryClient.invalidateQueries({ queryKey: ["admin-appointments"] });
@@ -142,34 +143,68 @@ function AdminLayout() {
     }
   }, []);
 
-  const signOut = useCallback(async (reason: "manual" | "inactivity") => {
-    if (signingOutRef.current) return;
-    signingOutRef.current = true;
-    clearInactivityTimer();
+  const signOut = useCallback(
+    async (reason: "manual" | "inactivity") => {
+      if (signingOutRef.current) return;
+      signingOutRef.current = true;
+      clearInactivityTimer();
 
-    void recordAdminActivityEvent({
+      void recordAdminActivityEvent({
         action: "signed out",
         resourceType: "Authentication",
         targetLabel: "Admin console",
         summary:
           reason === "inactivity"
-            ? "Administrator was automatically signed out after 1 minute of inactivity."
+            ? "Administrator was automatically signed out after 2 minutes of inactivity."
             : "Administrator signed out of the admin console.",
       }).catch(() => {
         // Sign-out should always complete, even if the audit service is unavailable.
       });
 
-    try {
-      void queryClient.cancelQueries();
-      queryClient.clear();
-      await supabase.auth.signOut();
-    } finally {
-      if (reason === "inactivity") navigate({ to: "/auth", replace: true });
-      else navigate({ to: "/", replace: true });
-    }
-  }, [clearInactivityTimer, navigate, queryClient]);
+      try {
+        void queryClient.cancelQueries();
+        queryClient.clear();
+        await supabase.auth.signOut();
+      } finally {
+        if (reason === "inactivity") navigate({ to: "/auth", replace: true });
+        else navigate({ to: "/", replace: true });
+      }
+    },
+    [clearInactivityTimer, navigate, queryClient],
+  );
 
   const isAdmin = (role.data ?? []).includes("admin");
+
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    let isActive = true;
+    let isSyncing = false;
+    const syncServiceProgressNotifications = async () => {
+      if (isSyncing) return;
+      isSyncing = true;
+      try {
+        const { data, error } = await supabase.rpc("sync_service_progress_notifications");
+        if (!isActive || error || !data) return;
+        queryClient.invalidateQueries({ queryKey: ["unread-notifications"] });
+        queryClient.invalidateQueries({ queryKey: ["notifications"] });
+        queryClient.invalidateQueries({ queryKey: ["admin-appointments"] });
+      } finally {
+        isSyncing = false;
+      }
+    };
+
+    void syncServiceProgressNotifications();
+    const intervalId = window.setInterval(
+      () => void syncServiceProgressNotifications(),
+      NOTIFICATION_POLL_INTERVAL_MS,
+    );
+
+    return () => {
+      isActive = false;
+      window.clearInterval(intervalId);
+    };
+  }, [isAdmin, queryClient]);
 
   useEffect(() => {
     if (!isAdmin) return;

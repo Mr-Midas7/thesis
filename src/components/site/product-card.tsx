@@ -3,7 +3,7 @@ import { ImageIcon } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import { SHOP } from "@/lib/shop";
+import { formatPHP, SHOP } from "@/lib/shop";
 
 export type ProductRow = {
   id: string;
@@ -19,7 +19,7 @@ export type ProductRow = {
 
 export function ProductCard({ product }: { product: ProductRow }) {
   return (
-    <Card className="group overflow-hidden border-border/70 bg-card/70 py-0 transition-colors hover:border-primary/60">
+    <Card className="group flex h-full flex-col overflow-hidden border-border/70 bg-card/70 py-0 transition-colors hover:border-primary/60">
       <div className="relative flex h-44 items-center justify-center overflow-hidden bg-secondary/50">
         {product.image_url ? (
           <img
@@ -40,26 +40,35 @@ export function ProductCard({ product }: { product: ProductRow }) {
           {product.in_stock ? "In stock" : "Out of stock"}
         </Badge>
       </div>
-      <CardContent className="p-4 pb-5">
+      <CardContent className="flex flex-1 flex-col p-4 pb-5">
         <p className="text-xs tracking-widest text-accent uppercase">
           {product.brand ?? product.category}
         </p>
-        <h3 className="mt-1 font-display text-lg leading-tight tracking-wide uppercase">
-          {product.name}
-        </h3>
+        <div className="mt-1 flex items-start justify-between gap-3">
+          <h3 className="min-w-0 flex-1 font-display text-lg leading-tight tracking-wide uppercase">
+            {product.name}
+          </h3>
+          <p className="shrink-0 font-display text-xl leading-tight font-bold tracking-wide text-primary">
+            {formatPHP(product.price)}
+          </p>
+        </div>
         {product.description && (
           <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{product.description}</p>
         )}
         {product.in_stock ? (
-          <Button asChild variant="outline" size="sm" className="mt-4 w-full uppercase">
-            <a href={SHOP.messenger} target="_blank" rel="noopener noreferrer">
-              Reserve via Messenger
-            </a>
-          </Button>
+          <div className="mt-auto pt-4">
+            <Button asChild variant="outline" size="sm" className="w-full uppercase">
+              <a href={SHOP.messenger} target="_blank" rel="noopener noreferrer">
+                Reserve via Messenger
+              </a>
+            </Button>
+          </div>
         ) : (
-          <p className="mt-4 text-xs text-muted-foreground">
-            Message us to check future availability.
-          </p>
+          <div className="mt-auto pt-4">
+            <p className="text-xs text-muted-foreground">
+              Message us to check future availability.
+            </p>
+          </div>
         )}
       </CardContent>
     </Card>

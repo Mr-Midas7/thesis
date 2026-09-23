@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { BellRing, CheckCheck, CheckCircle2, CircleX, Trash2 } from "lucide-react";
+import { BellRing, CheckCheck, CheckCircle2, CircleX, Clock3, Play, Trash2 } from "lucide-react";
 import { useState } from "react";
 
 import { PageHeader } from "@/components/admin/page-header";
@@ -24,11 +24,21 @@ export const Route = createFileRoute("/_authenticated/admin/notifications")({
   component: NotificationsPage,
 });
 
+const SERVICE_PROGRESS_NOTIFICATION_TYPES = new Set(["service_arrival", "service_completion"]);
+
+function isServiceProgressNotification(type: string) {
+  return SERVICE_PROGRESS_NOTIFICATION_TYPES.has(type);
+}
+
 function NotificationsPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
   const [actionError, setActionError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [noShowTarget, setNoShowTarget] = useState<{
+    appointmentId: string;
+    referenceCode: string;
+  } | null>(null);
 
   const list = useQuery({
     queryKey: ["notifications"],
@@ -36,7 +46,7 @@ function NotificationsPage() {
       const { data, error } = await supabase
         .from("notifications")
         .select(
-          "*, appointments(status, reference_code, customer_name, phone, reschedule_count, pending_reschedule_request_id, pending_reschedule_date, pending_reschedule_start_time, pending_reschedule_reason)",
+          "*, appointments(status, reference_code, customer_name, phone, reschedule_count, pending_reschedule_request_id, pending_reschedule_date, pending_reschedule_start_time, pending_reschedule_reason, arrival_notification_snooze_count, service_started_at, service_ended_at)",
         )
         .order("created_at", { ascending: false })
         .limit(100);
@@ -63,11 +73,12 @@ function NotificationsPage() {
   });
 
   const markAll = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (ids: string[]) => {
+      if (ids.length === 0) return;
       const { error } = await supabase
         .from("notifications")
         .update({ is_read: true })
-        .eq("is_read", false);
+        .in("id", ids);
       if (error) throw error;
     },
     onSuccess: () => {
@@ -78,8 +89,17 @@ function NotificationsPage() {
   });
 
   const viewAppointment = useMutation({
-    mutationFn: async ({ id, isRead }: { id: string; isRead: boolean; appointmentId: string }) => {
-      if (isRead) return;
+    mutationFn: async ({
+      id,
+      isRead,
+      keepActive,
+    }: {
+      id: string;
+      isRead: boolean;
+      appointmentId: string;
+      keepActive: boolean;
+    }) => {
+      if (isRead || keepActive) return;
       const { error } = await supabase.from("notifications").update({ is_read: true }).eq("id", id);
       if (error) throw error;
     },
@@ -179,24 +199,54 @@ function NotificationsPage() {
     },
   });
 
+  const updateServiceProgress = useMutation({
+    mutationFn: async ({
+      appointmentId,
+      action,
+    }: {
+      appointmentId: string;
+      action: "start" | "snooze_arrival" | "no_show" | "complete" | "snooze_completion";
+    }) => {
+      const { error } = await supabase.rpc("manage_appointment_service_progress", {
+        p_appointment_id: appointmentId,
+        p_action: action,
+      });
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      setActionError(null);
+      refresh();
+      queryClient.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
+      queryClient.invalidateQueries({ queryKey: ["reports"], exact: false });
+    },
+    onError: (err: Error) => {
+      console.error("Service progress update failed:", err);
+      setActionError("Could not update service progress. Refresh the page and try again.");
+    },
+  });
+
   const rows = list.data ?? [];
   const unread = rows.filter((n) => !n.is_read).length;
   const read = rows.length - unread;
+  const nonProgressUnreadIds = rows
+    .filter((n) => !n.is_read && !isServiceProgressNotification(n.type))
+    .map((n) => n.id);
 
   return (
     <div>
       <PageHeader
         title="Notifications"
-        description="Review new appointments and view booking updates, newest first."
+        description="Review appointments, booking updates, and active service progress alerts."
         action={
           <div className="flex flex-wrap gap-2">
             <Button
               variant="outline"
               className="uppercase"
-              disabled={unread === 0}
-              onClick={() => markAll.mutate()}
+              disabled={nonProgressUnreadIds.length === 0 || markAll.isPending}
+              onClick={() => markAll.mutate(nonProgressUnreadIds)}
             >
-              <CheckCheck /> Mark all read
+              <CheckCheck /> Mark other read
             </Button>
             <AlertDialog>
               <AlertDialogTrigger asChild>
@@ -264,153 +314,279 @@ function NotificationsPage() {
         </AlertDialogContent>
       </AlertDialog>
 
+      <AlertDialog
+        open={Boolean(noShowTarget)}
+        onOpenChange={(nextOpen) => !nextOpen && setNoShowTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Mark this appointment as no-show?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {noShowTarget
+                ? `This will mark ${noShowTarget.referenceCode} as no-show. This cannot be changed back to a pre-service status.`
+                : "This will mark the appointment as no-show."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={updateServiceProgress.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={updateServiceProgress.isPending}
+              onClick={() => {
+                if (noShowTarget) {
+                  updateServiceProgress.mutate({
+                    appointmentId: noShowTarget.appointmentId,
+                    action: "no_show",
+                  });
+                }
+                setNoShowTarget(null);
+              }}
+            >
+              Mark no-show
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <div className="space-y-3">
-        {rows.map((n) => (
-          <Card
-            key={n.id}
-            className={cn(
-              "border-border/70 bg-card/60",
-              !n.is_read && "border-primary/50 bg-primary/5",
-            )}
-          >
-            <CardContent className="flex flex-wrap items-start gap-4 p-4">
-              <BellRing
-                className={cn(
-                  "mt-0.5 h-5 w-5",
-                  n.is_read ? "text-muted-foreground" : "text-primary",
-                )}
-              />
-              <div className="min-w-0 flex-1">
-                <p className="text-sm font-medium">{n.title}</p>
-                {n.message && <p className="mt-1 text-sm text-muted-foreground">{n.message}</p>}
-                <p className="mt-1 text-[11px] tracking-wider text-muted-foreground uppercase">
-                  {new Date(n.created_at).toLocaleString("en-PH", { timeZone: "Asia/Manila" })}
-                </p>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {n.appointment_id &&
-                  n.type !== "reschedule_request" &&
-                  n.appointments?.status === "pending" &&
-                  !n.appointments.pending_reschedule_request_id && (
-                    <>
-                      <Button
-                        size="sm"
-                        className="bg-emerald-600 text-white hover:bg-emerald-700"
-                        disabled={reviewPendingAppointment.isPending}
-                        onClick={() =>
-                          reviewPendingAppointment.mutate({
-                            appointmentId: n.appointment_id!,
-                            decision: "confirmed",
-                          })
-                        }
-                      >
-                        <CheckCircle2 className="h-4 w-4" /> Confirmed
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="destructive"
-                        disabled={reviewPendingAppointment.isPending}
-                        onClick={() =>
-                          reviewPendingAppointment.mutate({
-                            appointmentId: n.appointment_id!,
-                            decision: "rejected",
-                          })
-                        }
-                      >
-                        <CircleX className="h-4 w-4" /> Rejected
-                      </Button>
-                    </>
+        {rows.map((n) => {
+          const isServiceProgress = isServiceProgressNotification(n.type);
+          const canStartService =
+            n.type === "service_arrival" &&
+            n.appointments?.status === "confirmed" &&
+            !n.appointments.service_started_at;
+          const canCompleteService =
+            n.type === "service_completion" &&
+            n.appointments?.status === "in_progress" &&
+            Boolean(n.appointments.service_started_at) &&
+            !n.appointments.service_ended_at;
+          const arrivalSnoozes = n.appointments?.arrival_notification_snooze_count ?? 0;
+
+          return (
+            <Card
+              key={n.id}
+              className={cn(
+                "border-border/70 bg-card/60",
+                !n.is_read && "border-primary/50 bg-primary/5",
+              )}
+            >
+              <CardContent className="flex flex-wrap items-start gap-4 p-4">
+                <BellRing
+                  className={cn(
+                    "mt-0.5 h-5 w-5",
+                    n.is_read ? "text-muted-foreground" : "text-primary",
                   )}
-                {n.appointment_id &&
-                  n.type === "reschedule_request" &&
-                  n.appointments?.pending_reschedule_request_id && (
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-medium">{n.title}</p>
+                  {n.message && <p className="mt-1 text-sm text-muted-foreground">{n.message}</p>}
+                  <p className="mt-1 text-[11px] tracking-wider text-muted-foreground uppercase">
+                    {new Date(n.created_at).toLocaleString("en-PH", { timeZone: "Asia/Manila" })}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {n.appointment_id && canStartService && (
                     <>
                       <Button
                         size="sm"
                         className="bg-emerald-600 text-white hover:bg-emerald-700"
-                        disabled={
-                          reviewRescheduleRequest.isPending ||
-                          (n.appointments.reschedule_count ?? 0) >= 3
-                        }
+                        disabled={updateServiceProgress.isPending}
                         onClick={() =>
-                          reviewRescheduleRequest.mutate({
+                          updateServiceProgress.mutate({
                             appointmentId: n.appointment_id!,
-                            decision: "confirmed",
+                            action: "start",
                           })
                         }
                       >
-                        <CheckCircle2 className="h-4 w-4" /> Confirm
+                        <Play className="h-4 w-4" /> In Progress
                       </Button>
-                      {(n.appointments.reschedule_count ?? 0) >= 3 && (
-                        <p className="basis-full text-xs text-destructive">
-                          Maximum of 3 reschedules reached. This request can only be rejected.
-                        </p>
+                      {arrivalSnoozes >= 3 ? (
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          disabled={updateServiceProgress.isPending}
+                          onClick={() =>
+                            setNoShowTarget({
+                              appointmentId: n.appointment_id!,
+                              referenceCode: n.appointments?.reference_code ?? "this appointment",
+                            })
+                          }
+                        >
+                          <CircleX className="h-4 w-4" /> No-Show
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={updateServiceProgress.isPending}
+                          onClick={() =>
+                            updateServiceProgress.mutate({
+                              appointmentId: n.appointment_id!,
+                              action: "snooze_arrival",
+                            })
+                          }
+                        >
+                          <Clock3 className="h-4 w-4" /> Snooze 5 min
+                        </Button>
                       )}
+                    </>
+                  )}
+                  {n.appointment_id && canCompleteService && (
+                    <>
                       <Button
                         size="sm"
-                        variant="destructive"
-                        disabled={reviewRescheduleRequest.isPending}
+                        className="bg-emerald-600 text-white hover:bg-emerald-700"
+                        disabled={updateServiceProgress.isPending}
                         onClick={() =>
-                          reviewRescheduleRequest.mutate({
+                          updateServiceProgress.mutate({
                             appointmentId: n.appointment_id!,
-                            decision: "rejected",
+                            action: "complete",
                           })
                         }
                       >
-                        <CircleX className="h-4 w-4" /> Reject
+                        <CheckCircle2 className="h-4 w-4" /> Completed
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={updateServiceProgress.isPending}
+                        onClick={() =>
+                          updateServiceProgress.mutate({
+                            appointmentId: n.appointment_id!,
+                            action: "snooze_completion",
+                          })
+                        }
+                      >
+                        <Clock3 className="h-4 w-4" /> Snooze 5 min
                       </Button>
                     </>
                   )}
-                {n.type === "customer_cancellation_threshold" && n.appointments?.phone && (
+                  {n.appointment_id &&
+                    n.type !== "reschedule_request" &&
+                    n.appointments?.status === "pending" &&
+                    !n.appointments.pending_reschedule_request_id && (
+                      <>
+                        <Button
+                          size="sm"
+                          className="bg-emerald-600 text-white hover:bg-emerald-700"
+                          disabled={reviewPendingAppointment.isPending}
+                          onClick={() =>
+                            reviewPendingAppointment.mutate({
+                              appointmentId: n.appointment_id!,
+                              decision: "confirmed",
+                            })
+                          }
+                        >
+                          <CheckCircle2 className="h-4 w-4" /> Confirmed
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          disabled={reviewPendingAppointment.isPending}
+                          onClick={() =>
+                            reviewPendingAppointment.mutate({
+                              appointmentId: n.appointment_id!,
+                              decision: "rejected",
+                            })
+                          }
+                        >
+                          <CircleX className="h-4 w-4" /> Rejected
+                        </Button>
+                      </>
+                    )}
+                  {n.appointment_id &&
+                    n.type === "reschedule_request" &&
+                    n.appointments?.pending_reschedule_request_id && (
+                      <>
+                        <Button
+                          size="sm"
+                          className="bg-emerald-600 text-white hover:bg-emerald-700"
+                          disabled={
+                            reviewRescheduleRequest.isPending ||
+                            (n.appointments.reschedule_count ?? 0) >= 3
+                          }
+                          onClick={() =>
+                            reviewRescheduleRequest.mutate({
+                              appointmentId: n.appointment_id!,
+                              decision: "confirmed",
+                            })
+                          }
+                        >
+                          <CheckCircle2 className="h-4 w-4" /> Confirm
+                        </Button>
+                        {(n.appointments.reschedule_count ?? 0) >= 3 && (
+                          <p className="basis-full text-xs text-destructive">
+                            Maximum of 3 reschedules reached. This request can only be rejected.
+                          </p>
+                        )}
+                        <Button
+                          size="sm"
+                          variant="destructive"
+                          disabled={reviewRescheduleRequest.isPending}
+                          onClick={() =>
+                            reviewRescheduleRequest.mutate({
+                              appointmentId: n.appointment_id!,
+                              decision: "rejected",
+                            })
+                          }
+                        >
+                          <CircleX className="h-4 w-4" /> Reject
+                        </Button>
+                      </>
+                    )}
+                  {n.type === "customer_cancellation_threshold" && n.appointments?.phone && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        const customerPhone = n.appointments?.phone;
+                        if (!customerPhone) return;
+                        if (!n.is_read) markOne.mutate(n.id);
+                        void navigate({
+                          to: "/admin/customers",
+                          search: { phone: customerPhone },
+                        });
+                      }}
+                    >
+                      Review customer history
+                    </Button>
+                  )}
                   <Button
                     size="sm"
                     variant="outline"
+                    disabled={!n.appointment_id || viewAppointment.isPending}
                     onClick={() => {
-                      const customerPhone = n.appointments?.phone;
-                      if (!customerPhone) return;
-                      if (!n.is_read) markOne.mutate(n.id);
-                      void navigate({
-                        to: "/admin/customers",
-                        search: { phone: customerPhone },
+                      if (!n.appointment_id) return;
+                      viewAppointment.mutate({
+                        id: n.id,
+                        isRead: n.is_read,
+                        appointmentId: n.appointment_id,
+                        keepActive: isServiceProgress,
                       });
                     }}
                   >
-                    Review customer history
+                    View appointment
                   </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={!n.appointment_id || viewAppointment.isPending}
-                  onClick={() => {
-                    if (!n.appointment_id) return;
-                    viewAppointment.mutate({
-                      id: n.id,
-                      isRead: n.is_read,
-                      appointmentId: n.appointment_id,
-                    });
-                  }}
-                >
-                  View appointment
-                </Button>
-                {!n.is_read && (
-                  <Button size="sm" variant="ghost" onClick={() => markOne.mutate(n.id)}>
-                    Mark read
-                  </Button>
-                )}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  disabled={deleteNotification.isPending}
-                  onClick={() => setDeleteTarget(n.id)}
-                  title="Remove notification"
-                >
-                  <Trash2 className="h-4 w-4 text-destructive" />
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
-        ))}
+                  {!n.is_read && !isServiceProgress && (
+                    <Button size="sm" variant="ghost" onClick={() => markOne.mutate(n.id)}>
+                      Mark read
+                    </Button>
+                  )}
+                  {!isServiceProgress && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={deleteNotification.isPending}
+                      onClick={() => setDeleteTarget(n.id)}
+                      title="Remove notification"
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  )}
+                </div>
+              </CardContent>
+            </Card>
+          );
+        })}
         {list.isError ? (
           <Card className="border-destructive/40 bg-destructive/5">
             <CardContent className="p-10 text-center text-sm text-destructive">

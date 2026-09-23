@@ -179,8 +179,11 @@ export type Database = {
           booking_request_id: string | null;
           cancelled_at: string | null;
           archived_at: string | null;
+          arrival_notification_snooze_count: number;
+          arrival_notification_snoozed_until: string | null;
           created_at: string;
           booking_duration_minutes: number;
+          completion_notification_snoozed_until: string | null;
           customer_name: string;
           first_name: string | null;
           id: string;
@@ -205,6 +208,8 @@ export type Database = {
           reschedule_count: number;
           rescheduled_from_appointment_id: string | null;
           rescheduled_to_appointment_id: string | null;
+          service_ended_at: string | null;
+          service_started_at: string | null;
           start_time: string;
           status: string;
           terms_accepted: boolean;
@@ -218,8 +223,11 @@ export type Database = {
           booking_request_id?: string | null;
           cancelled_at?: string | null;
           archived_at?: string | null;
+          arrival_notification_snooze_count?: number;
+          arrival_notification_snoozed_until?: string | null;
           created_at?: string;
           booking_duration_minutes?: number;
+          completion_notification_snoozed_until?: string | null;
           customer_name: string;
           first_name?: string | null;
           id?: string;
@@ -244,6 +252,8 @@ export type Database = {
           reschedule_count?: number;
           rescheduled_from_appointment_id?: string | null;
           rescheduled_to_appointment_id?: string | null;
+          service_ended_at?: string | null;
+          service_started_at?: string | null;
           start_time: string;
           status?: string;
           terms_accepted?: boolean;
@@ -257,8 +267,11 @@ export type Database = {
           booking_request_id?: string | null;
           cancelled_at?: string | null;
           archived_at?: string | null;
+          arrival_notification_snooze_count?: number;
+          arrival_notification_snoozed_until?: string | null;
           created_at?: string;
           booking_duration_minutes?: number;
+          completion_notification_snoozed_until?: string | null;
           customer_name?: string;
           first_name?: string | null;
           id?: string;
@@ -283,6 +296,8 @@ export type Database = {
           reschedule_count?: number;
           rescheduled_from_appointment_id?: string | null;
           rescheduled_to_appointment_id?: string | null;
+          service_ended_at?: string | null;
+          service_started_at?: string | null;
           start_time?: string;
           status?: string;
           terms_accepted?: boolean;
@@ -1033,6 +1048,13 @@ export type Database = {
         };
         Returns: boolean;
       };
+      manage_appointment_service_progress: {
+        Args: {
+          p_action: string;
+          p_appointment_id: string;
+        };
+        Returns: undefined;
+      };
       get_admin_customers_page: {
         Args: {
           p_limit?: number;
@@ -1067,6 +1089,10 @@ export type Database = {
           p_target_label: string;
         };
         Returns: string;
+      };
+      sync_service_progress_notifications: {
+        Args: Record<PropertyKey, never>;
+        Returns: number;
       };
     };
     Enums: {

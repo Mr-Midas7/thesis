@@ -506,6 +506,8 @@ function AppointmentsPage() {
       qc.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
       qc.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
       qc.invalidateQueries({ queryKey: ["archived-appointments"], exact: false });
+      qc.invalidateQueries({ queryKey: ["notifications"] });
+      qc.invalidateQueries({ queryKey: ["unread-notifications"] });
     },
     onError: (err: Error) => {
       setEditErrors((current) => ({
@@ -677,6 +679,22 @@ function AppointmentsPage() {
     }
     if (!editForm.startTime) {
       nextErrors.startTime = "Select an appointment time.";
+    }
+    const statusChanged = editForm.status !== selectedAppointment.status;
+    if (
+      statusChanged &&
+      editForm.status === "completed" &&
+      !selectedAppointment.service_started_at
+    ) {
+      nextErrors.status = "Start the service before marking the appointment completed.";
+    }
+    if (
+      statusChanged &&
+      editForm.status === "no_show" &&
+      (selectedAppointment.service_started_at ||
+        selectedAppointment.arrival_notification_snooze_count < 3)
+    ) {
+      nextErrors.status = "Mark an appointment as no-show only after three arrival snoozes.";
     }
 
     if (scheduleHasChanged) {
@@ -1269,6 +1287,7 @@ function AppointmentsPage() {
                     />
                   </div>
                 </section>
+                <ServiceProgress appointment={selectedAppointment} />
                 {rescheduleHistory.data && rescheduleHistory.data.length > 0 && (
                   <section className="rounded-lg border border-border/70 p-4">
                     <h3 className="font-medium">Reschedule history</h3>
@@ -1457,6 +1476,45 @@ function AppointmentReadOnlyDetails({
   );
 }
 
+function ServiceProgress({ appointment }: { appointment: AppointmentDetails }) {
+  const serviceDurationMinutes = appointment.appointment_services.reduce(
+    (total, service) => total + service.duration_minutes,
+    0,
+  );
+
+  return (
+    <section className="rounded-lg border border-border/70 p-4">
+      <h3 className="font-medium">Service progress</h3>
+      <div className="mt-3 grid gap-4 text-sm sm:grid-cols-3">
+        <AppointmentDetail
+          label="Service Start"
+          value={
+            appointment.service_started_at
+              ? formatBookedOn(appointment.service_started_at)
+              : "Not started"
+          }
+        />
+        <AppointmentDetail
+          label="Service End"
+          value={
+            appointment.service_ended_at
+              ? formatBookedOn(appointment.service_ended_at)
+              : "Not completed"
+          }
+        />
+        <AppointmentDetail
+          label="Service Duration"
+          value={
+            serviceDurationMinutes > 0
+              ? formatServiceDuration(serviceDurationMinutes)
+              : "Not available"
+          }
+        />
+      </div>
+    </section>
+  );
+}
+
 function AppointmentDetail({
   label,
   value,
@@ -1484,6 +1542,14 @@ function errorsForAppointmentUpdate(error: Error): AppointmentEditErrors {
   }
   if (message.includes("selected crew member")) {
     return { assignedCrew: "The selected crew member is not available for this appointment." };
+  }
+  if (
+    message.includes("Start the service") ||
+    message.includes("no-show") ||
+    message.includes("completed service") ||
+    message.includes("pre-service appointment")
+  ) {
+    return { status: message };
   }
   if (message.includes("service")) {
     return { services: "One or more selected services are not available." };
@@ -1680,6 +1746,15 @@ function formatBookedOn(createdAt: string) {
   }).format(date);
 
   return `${datePart.replace(/^([A-Za-z]{3})/, "$1.")} - ${timePart}`;
+}
+
+function formatServiceDuration(minutes: number) {
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+
+  if (hours === 0) return `${remainingMinutes} min`;
+  if (remainingMinutes === 0) return `${hours} hr`;
+  return `${hours} hr ${remainingMinutes} min`;
 }
 
 function buildAppointmentDateRange(
