@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, Pencil, RotateCcw } from "lucide-react";
 import { forwardRef, useImperativeHandle, useMemo, useState } from "react";
-import { toast } from "sonner";
 
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
 import {
@@ -76,6 +75,7 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
     const [modelSearch, setModelSearch] = useState("");
     const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
     const [saveConfirmationOpen, setSaveConfirmationOpen] = useState(false);
+    const [actionError, setActionError] = useState<string | null>(null);
 
     const catalog = useQuery({
       queryKey: ["admin-motorcycle-catalog"],
@@ -135,9 +135,6 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
         return result.data as MotorcycleCatalogItem;
       },
       onSuccess: () => {
-        toast.success(
-          editing ? "Motorcycle catalog item updated." : "Motorcycle catalog item added.",
-        );
         setSaveConfirmationOpen(false);
         closeEditor();
         invalidateCatalogQueries(queryClient);
@@ -148,7 +145,7 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
         setFormErrors({
           model: duplicate
             ? "This brand and model are already in the catalog."
-            : `Could not save this catalog item: ${error.message}`,
+            : "Could not save this catalog item. Please try again.",
         });
       },
     });
@@ -162,11 +159,13 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
         if (error) throw error;
       },
       onSuccess: () => {
-        toast.success("Motorcycle catalog item archived.");
+        setActionError(null);
         invalidateCatalogQueries(queryClient);
       },
-      onError: (error: Error) =>
-        toast.error(`Could not archive this catalog item: ${error.message}`),
+      onError: (error: Error) => {
+        console.error("Could not archive motorcycle catalog item:", error);
+        setActionError("Could not archive this motorcycle catalog item. Please try again.");
+      },
     });
 
     useImperativeHandle(ref, () => ({ openNew }));
@@ -243,10 +242,7 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
         <div className="mb-4 flex flex-wrap items-end gap-4">
           <div className="space-y-1.5">
             <Label className="text-sm">Brand</Label>
-            <Select
-              value={filterBrand}
-              onValueChange={setFilterBrand}
-            >
+            <Select value={filterBrand} onValueChange={setFilterBrand}>
               <SelectTrigger className="w-full sm:w-48">
                 <SelectValue placeholder="All brands" />
               </SelectTrigger>
@@ -286,6 +282,12 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
             </Button>
           )}
         </div>
+
+        {actionError && (
+          <p role="alert" className="mb-4 text-sm text-destructive">
+            {actionError}
+          </p>
+        )}
 
         <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && closeEditor()}>
           <DialogContent>
@@ -356,11 +358,7 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
               <Button type="button" variant="outline" onClick={closeEditor}>
                 Close
               </Button>
-              <Button
-                type="button"
-                onClick={requestSave}
-                disabled={save.isPending}
-              >
+              <Button type="button" onClick={requestSave} disabled={save.isPending}>
                 {save.isPending ? "Saving..." : editing ? "Update" : "Save motorcycle"}
               </Button>
             </DialogFooter>

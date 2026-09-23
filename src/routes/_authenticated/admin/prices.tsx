@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { ArrowLeft, Eye, Pencil } from "lucide-react";
 import { type ReactNode, useEffect, useState } from "react";
-import { toast } from "sonner";
 
 import { PageHeader } from "@/components/admin/page-header";
 import {
@@ -335,7 +334,6 @@ function PriceCatalog({ table, archived }: { table: PriceTableName; archived: bo
       if (historyError) throw historyError;
     },
     onSuccess: (_, variables) => {
-      toast.success("Price updated and recorded in history");
       setSaveTarget(null);
       setDrafts((current) => {
         const next = { ...current };
@@ -353,7 +351,7 @@ function PriceCatalog({ table, archived }: { table: PriceTableName; archived: bo
       setSaveTarget(null);
       setPriceErrors((current) => ({
         ...current,
-        [variables.configuration.id]: { form: `Could not save price: ${error.message}` },
+        [variables.configuration.id]: { form: "Could not save this price. Please try again." },
       }));
     },
   });

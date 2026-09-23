@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { BellRing, CheckCheck, CheckCircle2, CircleX, Trash2 } from "lucide-react";
-import { toast } from "sonner";
+import { useState } from "react";
 
 import { PageHeader } from "@/components/admin/page-header";
 import {
@@ -27,6 +27,8 @@ export const Route = createFileRoute("/_authenticated/admin/notifications")({
 function NotificationsPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
 
   const list = useQuery({
     queryKey: ["notifications"],
@@ -53,7 +55,11 @@ function NotificationsPage() {
       const { error } = await supabase.from("notifications").update({ is_read: true }).eq("id", id);
       if (error) throw error;
     },
-    onSuccess: refresh,
+    onSuccess: () => {
+      setActionError(null);
+      refresh();
+    },
+    onError: () => setActionError("Could not mark this notification as read. Please try again."),
   });
 
   const markAll = useMutation({
@@ -65,10 +71,10 @@ function NotificationsPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("All notifications marked as read.");
+      setActionError(null);
       refresh();
     },
-    onError: () => toast.error("Could not update notifications."),
+    onError: () => setActionError("Could not update notifications. Please try again."),
   });
 
   const viewAppointment = useMutation({
@@ -78,13 +84,14 @@ function NotificationsPage() {
       if (error) throw error;
     },
     onSuccess: async (_, notification) => {
+      setActionError(null);
       refresh();
       await navigate({
         to: "/admin/appointments",
         search: { appointmentId: notification.appointmentId },
       });
     },
-    onError: () => toast.error("Could not open this appointment. Please try again."),
+    onError: () => setActionError("Could not open this appointment. Please try again."),
   });
 
   const deleteNotification = useMutation({
@@ -93,12 +100,12 @@ function NotificationsPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Notification removed.");
+      setActionError(null);
       refresh();
     },
     onError: (err: Error) => {
       console.error("Delete notification failed:", err);
-      toast.error(`Could not remove notification: ${err.message}`);
+      setActionError("Could not remove this notification. Please try again.");
     },
   });
 
@@ -108,12 +115,12 @@ function NotificationsPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("All read notifications removed.");
+      setActionError(null);
       refresh();
     },
     onError: (err: Error) => {
       console.error("Remove read notifications failed:", err);
-      toast.error(`Could not remove read notifications: ${err.message}`);
+      setActionError("Could not remove the read notifications. Please try again.");
     },
   });
 
@@ -132,11 +139,7 @@ function NotificationsPage() {
       if (error) throw error;
     },
     onSuccess: (_, { decision }) => {
-      toast.success(
-        decision === "confirmed"
-          ? "Appointment confirmed and an available crew member was assigned."
-          : "Appointment rejected.",
-      );
+      setActionError(null);
       refresh();
       queryClient.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
@@ -145,7 +148,7 @@ function NotificationsPage() {
     },
     onError: (err: Error) => {
       console.error("Appointment review failed:", err);
-      toast.error(err.message || "Could not review this appointment.");
+      setActionError("Could not review this appointment. Please try again.");
     },
   });
 
@@ -164,11 +167,7 @@ function NotificationsPage() {
       if (error) throw error;
     },
     onSuccess: (_, { decision }) => {
-      toast.success(
-        decision === "confirmed"
-          ? "Reschedule request confirmed. A new linked booking was created with its own reference code."
-          : "Reschedule request rejected. The original appointment remains reserved.",
-      );
+      setActionError(null);
       refresh();
       queryClient.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
@@ -176,7 +175,7 @@ function NotificationsPage() {
     },
     onError: (err: Error) => {
       console.error("Reschedule review failed:", err);
-      toast.error(err.message || "Could not review this reschedule request.");
+      setActionError("Could not review this reschedule request. Please try again.");
     },
   });
 
@@ -232,6 +231,38 @@ function NotificationsPage() {
           </div>
         }
       />
+
+      {actionError && (
+        <p role="alert" className="mb-4 text-sm text-destructive">
+          {actionError}
+        </p>
+      )}
+
+      <AlertDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(nextOpen) => !nextOpen && setDeleteTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this notification?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This notification will be permanently removed from the admin inbox.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteNotification.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteNotification.isPending}
+              onClick={() => {
+                if (deleteTarget) deleteNotification.mutate(deleteTarget);
+                setDeleteTarget(null);
+              }}
+            >
+              Remove notification
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <div className="space-y-3">
         {rows.map((n) => (
@@ -370,7 +401,8 @@ function NotificationsPage() {
                 <Button
                   size="sm"
                   variant="ghost"
-                  onClick={() => deleteNotification.mutate(n.id)}
+                  disabled={deleteNotification.isPending}
+                  onClick={() => setDeleteTarget(n.id)}
                   title="Remove notification"
                 >
                   <Trash2 className="h-4 w-4 text-destructive" />
@@ -382,7 +414,7 @@ function NotificationsPage() {
         {list.isError ? (
           <Card className="border-destructive/40 bg-destructive/5">
             <CardContent className="p-10 text-center text-sm text-destructive">
-              Could not load notifications. {(list.error as Error).message || "Please try again."}
+              Could not load notifications. Please try again.
             </CardContent>
           </Card>
         ) : (

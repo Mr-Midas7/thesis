@@ -1,7 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, Pencil, RotateCcw } from "lucide-react";
 import { forwardRef, useImperativeHandle, useMemo, useState } from "react";
-import { toast } from "sonner";
 
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
 import { Badge } from "@/components/ui/badge";
@@ -88,6 +87,7 @@ export const ProductManager = forwardRef<ProductManagerHandle, { category: "part
     const [uploadPreview, setUploadPreview] = useState<string | null>(null);
     const [uploading, setUploading] = useState(false);
     const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
+    const [actionError, setActionError] = useState<string | null>(null);
 
     useImperativeHandle(ref, () => ({ openNew }));
 
@@ -161,13 +161,12 @@ export const ProductManager = forwardRef<ProductManagerHandle, { category: "part
         return result.data as Product;
       },
       onSuccess: () => {
-        toast.success(editing ? "Product updated." : "Product added.");
         closeEditor();
         invalidateProductQueries(queryClient);
       },
       onError: (error: Error) => {
         console.error("Could not save product:", error);
-        setFormErrors({ name: `Could not save this product: ${error.message}` });
+        setFormErrors({ name: "Could not save this product. Please try again." });
       },
     });
 
@@ -180,12 +179,12 @@ export const ProductManager = forwardRef<ProductManagerHandle, { category: "part
         if (error) throw error;
       },
       onSuccess: () => {
-        toast.success("Product archived.");
+        setActionError(null);
         invalidateProductQueries(queryClient);
       },
       onError: (error: Error) => {
         console.error("Could not archive product:", error);
-        toast.error(`Could not archive this product: ${error.message}`);
+        setActionError("Could not archive this product. Please try again.");
       },
     });
 
@@ -318,6 +317,12 @@ export const ProductManager = forwardRef<ProductManagerHandle, { category: "part
             </Button>
           )}
         </div>
+
+        {actionError && (
+          <p role="alert" className="mb-4 text-sm text-destructive">
+            {actionError}
+          </p>
+        )}
 
         <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && closeEditor()}>
           <DialogContent>

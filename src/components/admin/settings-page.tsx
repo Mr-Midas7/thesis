@@ -13,7 +13,6 @@ import {
   UserRound,
 } from "lucide-react";
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
 
 import { PageHeader } from "@/components/admin/page-header";
 import {
@@ -318,7 +317,6 @@ export function SettingsPage() {
           console.error("Settings activity log failed", error);
         }
       }
-      toast.success(`${tabLabels[section]} saved.`);
     },
     onError: (error: Error, section) => {
       const message = error.message || "Could not save settings.";
@@ -396,7 +394,6 @@ export function SettingsPage() {
           console.error("Account settings activity log failed", error);
         }
       }
-      toast.success("Account changes saved. Email updates may require confirmation.");
     },
     onError: (error: Error) => {
       const message = error.message || "Could not save account changes.";

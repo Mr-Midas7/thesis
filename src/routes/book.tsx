@@ -3,7 +3,6 @@ import { createFileRoute, Link, useSearch } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { CheckCircle2, Copy, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
 import { format, parseISO } from "date-fns";
 import { z } from "zod";
 
@@ -230,6 +229,7 @@ function BookPage() {
     startTime: string;
     continuationSegments?: Array<{ date: string; startTime: string; durationMinutes: number }>;
   } | null>(null);
+  const [referenceCopyStatus, setReferenceCopyStatus] = useState<"copied" | "error" | null>(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [bookingRequestId, setBookingRequestId] = useState(() => crypto.randomUUID());
   const isReschedule = Boolean(search.reschedule && search.phone);
@@ -579,7 +579,8 @@ function BookPage() {
       } else if (msg.includes("validation") || msg.includes("invalid")) {
         scheduleError = "Some fields have invalid values. Please review the form.";
       } else {
-        scheduleError = `Booking failed: ${err.message}. Please review your details and try again.`;
+        scheduleError =
+          "We could not submit your booking. Please review your details and try again.";
       }
       setErrors((current) => ({ ...current, schedule: scheduleError }));
       availability.refetch();
@@ -726,13 +727,22 @@ function BookPage() {
                 <Button
                   variant="outline"
                   className="mt-4"
-                  onClick={() => {
-                    navigator.clipboard.writeText(result.reference);
-                    toast.success("Reference code copied");
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(result.reference);
+                      setReferenceCopyStatus("copied");
+                    } catch {
+                      setReferenceCopyStatus("error");
+                    }
                   }}
                 >
-                  <Copy /> Copy code
+                  <Copy /> {referenceCopyStatus === "copied" ? "Copied" : "Copy code"}
                 </Button>
+                {referenceCopyStatus === "error" && (
+                  <p className="mt-2 text-xs text-destructive" role="alert">
+                    Could not copy the code automatically. Please copy it manually.
+                  </p>
+                )}
               </div>
               <div className="mt-6 space-y-1 text-sm text-muted-foreground">
                 <p>
@@ -1055,14 +1065,16 @@ function BookPage() {
                     disabled={isReschedule}
                     onClick={() => {
                       if (!checked && serviceIds.length >= MAX_BOOKING_SERVICE_SELECTIONS) {
-                        toast.error(
-                          `You can select up to ${MAX_BOOKING_SERVICE_SELECTIONS} services per appointment.`,
-                        );
+                        setErrors((current) => ({
+                          ...current,
+                          services: `You can select up to ${MAX_BOOKING_SERVICE_SELECTIONS} services per appointment.`,
+                        }));
                         return;
                       }
                       setServiceIds((prev) =>
                         checked ? prev.filter((id) => id !== s.id) : [...prev, s.id],
                       );
+                      setErrors((current) => ({ ...current, services: undefined }));
                       setDate("");
                       setStartTime("");
                       setMultiDayContinuationAccepted(false);

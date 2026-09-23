@@ -4,9 +4,18 @@ import { format } from "date-fns";
 import { CalendarRange, ChevronDown, Filter, Loader2, Plus, RotateCcw } from "lucide-react";
 import { useMemo, useState } from "react";
 import type { DateRange } from "react-day-picker";
-import { toast } from "sonner";
 
 import { PageHeader } from "@/components/admin/page-header";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -321,6 +330,8 @@ function AvailabilityPage() {
   const [assignmentErrors, setAssignmentErrors] = useState<
     Partial<Record<"dates" | "mechanic" | "customStart" | "customEnd", string | undefined>>
   >({});
+  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const crew = useQuery({
     queryKey: ["crew-active"],
@@ -379,11 +390,6 @@ function AvailabilityPage() {
       if (error) throw error;
     },
     onSuccess: (_, payload) => {
-      toast.success(
-        payload.schedule_dates.length === 1
-          ? "Working day scheduled"
-          : `${payload.schedule_dates.length} working days scheduled`,
-      );
       qc.invalidateQueries({ queryKey: ["crew-schedules-all"] });
     },
     onError: (err: Error) => {
@@ -399,7 +405,7 @@ function AvailabilityPage() {
       } else {
         console.error("Schedule save failed:", err);
         setAssignmentErrors({
-          dates: `Could not save the schedule. Please try again: ${err.message}`,
+          dates: "Could not save the schedule. Please try again.",
         });
       }
     },
@@ -411,16 +417,16 @@ function AvailabilityPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Schedule removed");
+      setActionError(null);
       qc.invalidateQueries({ queryKey: ["crew-schedules-all"] });
     },
     onError: (err: Error) => {
       const msg = err.message.toLowerCase();
       if (msg.includes("not found") || msg.includes("no rows")) {
-        toast.error("This schedule no longer exists. It may have been removed already.");
+        setActionError("This schedule no longer exists. Refresh the list and try again.");
       } else {
         console.error("Schedule delete failed:", err);
-        toast.error(`Could not remove the schedule. Please try again: ${err.message}`);
+        setActionError("Could not remove this schedule. Please try again.");
       }
     },
   });
@@ -591,6 +597,11 @@ function AvailabilityPage() {
           </Button>
         }
       />
+      {actionError && (
+        <p role="alert" className="mb-4 text-sm text-destructive">
+          {actionError}
+        </p>
+      )}
 
       <Card className="border-border/70 bg-card/60">
         <CardHeader>
@@ -722,7 +733,7 @@ function AvailabilityPage() {
                                   {w.is_date_assignment && (
                                     <button
                                       type="button"
-                                      onClick={() => deleteSchedule.mutate(w.id)}
+                                      onClick={() => setDeleteTarget(w.id)}
                                       className="rounded px-2 py-1 text-xs text-destructive hover:underline"
                                     >
                                       Remove assignment
@@ -748,6 +759,33 @@ function AvailabilityPage() {
           </div>
         </CardContent>
       </Card>
+
+      <AlertDialog
+        open={Boolean(deleteTarget)}
+        onOpenChange={(nextOpen) => !nextOpen && setDeleteTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Remove this crew assignment?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This removes the selected working-day assignment. You can add it again later if
+              needed.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteSchedule.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteSchedule.isPending}
+              onClick={() => {
+                if (deleteTarget) deleteSchedule.mutate(deleteTarget);
+                setDeleteTarget(null);
+              }}
+            >
+              Remove assignment
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Assign crew dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>

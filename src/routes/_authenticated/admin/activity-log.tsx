@@ -4,7 +4,6 @@ import { format } from "date-fns";
 import { CalendarRange, ChevronDown, Download, FileText, RefreshCw, Search } from "lucide-react";
 import type { DateRange } from "react-day-picker";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
 
 import { PageHeader } from "@/components/admin/page-header";
 import { ActiveFilterChips } from "@/components/admin/active-filter-chips";
@@ -126,6 +125,7 @@ function ActivityLogPage() {
   const [activityCustomDateRange, setActivityCustomDateRange] = useState<DateRange>();
   const [page, setPage] = useState(0);
   const [pendingExport, setPendingExport] = useState<ExportFormat | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
   const today = manilaNow().date;
   const activityDateRange = useMemo(
@@ -285,7 +285,6 @@ function ActivityLogPage() {
       align: "center",
     });
     doc.save(`fake-rider-activity-log-${fileDate()}.pdf`);
-    toast.success("Activity log PDF exported.");
   }
 
   async function exportDocx() {
@@ -395,11 +394,11 @@ function ActivityLogPage() {
       ],
     });
     downloadFile(await Packer.toBlob(document), `fake-rider-activity-log-${fileDate()}.docx`);
-    toast.success("Activity log DOCX exported.");
   }
 
   async function confirmExport() {
     try {
+      setExportError(null);
       if (pendingExport === "pdf") await exportPdf();
       if (pendingExport === "docx") await exportDocx();
       if (pendingExport) {
@@ -412,7 +411,7 @@ function ActivityLogPage() {
         });
       }
     } catch {
-      toast.error("Could not create the activity log export. Please try again.");
+      setExportError("Could not create the activity log export. Please try again.");
     } finally {
       setPendingExport(null);
     }
@@ -446,6 +445,12 @@ function ActivityLogPage() {
           </div>
         }
       />
+
+      {exportError && (
+        <p role="alert" className="mb-4 text-sm text-destructive">
+          {exportError}
+        </p>
+      )}
 
       <Card className="mb-6 border-border/70 bg-card/60">
         <CardContent className="grid gap-4 p-5 lg:grid-cols-[minmax(15rem,2fr)_minmax(9rem,1fr)_minmax(10rem,1.1fr)_minmax(11rem,1.25fr)]">

@@ -16,7 +16,6 @@ import {
 import type { LucideIcon } from "lucide-react";
 import type { DateRange } from "react-day-picker";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
 
 import exportLogoUrl from "@/assets/export-logo.png";
 import { PaginationControls } from "@/components/admin/pagination-controls";
@@ -162,6 +161,7 @@ function ReportsPage() {
   const [filters, setFilters] = useState<ReportFilters>(initialFilters);
   const [page, setPage] = useState(0);
   const [pendingExport, setPendingExport] = useState<ExportType | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
   const reportKind: ReportKind = "bookings";
   const { from, to, status, category, serviceName } = filters;
   const customDateError =
@@ -265,6 +265,7 @@ function ReportsPage() {
   async function confirmExport() {
     if (!pendingExport) return;
     try {
+      setExportError(null);
       const allRows = await getAllReportRows({
         reportKind,
         from,
@@ -285,9 +286,8 @@ function ReportsPage() {
         summary: `Exported ${allRows.total} ${reportKind === "services" ? "service entries" : "bookings"} as ${pendingExport.toUpperCase()}.`,
         changedFields: ["report_type", "date_range", "export_format"],
       });
-      toast.success("Report exported.");
     } catch {
-      toast.error("Could not create this report export. Please try again.");
+      setExportError("Could not create this report export. Please try again.");
     } finally {
       setPendingExport(null);
     }
@@ -331,6 +331,11 @@ function ReportsPage() {
           </DropdownMenu>
         </div>
       </header>
+      {exportError && (
+        <p role="alert" className="mb-5 text-sm text-destructive">
+          {exportError}
+        </p>
+      )}
 
       <Card className="mb-5 border-border/70 bg-card/60">
         <CardContent className="p-4 sm:p-5">

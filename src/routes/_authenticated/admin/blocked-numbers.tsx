@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Archive, Plus } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
 
 import { PageHeader } from "@/components/admin/page-header";
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
@@ -51,6 +50,7 @@ function BlockedNumbersPage() {
   const [reason, setReason] = useState("");
   const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState("");
+  const [archiveError, setArchiveError] = useState<string | null>(null);
 
   const blocked = useQuery({
     queryKey: ["blocked-numbers"],
@@ -95,7 +95,6 @@ function BlockedNumbersPage() {
       return "blocked" as const;
     },
     onSuccess: (result) => {
-      toast.success(result === "restored" ? "Number blocked again" : "Number blocked");
       setPhone("");
       setReason("");
       setOpen(false);
@@ -108,7 +107,7 @@ function BlockedNumbersPage() {
         setPhoneError("This phone number is already blocked.");
       } else {
         console.error("Block failed:", err);
-        setPhoneError(`Could not block the number: ${err.message}`);
+        setPhoneError("Could not block this number. Please try again.");
       }
     },
   });
@@ -125,13 +124,13 @@ function BlockedNumbersPage() {
       qc.setQueryData<BlockedNumber[]>(["blocked-numbers"], (numbers) =>
         numbers?.filter((number) => number.id !== id),
       );
-      toast.success("Blocked number archived");
+      setArchiveError(null);
       qc.invalidateQueries({ queryKey: ["blocked-numbers"], exact: false });
       qc.invalidateQueries({ queryKey: ["archived-blocked-numbers"], exact: false });
     },
     onError: (err: Error) => {
       console.error("Archive failed:", err);
-      toast.error(`Could not archive the blocked number: ${err.message}`);
+      setArchiveError("Could not archive this blocked customer. Please try again.");
     },
   });
 
@@ -165,6 +164,11 @@ function BlockedNumbersPage() {
           </Button>
         }
       />
+      {archiveError && (
+        <p role="alert" className="mb-4 text-sm text-destructive">
+          {archiveError}
+        </p>
+      )}
 
       <Card className="max-w-5xl border-border/70 bg-card/60">
         <CardContent className="overflow-x-auto p-0">

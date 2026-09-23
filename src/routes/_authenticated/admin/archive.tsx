@@ -12,7 +12,6 @@ import {
 } from "lucide-react";
 import { useDeferredValue, useState } from "react";
 import type { DateRange } from "react-day-picker";
-import { toast } from "sonner";
 
 import { PaginationControls } from "@/components/admin/pagination-controls";
 import { Badge } from "@/components/ui/badge";
@@ -111,6 +110,7 @@ function ArchivePage() {
   const [activeTab, setActiveTab] = useState("appointments");
   const [page, setPage] = useState(0);
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: string } | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
   const deferredTerm = useDeferredValue(filters.term);
   const searchTerm = cleanSearchTerm(deferredTerm);
 
@@ -272,14 +272,14 @@ function ArchivePage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Appointment restored.");
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ["archived-appointments"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
     },
     onError: (err: Error) => {
       console.error("Restore failed:", err);
-      toast.error(`Restore failed: ${err.message}`);
+      setActionError("Could not restore this appointment. Please try again.");
     },
   });
 
@@ -289,13 +289,13 @@ function ArchivePage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Service restored.");
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ["archived-services"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-services"], exact: false });
     },
     onError: (err: Error) => {
       console.error("Restore failed:", err);
-      toast.error(`Restore failed: ${err.message}`);
+      setActionError("Could not restore this service. Please try again.");
     },
   });
 
@@ -305,13 +305,13 @@ function ArchivePage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Product restored.");
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ["archived-products"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-products"], exact: false });
     },
     onError: (err: Error) => {
       console.error("Restore failed:", err);
-      toast.error(`Restore failed: ${err.message}`);
+      setActionError("Could not restore this product. Please try again.");
     },
   });
 
@@ -324,7 +324,7 @@ function ArchivePage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Motorcycle catalog item restored.");
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ["archived-motorcycles"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-motorcycle-catalog"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["motorcycle-catalog"], exact: false });
@@ -332,7 +332,7 @@ function ArchivePage() {
     },
     onError: (err: Error) => {
       console.error("Restore failed:", err);
-      toast.error(`Restore failed: ${err.message}`);
+      setActionError("Could not restore this motorcycle catalog item. Please try again.");
     },
   });
 
@@ -345,13 +345,13 @@ function ArchivePage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Crew member restored.");
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ["archived-crew"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["crew-all"], exact: false });
     },
     onError: (err: Error) => {
       console.error("Restore failed:", err);
-      toast.error(`Restore failed: ${err.message}`);
+      setActionError("Could not restore this crew member. Please try again.");
     },
   });
 
@@ -364,13 +364,13 @@ function ArchivePage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Schedule block restored.");
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ["archived-blocks"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["schedule-blocks"], exact: false });
     },
     onError: (err: Error) => {
       console.error("Restore failed:", err);
-      toast.error(`Restore failed: ${err.message}`);
+      setActionError("Could not restore this schedule block. Please try again.");
     },
   });
 
@@ -383,13 +383,13 @@ function ArchivePage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Blocked number restored.");
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ["archived-blocked-numbers"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["blocked-numbers"], exact: false });
     },
     onError: (err: Error) => {
       console.error("Restore failed:", err);
-      toast.error(`Restore failed: ${err.message}`);
+      setActionError("Could not restore this blocked number. Please try again.");
     },
   });
 
@@ -418,7 +418,7 @@ function ArchivePage() {
     },
     onSuccess: () => {
       setDeleteTarget(null);
-      toast.success("Item permanently deleted.");
+      setActionError(null);
       queryClient.invalidateQueries({ queryKey: ["archived-appointments"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["archived-services"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["archived-products"], exact: false });
@@ -442,7 +442,7 @@ function ArchivePage() {
     },
     onError: (err: Error) => {
       console.error("Delete failed:", err);
-      toast.error(`Delete failed: ${err.message}`);
+      setActionError("Could not permanently delete this item. Please try again.");
     },
   });
 
@@ -514,6 +514,11 @@ function ArchivePage() {
           </p>
         </div>
       </header>
+      {actionError && (
+        <p role="alert" className="mb-5 text-sm text-destructive">
+          {actionError}
+        </p>
+      )}
 
       <Card className="mb-5 border-border/70 bg-card/60">
         <CardContent className="p-4 sm:p-5">

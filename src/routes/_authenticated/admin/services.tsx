@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Archive, EllipsisVertical, Eye, Pencil, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { toast } from "sonner";
 
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
 import { PageHeader } from "@/components/admin/page-header";
@@ -119,11 +118,12 @@ function ServicesAdmin() {
   const [editingOverride, setEditingOverride] = useState<number | null>(null);
   const [isCustomCategory, setIsCustomCategory] = useState(false);
   const [formErrors, setFormErrors] = useState<
-    Partial<Record<"name" | "category" | "defaultPrice" | "defaultDuration", string | undefined>>
+    Partial<Record<"name" | "category" | "defaultPrice" | "defaultDuration" | "overrides", string>>
   >({});
   const [filterCategory, setFilterCategory] = useState<string>(ALL_CATEGORIES);
   const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
   const [saveConfirmationOpen, setSaveConfirmationOpen] = useState(false);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
 
   const services = useQuery({
     queryKey: ["admin-services"],
@@ -257,7 +257,6 @@ function ServicesAdmin() {
       }
     },
     onSuccess: () => {
-      toast.success("Service saved");
       setSaveConfirmationOpen(false);
       closeEditor();
       qc.invalidateQueries({ queryKey: ["admin-services"] });
@@ -267,7 +266,8 @@ function ServicesAdmin() {
     },
     onError: (error: Error) => {
       setSaveConfirmationOpen(false);
-      toast.error(`Could not save the service: ${error.message}`);
+      console.error("Could not save service:", error);
+      setFormErrors({ name: "Could not save this service. Please try again." });
     },
   });
 
@@ -280,11 +280,14 @@ function ServicesAdmin() {
       qc.setQueryData<Service[]>(["admin-services"], (items) =>
         items?.filter((service) => service.id !== id),
       );
-      toast.success("Service archived");
+      setArchiveError(null);
       qc.invalidateQueries({ queryKey: ["admin-services"], exact: false });
       qc.invalidateQueries({ queryKey: ["archived-services"], exact: false });
     },
-    onError: (error: Error) => toast.error(`Archive failed: ${error.message}`),
+    onError: (error: Error) => {
+      console.error("Could not archive service:", error);
+      setArchiveError("Could not archive this service. Please try again.");
+    },
   });
 
   function closeEditor() {
@@ -355,10 +358,11 @@ function ServicesAdmin() {
           (!override.id && (!Number.isFinite(override.price) || override.price < 0)),
       )
     ) {
-      toast.error(
-        "Select a catalog brand and model for every model override, with a valid duration and a price for new overrides.",
-      );
-      setFormErrors(nextErrors);
+      setFormErrors({
+        ...nextErrors,
+        overrides:
+          "Select a catalog brand and model for every model override, with a valid duration and a price for new overrides.",
+      });
       return false;
     }
     setFormErrors(nextErrors);
@@ -394,6 +398,12 @@ function ServicesAdmin() {
           </Button>
         }
       />
+
+      {archiveError && (
+        <p role="alert" className="mb-4 text-sm text-destructive">
+          {archiveError}
+        </p>
+      )}
 
       <div className="mb-4 flex flex-wrap items-end gap-4">
         <div className="space-y-1.5">
@@ -700,19 +710,25 @@ function ServicesAdmin() {
                 ...items,
                 { brand: "", model: "", duration_minutes: 60, price: 0 },
               ]);
+              setFormErrors((current) => ({ ...current, overrides: undefined }));
               setEditingOverride(modelOverrides.length);
             }}
             onEdit={setEditingOverride}
             onDone={() => setEditingOverride(null)}
-            onRemove={removeOverride}
-            onChange={(index, changes) =>
+            onRemove={(index) => {
+              removeOverride(index);
+              setFormErrors((current) => ({ ...current, overrides: undefined }));
+            }}
+            onChange={(index, changes) => {
               setModelOverrides((items) =>
                 items.map((item, itemIndex) =>
                   itemIndex === index ? { ...item, ...changes } : item,
                 ),
-              )
-            }
+              );
+              setFormErrors((current) => ({ ...current, overrides: undefined }));
+            }}
           />
+          <FieldError message={formErrors.overrides} />
 
           <DialogFooter>
             <Button type="button" variant="outline" onClick={closeEditor} disabled={save.isPending}>

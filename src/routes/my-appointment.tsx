@@ -4,7 +4,6 @@ import { useServerFn } from "@tanstack/react-start";
 import { CircleAlert, CircleHelp, Loader2, Search } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { useEffect, useMemo, useState } from "react";
-import { toast } from "sonner";
 
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
@@ -244,7 +243,6 @@ function MyAppointment() {
         setAppointmentPreviewError(res.error);
         return;
       }
-      toast.success("Your appointment has been cancelled.");
       search.mutate();
     },
     onError: () =>
@@ -294,30 +292,33 @@ function MyAppointment() {
         date: newDate,
         startTime: newStartTime,
       });
-      toast.success("Your reschedule request has been sent for review.");
       setIsRescheduling(false);
       setRescheduleReviewOpen(false);
       search.mutate();
     },
-    onError: (error: Error) => {
+    onError: () => {
       setRescheduleErrors((current) => ({
         ...current,
-        request: error.message || "We could not submit your reschedule request.",
+        request: "We could not submit your reschedule request. Please try again.",
       }));
     },
   });
 
   function beginReschedule() {
     if (!appt || !["pending", "confirmed"].includes(appt.status)) {
-      toast.error("This appointment can no longer be rescheduled online. Please call the shop.");
+      setAppointmentPreviewError(
+        "This appointment can no longer be rescheduled online. Please call the shop.",
+      );
       return;
     }
     if ((appt?.rescheduleCount ?? 0) >= 3) {
-      toast.error("This appointment has reached the maximum of 3 reschedules.");
+      setAppointmentPreviewError("This appointment has reached the maximum of 3 reschedules.");
       return;
     }
     if (rescheduleServiceIds.length !== (appt?.services.length ?? 0)) {
-      toast.error("The original services are no longer available for online rescheduling.");
+      setAppointmentPreviewError(
+        "The original services are no longer available for online rescheduling.",
+      );
       return;
     }
     setNewDate("");

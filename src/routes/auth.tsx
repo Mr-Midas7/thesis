@@ -2,7 +2,6 @@ import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { ArrowLeft, Eye, EyeOff, Lock } from "lucide-react";
 import { useEffect, useState } from "react";
-import { toast } from "sonner";
 
 import logo from "@/assets/logo-shp.png.asset.json";
 import { Button } from "@/components/ui/button";
@@ -68,10 +67,10 @@ function AuthPage() {
       }
       navigate({ to: "/admin", replace: true });
     },
-    onError: (e: Error) => {
+    onError: () => {
       setErrors((current) => ({
         ...current,
-        password: e.message || "Invalid email or password.",
+        password: "Invalid email or password.",
       }));
     },
   });

@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Plus, Archive, Pencil } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
 
 import { PageHeader } from "@/components/admin/page-header";
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
@@ -76,6 +75,7 @@ function ScheduleBlocks() {
   const [formErrors, setFormErrors] = useState<
     Partial<Record<"date" | "start" | "end", string | undefined>>
   >({});
+  const [archiveError, setArchiveError] = useState<string | null>(null);
 
   const blocks = useQuery({
     queryKey: ["schedule-blocks"],
@@ -133,7 +133,6 @@ function ScheduleBlocks() {
       }
     },
     onSuccess: (result) => {
-      toast.success(result === "updated" ? "Schedule block updated" : "Schedule blocked");
       resetForm();
       qc.invalidateQueries({ queryKey: ["schedule-blocks"] });
     },
@@ -149,7 +148,7 @@ function ScheduleBlocks() {
         });
       } else {
         setFormErrors({
-          date: `Could not block that schedule. Please check your inputs and try again: ${err.message}`,
+          date: "Could not block that schedule. Please check your inputs and try again.",
         });
       }
     },
@@ -167,20 +166,19 @@ function ScheduleBlocks() {
       qc.setQueryData<Array<{ id: string }>>(["schedule-blocks"], (blocks) =>
         blocks?.filter((block) => block.id !== id),
       );
-      toast.success("Block archived");
+      setArchiveError(null);
       qc.invalidateQueries({ queryKey: ["schedule-blocks"], exact: false });
       qc.invalidateQueries({ queryKey: ["archived-blocks"], exact: false });
     },
     onError: (err: Error) => {
       const msg = err.message.toLowerCase();
       if (msg.includes("not found") || msg.includes("no rows")) {
-        toast.error("This block no longer exists. It may have been removed already.");
+        setArchiveError("This schedule block no longer exists. Refresh the list and try again.");
       } else if (msg.includes("permission") || msg.includes("forbidden")) {
-        toast.error(
-          "You don't have permission to archive schedule blocks. Please contact an admin.",
-        );
+        setArchiveError("You do not have permission to archive schedule blocks.");
       } else {
-        toast.error(`Could not archive the block. Please try again: ${err.message}`);
+        console.error("Could not archive schedule block:", err);
+        setArchiveError("Could not archive this schedule block. Please try again.");
       }
     },
   });
@@ -230,6 +228,11 @@ function ScheduleBlocks() {
         title="Schedule Blocks"
         description="Close whole days or custom time ranges (holidays, out-of-town, maintenance)."
       />
+      {archiveError && (
+        <p role="alert" className="mb-4 text-sm text-destructive">
+          {archiveError}
+        </p>
+      )}
 
       <Card className="mb-6 border-border/70 bg-card/60">
         <CardContent className="grid gap-4 p-5 sm:grid-cols-4 sm:items-end">
@@ -531,6 +534,7 @@ function ScheduleBlocks() {
                       <Button
                         size="sm"
                         variant="ghost"
+                        disabled={archive.isPending}
                         onClick={() => setArchiveTarget(b.id)}
                         aria-label={`Archive schedule block for ${formatDateLong(b.block_date)}`}
                       >

@@ -2,9 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { Archive, CalendarRange, ChevronDown } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { DateRange } from "react-day-picker";
-import { toast } from "sonner";
 import { z } from "zod";
 import { format, parseISO } from "date-fns";
 
@@ -141,6 +140,74 @@ type AppointmentEditErrors = Partial<
   >
 >;
 
+function AppointmentServicesList({
+  appointmentId,
+  services,
+}: {
+  appointmentId: string;
+  services: AppointmentService[];
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
+  const [isTruncated, setIsTruncated] = useState(false);
+  const serviceListRef = useRef<HTMLDivElement>(null);
+  const serviceListId = `appointment-services-${appointmentId}`;
+  const canCollapse = services.length > 1;
+
+  useEffect(() => {
+    if (!canCollapse) {
+      setIsTruncated(false);
+      return;
+    }
+
+    if (isExpanded) return;
+
+    const list = serviceListRef.current;
+    if (!list) return;
+
+    const updateTruncation = () => {
+      setIsTruncated(list.scrollHeight > list.clientHeight + 1);
+    };
+
+    updateTruncation();
+    const resizeObserver = new ResizeObserver(updateTruncation);
+    resizeObserver.observe(list);
+
+    return () => resizeObserver.disconnect();
+  }, [canCollapse, isExpanded, services]);
+
+  return (
+    <div className="min-w-0 md:max-w-72">
+      <div
+        ref={serviceListRef}
+        id={serviceListId}
+        className={cn(
+          "space-y-0.5 leading-4",
+          canCollapse && !isExpanded && "max-h-[2.25rem] overflow-hidden",
+        )}
+      >
+        {services.map((service) => (
+          <span key={service.service_id ?? service.service_name} className="block">
+            {service.service_name}
+          </span>
+        ))}
+      </div>
+      {canCollapse && isTruncated && (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="mt-0.5 h-auto min-h-0 px-0 py-0 text-xs"
+          aria-controls={serviceListId}
+          aria-expanded={isExpanded}
+          onClick={() => setIsExpanded((expanded) => !expanded)}
+        >
+          {isExpanded ? "See Less" : "See More"}
+        </Button>
+      )}
+    </div>
+  );
+}
+
 function appointmentEditHasChanges(
   appointment: AppointmentDetails,
   form: AppointmentEditForm,
@@ -189,6 +256,7 @@ function AppointmentsPage() {
   const [customDateRange, setCustomDateRange] = useState<DateRange>();
   const [page, setPage] = useState(0);
   const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const focusedAppointmentId = search.appointmentId;
   const deferredTerm = useDeferredValue(term);
   const dateRange = useMemo(
@@ -424,7 +492,6 @@ function AppointmentsPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Appointment updated");
       setIsEditing(false);
       setEditErrors({});
       setPendingSaveForm(null);
@@ -449,14 +516,14 @@ function AppointmentsPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Appointment archived");
+      setArchiveError(null);
       qc.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
       qc.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
       qc.invalidateQueries({ queryKey: ["archived-appointments"], exact: false });
     },
     onError: (err: Error) => {
       console.error("Archive failed:", err);
-      toast.error(`Archive failed: ${err.message}`);
+      setArchiveError("Could not archive this appointment. Please try again.");
     },
   });
 
@@ -716,6 +783,11 @@ function AppointmentsPage() {
         )}
       </div>
       <ActiveFilterChips filters={activeFilters} onReset={resetFilters} />
+      {archiveError && (
+        <p role="alert" className="mt-4 text-sm text-destructive">
+          {archiveError}
+        </p>
+      )}
 
       <Card className="border-border/70 bg-card/60">
         <CardContent className="overflow-x-auto p-0">
@@ -748,13 +820,10 @@ function AppointmentsPage() {
                     <span className="text-xs text-muted-foreground">{a.phone}</span>
                   </TableCell>
                   <TableCell data-label="Services" className="text-xs">
-                    <div className="space-y-0.5">
-                      {a.appointment_services.map((service) => (
-                        <span key={service.service_name} className="block">
-                          {service.service_name}
-                        </span>
-                      ))}
-                    </div>
+                    <AppointmentServicesList
+                      appointmentId={a.id}
+                      services={a.appointment_services}
+                    />
                   </TableCell>
                   <TableCell data-label="Schedule" className="text-xs">
                     {formatDateLong(a.appointment_date)}
@@ -1383,10 +1452,14 @@ function errorsForAppointmentUpdate(error: Error): AppointmentEditErrors {
         "This crew member already has an appointment that overlaps with the selected time.",
     };
   }
-  if (message.includes("selected crew member")) return { assignedCrew: message };
-  if (message.includes("service")) return { services: message };
-  if (message.includes("status")) return { status: message };
-  return { form: message };
+  if (message.includes("selected crew member")) {
+    return { assignedCrew: "The selected crew member is not available for this appointment." };
+  }
+  if (message.includes("service")) {
+    return { services: "One or more selected services are not available." };
+  }
+  if (message.includes("status")) return { status: "Select a valid appointment status." };
+  return { form: "Could not save this appointment. Please try again." };
 }
 
 function cleanSearchTerm(value: string) {

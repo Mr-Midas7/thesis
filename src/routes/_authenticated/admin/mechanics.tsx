@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { Archive, Pencil, Plus, RotateCcw } from "lucide-react";
 import { useState } from "react";
-import { toast } from "sonner";
 
 import { PageHeader } from "@/components/admin/page-header";
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
@@ -70,6 +69,8 @@ function MechanicsPage() {
   >({});
   const [filterStatus, setFilterStatus] = useState<"all" | "active" | "inactive">("all");
   const [filterName, setFilterName] = useState("");
+  const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const crew = useQuery({
     queryKey: ["crew-all"],
@@ -101,14 +102,13 @@ function MechanicsPage() {
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Mechanic added");
       setForm({ ...blank });
       setOpen(false);
       qc.invalidateQueries({ queryKey: ["crew-all"] });
     },
     onError: (err: Error) => {
       console.error("Add failed:", err);
-      setFormErrors({ name: `Add failed: ${err.message}` });
+      setFormErrors({ name: "Could not add this mechanic. Please try again." });
     },
   });
 
@@ -124,13 +124,13 @@ function MechanicsPage() {
       qc.setQueryData<CrewMember[]>(["crew-all"], (items) =>
         items?.filter((member) => member.id !== id),
       );
-      toast.success("Mechanic archived");
+      setArchiveError(null);
       qc.invalidateQueries({ queryKey: ["crew-all"], exact: false });
       qc.invalidateQueries({ queryKey: ["archived-crew"], exact: false });
     },
     onError: (err: Error) => {
       console.error("Archive failed:", err);
-      toast.error(`Archive failed: ${err.message}`);
+      setArchiveError("Could not archive this mechanic. Please try again.");
     },
   });
 
@@ -150,19 +150,27 @@ function MechanicsPage() {
     }
     setFormErrors({});
     if (editing) {
-      const { error } = await supabase
-        .from("crew_members")
-        .update({
-          name: form.name.trim(),
-          role: form.role.trim() || "Mechanic",
-          phone: form.phone.trim() || null,
-          is_active: form.is_active,
-        })
-        .eq("id", editing.id);
-      if (error) throw error;
-      toast.success("Mechanic updated");
+      setIsSaving(true);
+      try {
+        const { error } = await supabase
+          .from("crew_members")
+          .update({
+            name: form.name.trim(),
+            role: form.role.trim() || "Mechanic",
+            phone: form.phone.trim() || null,
+            is_active: form.is_active,
+          })
+          .eq("id", editing.id);
+        if (error) {
+          setFormErrors({ name: "Could not update this mechanic. Please try again." });
+          return;
+        }
+      } finally {
+        setIsSaving(false);
+      }
     } else {
-      await add.mutate();
+      add.mutate();
+      return;
     }
     setEditing(null);
     setForm({ ...blank });
@@ -189,6 +197,11 @@ function MechanicsPage() {
           </Button>
         }
       />
+      {archiveError && (
+        <p role="alert" className="mb-4 text-sm text-destructive">
+          {archiveError}
+        </p>
+      )}
 
       <div className="mb-4 flex flex-wrap items-end gap-4">
         <div className="space-y-1.5">
@@ -296,7 +309,12 @@ function MechanicsPage() {
                         >
                           <Pencil className="h-4 w-4" />
                         </Button>
-                        <Button size="sm" variant="ghost" onClick={() => setArchiveTarget(c.id)}>
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          disabled={archive.isPending}
+                          onClick={() => setArchiveTarget(c.id)}
+                        >
                           <Archive className="h-4 w-4" />
                         </Button>
                       </TableCell>
@@ -389,8 +407,8 @@ function MechanicsPage() {
             <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Close
             </Button>
-            <Button onClick={handleSave} disabled={add.isPending || !form.name.trim()}>
-              Save
+            <Button onClick={handleSave} disabled={add.isPending || isSaving || !form.name.trim()}>
+              {add.isPending || isSaving ? "Saving..." : "Save"}
             </Button>
           </DialogFooter>
         </DialogContent>
