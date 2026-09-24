@@ -300,7 +300,8 @@ function AppointmentsPage() {
             .lte("appointment_date", dateRange.to);
         }
         if (deferredTerm.trim()) {
-          const value = cleanSearchTerm(deferredTerm);
+          const cleanedTerm = cleanSearchTerm(deferredTerm);
+          const value = normalizePhilippineMobile(cleanedTerm) ?? cleanedTerm;
           query = query.or(
             `reference_code.ilike.%${value}%,customer_name.ilike.%${value}%,phone.ilike.%${value}%,plate_number.ilike.%${value}%`,
           );
@@ -844,7 +845,9 @@ function AppointmentsPage() {
                   </TableCell>
                   <TableCell data-label="Customer">
                     <span className="block text-sm">{a.customer_name}</span>
-                    <span className="text-xs text-muted-foreground">{a.phone}</span>
+                    <span className="text-xs text-muted-foreground">
+                      {toLocalPhilippineMobile(a.phone)}
+                    </span>
                   </TableCell>
                   <TableCell data-label="Services" className="text-xs">
                     <AppointmentServicesList
@@ -1454,7 +1457,10 @@ function AppointmentReadOnlyDetails({
         <h3 className="font-medium">Customer details</h3>
         <div className="mt-3 grid gap-3 text-sm">
           {!hideName && <AppointmentDetail label="Name" value={appointment.customer_name} />}
-          <AppointmentDetail label="Contact number" value={appointment.phone} />
+          <AppointmentDetail
+            label="Contact number"
+            value={toLocalPhilippineMobile(appointment.phone)}
+          />
         </div>
       </div>
       <div>

@@ -330,25 +330,28 @@ export function decodeBlockReason(reason: string | null): {
 
 export const PHONE_VALIDATION_MESSAGE = "Enter a valid mobile number.";
 
-/** Keep the mobile-number field to its local 11-digit format while the user types. */
+/** Keep the mobile-number field in its local 11-digit format while the user types. */
 export function sanitizePhilippineMobileInput(value: string) {
-  return value.replace(/\D/g, "").slice(0, 11);
+  const normalized = normalizePhilippineMobile(value);
+  return normalized ?? value.replace(/\D/g, "").slice(0, 11);
 }
 
 /** Convert a stored or pasted Philippine mobile number to its local 09XXXXXXXXX form. */
 export function toLocalPhilippineMobile(value: string) {
-  const digits = value.replace(/\D/g, "");
-  if (/^639\d{9}$/.test(digits)) return `0${digits.slice(2)}`;
-  return sanitizePhilippineMobileInput(digits);
+  return normalizePhilippineMobile(value) ?? value.replace(/\D/g, "").slice(0, 11);
 }
 
-/** Convert local or E.164 Philippine mobile input to the canonical value stored in the database. */
+/**
+ * Convert local or E.164 Philippine mobile input to the application's canonical
+ * local 09XXXXXXXXX format. Supabase Auth phone APIs, if introduced, must make
+ * their E.164 conversion only at that authentication boundary.
+ */
 export function normalizePhilippineMobile(value: string): string | null {
   const digits = value.replace(/\D/g, "");
 
-  if (/^639\d{9}$/.test(digits)) return `+${digits}`;
+  if (/^639\d{9}$/.test(digits)) return `0${digits.slice(2)}`;
 
-  if (/^09\d{9}$/.test(digits)) return `+63${digits.slice(1)}`;
+  if (/^09\d{9}$/.test(digits)) return digits;
 
   return null;
 }

@@ -52,8 +52,10 @@ import {
   formatPHP,
   formatTime,
   manilaNow,
+  normalizePhilippineMobile,
   statusLabel,
   statusTone,
+  toLocalPhilippineMobile,
 } from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
@@ -112,7 +114,8 @@ function ArchivePage() {
   const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: string } | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const deferredTerm = useDeferredValue(filters.term);
-  const searchTerm = cleanSearchTerm(deferredTerm);
+  const cleanedSearchTerm = cleanSearchTerm(deferredTerm);
+  const searchTerm = normalizePhilippineMobile(cleanedSearchTerm) ?? cleanedSearchTerm;
 
   const archived = useQuery({
     queryKey: ["archived-appointments", { searchTerm, filters, page }],
@@ -886,7 +889,7 @@ function ArchivePage() {
                         {c.role}
                       </TableCell>
                       <TableCell data-label="Phone" className="text-sm">
-                        {c.phone ?? "-"}
+                        {c.phone ? toLocalPhilippineMobile(c.phone) : "-"}
                       </TableCell>
                       <TableCell data-label="Actions" className="text-right">
                         <ArchiveRowActions
@@ -976,7 +979,7 @@ function ArchivePage() {
                   {blockedNumberRows.map((blockedNumber) => (
                     <TableRow key={blockedNumber.id}>
                       <TableCell data-label="Phone" className="font-mono text-sm">
-                        {blockedNumber.phone}
+                        {toLocalPhilippineMobile(blockedNumber.phone)}
                       </TableCell>
                       <TableCell data-label="Reason" className="text-sm text-muted-foreground">
                         {blockedNumber.reason ?? "-"}

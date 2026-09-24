@@ -28,7 +28,12 @@ import {
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
-import { PHONE_VALIDATION_MESSAGE, phoneSchema, sanitizePhilippineMobileInput } from "@/lib/shop";
+import {
+  PHONE_VALIDATION_MESSAGE,
+  phoneSchema,
+  sanitizePhilippineMobileInput,
+  toLocalPhilippineMobile,
+} from "@/lib/shop";
 
 type BlockedNumber = {
   id: string;
@@ -191,7 +196,7 @@ function BlockedNumbersPage() {
               {blocked.data?.map((b) => (
                 <TableRow key={b.id}>
                   <TableCell data-label="Phone" className="font-mono text-sm">
-                    {b.phone}
+                    {toLocalPhilippineMobile(b.phone)}
                   </TableCell>
                   <TableCell
                     data-label="Reason"

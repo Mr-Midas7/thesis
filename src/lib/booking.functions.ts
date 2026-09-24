@@ -1776,13 +1776,13 @@ async function findAppointment(reference: string, phone: string) {
     : primaryLookup.data;
   if (!appointment) return null;
 
-  // Public input is normalized to E.164 by `lookupSchema`. Normalize the
-  // stored value too so appointments created before phone normalization (for
-  // example `0917…` or `+63 917…`) remain available to their owner.
+  // Public input is normalized to local 09XXXXXXXXX by `lookupSchema`.
+  // Normalize the stored value too, so appointments created before the format
+  // change remain available to their owner.
   const storedPhone = normalizePhilippineMobile(appointment.phone);
   if (storedPhone !== phone) return null;
 
-  return appointment;
+  return { ...appointment, phone: storedPhone };
 }
 
 export const getRescheduleDetails = createServerFn({ method: "POST" })

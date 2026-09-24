@@ -21,7 +21,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
-import { formatDateLong, formatPHP, formatTime, statusLabel, statusTone } from "@/lib/shop";
+import {
+  formatDateLong,
+  formatPHP,
+  formatTime,
+  normalizePhilippineMobile,
+  statusLabel,
+  statusTone,
+  toLocalPhilippineMobile,
+} from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/admin/customers")({
@@ -51,12 +59,14 @@ function CustomersPage() {
   const [historyPage, setHistoryPage] = useState(0);
   const [historyCustomer, setHistoryCustomer] = useState<string | null>(null);
   const deferredTerm = useDeferredValue(term);
+  const cleanedSearchTerm = cleanSearchTerm(deferredTerm);
+  const customerSearchTerm = normalizePhilippineMobile(cleanedSearchTerm) ?? cleanedSearchTerm;
 
   const customers = useQuery({
-    queryKey: ["customers", { search: deferredTerm, page }],
+    queryKey: ["customers", { search: customerSearchTerm, page }],
     queryFn: async () => {
       const { data, error } = await supabase.rpc("get_admin_customers_page", {
-        p_search: cleanSearchTerm(deferredTerm) || null,
+        p_search: customerSearchTerm || null,
         p_limit: pageSize,
         p_offset: page * pageSize,
       });
@@ -75,7 +85,7 @@ function CustomersPage() {
           "id,customer_name,appointment_date,start_time,status,total_estimate,moto_brand,moto_model,plate_number,is_archived",
           { count: "exact" },
         )
-        .eq("phone", historyCustomer)
+        .eq("phone", normalizePhilippineMobile(historyCustomer) ?? historyCustomer)
         .order("appointment_date", { ascending: false })
         .order("start_time", { ascending: false })
         .range(historyPage * historyPageSize, historyPage * historyPageSize + historyPageSize - 1);
@@ -91,9 +101,9 @@ function CustomersPage() {
 
   useEffect(() => {
     if (!search.phone) return;
-    setTerm(search.phone);
+    setTerm(normalizePhilippineMobile(search.phone) ?? search.phone);
     setPage(0);
-    setHistoryCustomer(search.phone);
+    setHistoryCustomer(normalizePhilippineMobile(search.phone) ?? search.phone);
     setHistoryPage(0);
   }, [search.phone]);
 
@@ -138,7 +148,7 @@ function CustomersPage() {
                     {customer.customer_name}
                   </TableCell>
                   <TableCell data-label="Contact" className="text-xs">
-                    {customer.phone}
+                    {toLocalPhilippineMobile(customer.phone)}
                   </TableCell>
                   <TableCell data-label="Units" className="max-w-72 text-xs">
                     {customer.units.join(", ")}

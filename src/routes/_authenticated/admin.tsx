@@ -164,7 +164,10 @@ function AdminLayout() {
       try {
         void queryClient.cancelQueries();
         queryClient.clear();
-        await supabase.auth.signOut();
+        // Keep separately authenticated admin tabs/devices active. The admin
+        // client uses tab-scoped sessionStorage, so closing this tab also
+        // clears its session without a fragile unload request.
+        await supabase.auth.signOut({ scope: "local" });
       } finally {
         if (reason === "inactivity") navigate({ to: "/auth", replace: true });
         else navigate({ to: "/", replace: true });

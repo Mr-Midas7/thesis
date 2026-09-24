@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useSearch } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { CheckCircle2, Copy, Loader2 } from "lucide-react";
+import { CheckCircle2, Copy, Info, Loader2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { format, parseISO } from "date-fns";
 import { z } from "zod";
@@ -243,7 +243,10 @@ function BookPage() {
         throw new Error("Missing reschedule appointment details.");
       }
       return rescheduleDetailsFn({
-        data: { reference: search.reschedule, phone: search.phone },
+        data: {
+          reference: search.reschedule,
+          phone: normalizePhilippineMobile(search.phone)!,
+        },
       });
     },
     enabled: isReschedule,
@@ -378,8 +381,11 @@ function BookPage() {
           rescheduling: isReschedule,
           allowMultiDayContinuation: !isReschedule && serviceIds.length > 1,
           motorcycle: { brand: form.motoBrand, model: form.motoModel },
-          ...(isReschedule
-            ? { rescheduleReference: search.reschedule, reschedulePhone: search.phone }
+          ...(search.reschedule && search.phone
+            ? {
+                rescheduleReference: search.reschedule,
+                reschedulePhone: normalizePhilippineMobile(search.phone)!,
+              }
             : {}),
         },
       }),
@@ -504,7 +510,7 @@ function BookPage() {
           firstName: form.firstName.trim(),
           middleName: form.middleName.trim(),
           lastName: form.lastName.trim(),
-          phone: form.phone.trim(),
+          phone: normalizePhilippineMobile(form.phone)!,
           motoBrand: form.motoBrand.trim(),
           motoModel: form.motoModel.trim(),
           motoVariant: form.motoVariant.trim(),
@@ -1330,10 +1336,23 @@ function BookPage() {
                   </li>
                 ))}
                 <li className="flex flex-wrap items-center justify-between gap-3 bg-primary/5 p-3">
-                  <span className="font-medium">Total</span>
+                  <span className="font-medium">Estimated total</span>
                   <span className="font-display text-xl text-primary">{formatPHP(total)}</span>
                 </li>
               </ul>
+              <div className="mt-3 flex items-start gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                <div className="space-y-1">
+                  <p className="font-medium text-foreground">
+                    Your estimated total covers labor and selected service charges only.
+                  </p>
+                  <p className="leading-5 text-muted-foreground">
+                    Parts &amp; Accessories, replacement parts, tools, materials, or other work
+                    required during service are not included. If anything additional is needed,
+                    we’ll explain the cost and get your approval before applying any extra charge.
+                  </p>
+                </div>
+              </div>
               <p className="mt-2 text-xs text-muted-foreground">
                 Estimated appointment time: {totalDuration} minutes, including arrival and
                 post-service buffers.

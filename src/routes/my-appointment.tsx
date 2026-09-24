@@ -200,7 +200,12 @@ function MyAppointment() {
 
   const search = useMutation({
     mutationFn: () =>
-      lookup({ data: { reference: normalizeReferenceCode(reference), phone: phone.trim() } }),
+      lookup({
+        data: {
+          reference: normalizeReferenceCode(reference),
+          phone: normalizePhilippineMobile(phone)!,
+        },
+      }),
     onSuccess: (res) => {
       if (!res.ok) {
         setAppt(null);
@@ -219,7 +224,10 @@ function MyAppointment() {
   });
 
   const referenceRecovery = useMutation({
-    mutationFn: () => recoverReferences({ data: recoveryForm }),
+    mutationFn: () =>
+      recoverReferences({
+        data: { ...recoveryForm, phone: normalizePhilippineMobile(recoveryForm.phone)! },
+      }),
     onSuccess: (result) => {
       if (!result.ok) {
         setRecoveredReferences([]);
@@ -237,7 +245,12 @@ function MyAppointment() {
 
   const cancelMutation = useMutation({
     mutationFn: () =>
-      cancel({ data: { reference: normalizeReferenceCode(reference), phone: phone.trim() } }),
+      cancel({
+        data: {
+          reference: normalizeReferenceCode(reference),
+          phone: normalizePhilippineMobile(phone)!,
+        },
+      }),
     onSuccess: (res) => {
       if (!res.ok) {
         setAppointmentPreviewError(res.error);
@@ -261,7 +274,7 @@ function MyAppointment() {
           firstName: appt.firstName,
           middleName: appt.middleName,
           lastName: appt.lastName,
-          phone: appt.phone,
+          phone: normalizePhilippineMobile(appt.phone)!,
           motoBrand: "Original",
           motoModel: "Appointment",
           motoVariant: "",

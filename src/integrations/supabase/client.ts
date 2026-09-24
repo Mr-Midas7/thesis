@@ -51,7 +51,11 @@ function createSupabaseClient() {
       fetch: createSupabaseFetch(SUPABASE_PUBLISHABLE_KEY),
     },
     auth: {
-      storage: typeof window !== "undefined" ? localStorage : undefined,
+      // Admin authentication is intentionally scoped to one browser tab.
+      // sessionStorage survives normal reloads and same-tab navigation, but is
+      // cleared by the browser when that tab/window closes. This prevents a
+      // closed admin tab's token from authorizing the admin area when reopened.
+      storage: typeof window !== "undefined" ? sessionStorage : undefined,
       persistSession: true,
       autoRefreshToken: true,
     },

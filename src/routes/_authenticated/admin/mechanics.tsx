@@ -97,7 +97,7 @@ function MechanicsPage() {
       const { error } = await supabase.from("crew_members").insert({
         name: form.name.trim(),
         role: form.role.trim() || "Mechanic",
-        phone: form.phone.trim() || null,
+        phone: form.phone ? normalizePhilippineMobile(form.phone) : null,
       });
       if (error) throw error;
     },
@@ -157,7 +157,7 @@ function MechanicsPage() {
           .update({
             name: form.name.trim(),
             role: form.role.trim() || "Mechanic",
-            phone: form.phone.trim() || null,
+            phone: form.phone ? normalizePhilippineMobile(form.phone) : null,
             is_active: form.is_active,
           })
           .eq("id", editing.id);
@@ -284,7 +284,7 @@ function MechanicsPage() {
                         {c.role}
                       </TableCell>
                       <TableCell data-label="Phone" className="text-sm">
-                        {c.phone ?? "-"}
+                        {c.phone ? toLocalPhilippineMobile(c.phone) : "-"}
                       </TableCell>
                       <TableCell data-label="Status" className="text-center">
                         <Badge variant="outline" className={`text-[10px] uppercase ${status.tone}`}>
