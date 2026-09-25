@@ -24,6 +24,10 @@ export const Route = createFileRoute("/_authenticated/admin/notifications")({
   component: NotificationsPage,
 });
 
+function isServiceProgressNotification(type: string) {
+  return type === "service_arrival" || type === "service_completion";
+}
+
 function NotificationsPage() {
   const queryClient = useQueryClient();
   const navigate = useNavigate();
@@ -116,7 +120,13 @@ function NotificationsPage() {
 
   const removeAllRead = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase.from("notifications").delete().eq("is_read", true);
+      // Resolved/snoozed service-progress records are retained for their
+      // workflow history. Normal read notifications remain removable.
+      const { error } = await supabase
+        .from("notifications")
+        .delete()
+        .eq("is_read", true)
+        .not("type", "in", "(service_arrival,service_completion)");
       if (error) throw error;
     },
     onSuccess: () => {
@@ -211,10 +221,17 @@ function NotificationsPage() {
     },
   });
 
-  const rows = list.data ?? [];
+  // Read progress entries are resolved or awaiting a snooze interval; they do
+  // not belong in the inbox. Active progress alerts remain unread until an
+  // explicit workflow action handles them.
+  const rows = (list.data ?? []).filter(
+    (notification) => !isServiceProgressNotification(notification.type) || !notification.is_read,
+  );
   const unread = rows.filter((n) => !n.is_read).length;
   const read = rows.length - unread;
-  const unreadIds = rows.filter((n) => !n.is_read).map((n) => n.id);
+  const unreadIds = rows
+    .filter((n) => !n.is_read && !isServiceProgressNotification(n.type))
+    .map((n) => n.id);
 
   return (
     <div>
@@ -332,6 +349,7 @@ function NotificationsPage() {
 
       <div className="space-y-3">
         {rows.map((n) => {
+          const isServiceProgress = isServiceProgressNotification(n.type);
           const canStartService =
             n.type === "service_arrival" &&
             n.appointments?.status === "confirmed" &&
@@ -540,27 +558,31 @@ function NotificationsPage() {
                       if (!n.appointment_id) return;
                       viewAppointment.mutate({
                         id: n.id,
-                        isRead: n.is_read,
+                        // Progress alerts remain actionable until the related
+                        // start, no-show, completion, or snooze action occurs.
+                        isRead: n.is_read || isServiceProgress,
                         appointmentId: n.appointment_id,
                       });
                     }}
                   >
                     View appointment
                   </Button>
-                  {!n.is_read && (
+                  {!n.is_read && !isServiceProgress && (
                     <Button size="sm" variant="ghost" onClick={() => markOne.mutate(n.id)}>
                       Mark read
                     </Button>
                   )}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={deleteNotification.isPending}
-                    onClick={() => setDeleteTarget(n.id)}
-                    title="Remove notification"
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
+                  {!isServiceProgress && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      disabled={deleteNotification.isPending}
+                      onClick={() => setDeleteTarget(n.id)}
+                      title="Remove notification"
+                    >
+                      <Trash2 className="h-4 w-4 text-destructive" />
+                    </Button>
+                  )}
                 </div>
               </CardContent>
             </Card>
