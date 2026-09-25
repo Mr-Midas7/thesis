@@ -1080,7 +1080,10 @@ function BookPage() {
                       setServiceIds((prev) =>
                         checked ? prev.filter((id) => id !== s.id) : [...prev, s.id],
                       );
-                      setErrors((current) => ({ ...current, services: undefined }));
+                      setErrors((current) => {
+                        const { services: _, ...remainingErrors } = current;
+                        return remainingErrors;
+                      });
                       setDate("");
                       setStartTime("");
                       setMultiDayContinuationAccepted(false);
@@ -1315,6 +1318,13 @@ function BookPage() {
                 label="Date and time"
                 value={`${formatDateLong(date)} at ${formatTime(startTime)}`}
               />
+              <div className="flex items-start gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                <p className="leading-5 text-muted-foreground">
+                  Please arrive 10–15 minutes early for check-in, motorcycle verification, and
+                  service preparation.
+                </p>
+              </div>
             </div>
             <div className="mt-6">
               <p className="text-xs tracking-widest text-muted-foreground uppercase">
@@ -1353,10 +1363,6 @@ function BookPage() {
                   </p>
                 </div>
               </div>
-              <p className="mt-2 text-xs text-muted-foreground">
-                Estimated appointment time: {totalDuration} minutes, including arrival and
-                post-service buffers.
-              </p>
               {multiDayContinuationAccepted && needsMultiDayContinuationConfirmation && (
                 <p className="mt-2 text-xs text-primary">
                   The remaining service time will be reserved on the next available shop day.
@@ -1412,9 +1418,6 @@ function BookPage() {
                 <span>.</span>
               </div>
             </div>
-            <p className="mt-5 text-xs text-muted-foreground">
-              Final availability is checked again when you confirm your booking.
-            </p>
             <div className="w-full space-y-4 md:w-auto">
               <TurnstileChallenge resetKey={bookingRequestId} onToken={setTurnstileToken} />
               <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
