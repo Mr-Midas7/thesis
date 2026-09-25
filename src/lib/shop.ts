@@ -330,6 +330,25 @@ export function decodeBlockReason(reason: string | null): {
 
 export const PHONE_VALIDATION_MESSAGE = "Enter a valid mobile number.";
 
+export const NAME_PART_VALIDATION_MESSAGE =
+  "Names may contain letters, spaces, hyphens, and apostrophes only.";
+
+/** Matches one name part without changing the customer's spelling or spacing. */
+export const NAME_PART_PATTERN = /^(?:\p{L}+(?:(?:\s+|[-'’])\p{L}+)*)?$/u;
+
+/**
+ * Capitalize only the first character of a name segment. The rest of each
+ * segment remains exactly as entered, so intentional capitalization such as
+ * McDonald and MacArthur is never guessed or rewritten.
+ */
+export function formatNamePartInput(value: string) {
+  return value
+    .replace(/[^\p{L}\s'’-]/gu, "")
+    .replace(/(^|[\s'’-])(\p{Ll})/gu, (_, separator: string, initial: string) => {
+      return `${separator}${initial.toLocaleUpperCase()}`;
+    });
+}
+
 /** Keep the mobile-number field in its local 11-digit format while the user types. */
 export function sanitizePhilippineMobileInput(value: string) {
   const normalized = normalizePhilippineMobile(value);

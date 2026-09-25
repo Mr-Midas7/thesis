@@ -59,6 +59,8 @@ import {
   formatDateLong,
   formatPHP,
   formatTime,
+  formatNamePartInput,
+  NAME_PART_PATTERN,
   isReferenceCode,
   normalizePhilippineMobile,
   normalizeReferenceCode,
@@ -405,7 +407,7 @@ function MyAppointment() {
 
   function validateReferenceRecovery() {
     const nextErrors: typeof recoveryErrors = {};
-    const validName = (value: string) => /^[A-Za-z]+(?:\s+[A-Za-z]+)*$/.test(value.trim());
+    const validName = (value: string) => NAME_PART_PATTERN.test(value.trim());
     if (!validName(recoveryForm.lastName)) {
       nextErrors.lastName = "Enter the last name used for the booking.";
     }
@@ -515,7 +517,7 @@ function MyAppointment() {
                           onChange={(event) => {
                             setRecoveryForm((current) => ({
                               ...current,
-                              lastName: event.target.value.replace(/[^a-zA-Z\s]/g, ""),
+                              lastName: formatNamePartInput(event.target.value),
                             }));
                             setRecoveryErrors((current) => ({ ...current, lastName: undefined }));
                           }}
@@ -533,7 +535,7 @@ function MyAppointment() {
                           onChange={(event) => {
                             setRecoveryForm((current) => ({
                               ...current,
-                              firstName: event.target.value.replace(/[^a-zA-Z\s]/g, ""),
+                              firstName: formatNamePartInput(event.target.value),
                             }));
                             setRecoveryErrors((current) => ({ ...current, firstName: undefined }));
                           }}

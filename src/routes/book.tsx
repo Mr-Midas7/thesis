@@ -62,6 +62,7 @@ import {
   formatDateLong,
   formatPHP,
   formatTime,
+  formatNamePartInput,
   normalizePhilippineMobile,
   sanitizePhilippineMobileInput,
 } from "@/lib/shop";
@@ -895,7 +896,7 @@ function BookPage() {
                   onChange={(e) =>
                     setForm({
                       ...form,
-                      lastName: e.target.value.replace(/[^a-zA-Z\s]/g, ""),
+                      lastName: formatNamePartInput(e.target.value),
                     })
                   }
                   placeholder="Dela Cruz"
@@ -910,7 +911,7 @@ function BookPage() {
                   onChange={(e) =>
                     setForm({
                       ...form,
-                      firstName: e.target.value.replace(/[^a-zA-Z\s]/g, ""),
+                      firstName: formatNamePartInput(e.target.value),
                     })
                   }
                   placeholder="Juan"
@@ -925,7 +926,7 @@ function BookPage() {
                   onChange={(e) =>
                     setForm({
                       ...form,
-                      middleName: e.target.value.replace(/[^a-zA-Z\s]/g, ""),
+                      middleName: formatNamePartInput(e.target.value),
                     })
                   }
                   placeholder="Santos"

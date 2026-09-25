@@ -14,6 +14,8 @@ import {
   formatDateLong,
   formatTime,
   intervalsOverlap,
+  NAME_PART_PATTERN,
+  NAME_PART_VALIDATION_MESSAGE,
   bookingDurationForFirstDay,
   bookingDurationOverflowMinutes,
   isBookingStartTime,
@@ -178,7 +180,7 @@ const namePartSchema = z
   .string()
   .trim()
   .max(40)
-  .regex(/^(?:[A-Za-z]+(?: [A-Za-z]+)*)?$/, "Names may contain letters and spaces only.");
+  .regex(NAME_PART_PATTERN, NAME_PART_VALIDATION_MESSAGE);
 
 const bookingSchema = z
   .object({

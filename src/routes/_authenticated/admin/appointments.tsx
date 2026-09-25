@@ -69,6 +69,7 @@ import {
   formatDateLong,
   formatPHP,
   formatTime,
+  formatNamePartInput,
   intervalsOverlap,
   manilaNow,
   normalizePhilippineMobile,
@@ -968,7 +969,7 @@ function AppointmentsPage() {
                           onChange={(event) => {
                             setEditForm({
                               ...editForm,
-                              [field]: event.target.value.replace(/[^a-zA-Z\s]/g, ""),
+                              [field]: formatNamePartInput(event.target.value),
                             });
                             clearAppointmentEditErrors(field, "form");
                           }}
