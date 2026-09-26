@@ -9,6 +9,7 @@ import {
   CalendarX,
   ClipboardList,
   History,
+  Home,
   LayoutDashboard,
   LogOut,
   Package,
@@ -282,18 +283,23 @@ function AdminLayout() {
         </Sidebar>
 
         <div className="flex min-h-0 flex-1 flex-col">
-          <header className="sticky top-0 z-10 flex h-14 flex-wrap items-center gap-3 border-b border-border bg-background/90 px-4 backdrop-blur">
-            <SidebarTrigger />
-            <button
-              type="button"
-              onClick={() => void signOut("manual")}
-              className="text-xs text-muted-foreground uppercase hover:text-foreground"
+          <header className="sticky top-0 z-10 flex min-h-14 items-center gap-2 border-b border-border bg-background/90 px-3 py-1.5 backdrop-blur md:h-14 md:px-4 md:py-0">
+            <SidebarTrigger className="shrink-0" />
+            <Link
+              to="/"
+              className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:w-auto md:gap-2 md:px-2"
             >
-              View public site
-            </button>
-            <ThemeToggle />
-            <div className="ml-auto flex items-center gap-3">
-              <Link to="/admin/notifications" className="relative">
+              <Home className="h-4 w-4" />
+              <span className="hidden text-xs uppercase md:inline">Public site</span>
+              <span className="sr-only md:hidden">View public site</span>
+            </Link>
+            <ThemeToggle className="shrink-0" />
+            <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-3">
+              <Link
+                to="/admin/notifications"
+                className="relative inline-flex h-11 w-11 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:h-9 md:w-9"
+                aria-label="View notifications"
+              >
                 <Bell className="h-5 w-5 text-muted-foreground" />
                 {(unread.data ?? 0) > 0 && (
                   <span className="absolute -top-1 -right-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">

@@ -137,6 +137,7 @@ type ReportMetrics = {
   completed_bookings?: number;
   completed_rows?: number;
   completed_value: number | string;
+  total_value?: number | string;
   status_counts: Record<string, number>;
 };
 type ReportPage = { rows: Array<BookingRow | ServiceRow>; total: number; metrics: ReportMetrics };
@@ -274,7 +275,11 @@ function ReportsPage() {
         category,
         serviceName,
       });
-      const exportData = makeExportData(reportKind, allRows.rows, allRows.metrics);
+      // Export totals and completed metrics are derived from the complete
+      // filtered result set, not the currently visible paginated page.
+      const exportData = makeExportData(reportKind, allRows.rows, allRows.metrics, {
+        hasCompleteRows: true,
+      });
       if (pendingExport === "pdf")
         await exportPdf(exportData, reportKind, reportTitle, reportScope, from, to);
       if (pendingExport === "docx")
@@ -683,17 +688,13 @@ function ExportFormatPreview({
             <span>Report summary</span>
             <span className="h-px flex-1 bg-primary/60" />
           </p>
-          <div className="mt-1 grid grid-cols-4 gap-1">
+          <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 border-y border-primary/30 py-1.5">
             {data.cards.map((card) => (
-              <div
-                key={card.label}
-                className="min-w-0 rounded border border-border bg-card px-1.5 py-1"
-              >
+              <div key={card.label} className="flex min-w-0 items-baseline gap-1">
                 <p className="truncate text-[4px] font-bold tracking-wide text-muted-foreground uppercase">
-                  {card.label}
+                  {card.label}:
                 </p>
-                <p className="truncate text-[8px] font-bold text-primary">{card.value}</p>
-                <p className="truncate text-[4px] text-muted-foreground">{card.detail}</p>
+                <p className="truncate text-[6px] font-semibold text-foreground">{card.value}</p>
               </div>
             ))}
           </div>
@@ -735,10 +736,13 @@ function ExportDocumentTable({
     <table className="mt-2 w-full table-fixed border-collapse text-[4px] leading-tight">
       <thead className="bg-foreground text-background">
         <tr>
-          {data.headers.map((header) => (
+          {data.headers.map((header, index) => (
             <th
               key={header}
-              className="truncate border border-border px-0.5 py-0.5 text-left font-bold"
+              className={cn(
+                "truncate border border-border px-0.5 py-0.5 text-left font-bold",
+                index === data.headers.length - 1 && "text-right",
+              )}
             >
               {header}
             </th>
@@ -751,7 +755,10 @@ function ExportDocumentTable({
             {row.map((cell, cellIndex) => (
               <td
                 key={`${cell}-${cellIndex}`}
-                className="truncate border border-border px-0.5 py-0.5"
+                className={cn(
+                  "truncate border border-border px-0.5 py-0.5",
+                  cellIndex === row.length - 1 && "text-right",
+                )}
               >
                 {cell}
               </td>
@@ -759,6 +766,19 @@ function ExportDocumentTable({
           </tr>
         ))}
       </tbody>
+      <tfoot className="bg-muted/60 font-bold">
+        <tr>
+          <td
+            colSpan={data.headers.length - 1}
+            className="border border-border px-0.5 py-0.5 text-right"
+          >
+            Total Amount
+          </td>
+          <td className="border border-border px-0.5 py-0.5 text-right text-primary">
+            {formatPHP(data.totalAmount)}
+          </td>
+        </tr>
+      </tfoot>
     </table>
   );
 }
@@ -1000,9 +1020,18 @@ function makeExportData(
   reportKind: ReportKind,
   rows: Array<BookingRow | ServiceRow>,
   metrics?: ReportMetrics,
+  options: { hasCompleteRows?: boolean } = {},
 ): ExportData {
   if (reportKind === "services") {
     const serviceRows = rows as ServiceRow[];
+    const completedRows = serviceRows.filter((row) => row.status === "completed");
+    const completeValue = sumMoney(completedRows.map((row) => row.price));
+    const selectedAmount = sumMoney(serviceRows.map((row) => row.price));
+    const totalAmount = options.hasCompleteRows
+      ? selectedAmount
+      : metrics?.total_value === undefined
+        ? selectedAmount
+        : moneyValue(metrics.total_value);
     return {
       headers: ["Reference", "Customer", "Date", "Status", "Service", "Category", "Value"],
       rows: serviceRows.map((row) => [
@@ -1029,21 +1058,33 @@ function makeExportData(
         },
         {
           label: "Completed entries",
-          value: String(metrics?.completed_rows ?? 0),
+          value: String(
+            options.hasCompleteRows ? completedRows.length : (metrics?.completed_rows ?? 0),
+          ),
           detail: "Jobs with status Completed",
           tone: "success",
         },
         {
           label: "Completed value",
-          value: formatPHP(metrics?.completed_value ?? 0),
+          value: formatPHP(
+            options.hasCompleteRows ? completeValue : (metrics?.completed_value ?? 0),
+          ),
           detail: "Value from completed jobs",
           tone: "accent",
         },
       ],
-      totalAmount: Number(metrics?.completed_value ?? 0),
+      totalAmount,
     };
   }
   const bookingRows = rows as BookingRow[];
+  const completedBookings = bookingRows.filter((row) => row.status === "completed");
+  const completedValue = sumMoney(completedBookings.map((row) => row.total_estimate));
+  const selectedAmount = sumMoney(bookingRows.map((row) => row.total_estimate));
+  const totalAmount = options.hasCompleteRows
+    ? selectedAmount
+    : metrics?.total_value === undefined
+      ? selectedAmount
+      : moneyValue(metrics.total_value);
   return {
     headers: ["Reference", "Customer", "Date", "Service", "Status", "Amount"],
     rows: bookingRows.map((row) => [
@@ -1063,13 +1104,17 @@ function makeExportData(
       },
       {
         label: "Completed jobs",
-        value: String(metrics?.completed_bookings ?? 0),
+        value: String(
+          options.hasCompleteRows ? completedBookings.length : (metrics?.completed_bookings ?? 0),
+        ),
         detail: 'Jobs with status "Completed"',
         tone: "success",
       },
       {
         label: "Revenue (completed jobs)",
-        value: formatPHP(metrics?.completed_value ?? 0),
+        value: formatPHP(
+          options.hasCompleteRows ? completedValue : (metrics?.completed_value ?? 0),
+        ),
         detail: "Total amount from completed jobs",
         tone: "accent",
       },
@@ -1080,8 +1125,17 @@ function makeExportData(
         tone: "chart",
       },
     ],
-    totalAmount: Number(metrics?.completed_value ?? 0),
+    totalAmount,
   };
+}
+
+function moneyValue(value: number | string | null | undefined) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function sumMoney(values: Array<number | string | null | undefined>) {
+  return values.reduce<number>((total, value) => total + moneyValue(value), 0);
 }
 
 function getInitialFilters(today: string): ReportFilters {
@@ -1237,59 +1291,44 @@ async function exportPdf(
   };
 
   drawSectionHeading("Report summary", 75);
-  const cardGap = 4;
-  const cardY = 79;
-  const cardH = 25;
-  const cardW = (pageWidth - margin * 2 - cardGap * 3) / 4;
-  const cardColors = {
-    primary: { fill: [255, 246, 220] as [number, number, number], line: colors.primary },
-    success: { fill: [235, 247, 238] as [number, number, number], line: colors.success },
-    accent: { fill: [255, 239, 226] as [number, number, number], line: colors.accent },
-    chart: { fill: [237, 240, 252] as [number, number, number], line: colors.chart },
-  };
-  data.cards.forEach((card, index) => {
-    const x = margin + index * (cardW + cardGap);
-    const palette = cardColors[card.tone];
-    doc.setFillColor(...palette.fill);
-    doc.setDrawColor(...colors.border);
-    doc.roundedRect(x, cardY, cardW, cardH, 2, 2, "FD");
-    doc.setFillColor(...palette.line);
-    doc.circle(x + 9, cardY + 10, 5.5, "F");
-    doc.setTextColor(...colors.white);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(card.tone === "accent" ? 6 : 9);
-    doc.text(
-      card.tone === "success"
-        ? "✓"
-        : card.tone === "accent"
-          ? "P"
-          : card.tone === "chart"
-            ? "#"
-            : "B",
-      x + 9,
-      cardY + 12,
-      { align: "center" },
-    );
-    doc.setTextColor(...colors.ink);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(6.5);
-    doc.text(card.label.toUpperCase(), x + 18, cardY + 7);
-    doc.setFontSize(card.value.length > 16 ? 10 : 14);
-    doc.text(card.value, x + 18, cardY + 15.5);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(5.8);
-    doc.setTextColor(...colors.ink);
-    doc.text(doc.splitTextToSize(card.detail, cardW - 20), x + 18, cardY + 21);
+  const summaryColumns = [margin + 10, pageWidth / 2 + 2];
+  const summaryRows = [
+    [data.cards[0], data.cards[1]],
+    [data.cards[2], data.cards[3]],
+  ];
+  summaryRows.forEach((row, rowIndex) => {
+    row.forEach((card, columnIndex) => {
+      if (!card) return;
+      const x = summaryColumns[columnIndex]!;
+      const y = 84 + rowIndex * 10;
+      doc.setTextColor(...colors.ink);
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8.5);
+      doc.text(`${card.label}:`, x, y);
+      doc.setFont("helvetica", "normal");
+      doc.text(card.value, x + doc.getTextWidth(`${card.label}: `), y);
+    });
   });
 
   drawSectionHeading(
     reportKind === "services" ? "Service entries" : "Bookings for selected period",
-    113,
+    107,
   );
   autoTable(doc, {
-    startY: 117,
+    startY: 111,
     head: [data.headers],
     body: data.rows,
+    foot: [
+      [
+        {
+          content: "TOTAL AMOUNT",
+          colSpan: data.headers.length - 1,
+          styles: { halign: "right" },
+        },
+        { content: formatPHP(data.totalAmount), styles: { halign: "right" } },
+      ],
+    ],
+    showFoot: "lastPage",
     theme: "grid",
     margin: { left: margin, right: margin, top: 27, bottom: 34 },
     styles: {
@@ -1306,6 +1345,13 @@ async function exportPdf(
       textColor: colors.white,
       fontStyle: "bold",
       fontSize: 7.2,
+      cellPadding: 2.7,
+    },
+    footStyles: {
+      fillColor: colors.muted,
+      textColor: colors.ink,
+      fontStyle: "bold",
+      fontSize: 8,
       cellPadding: 2.7,
     },
     alternateRowStyles: { fillColor: colors.paper },
@@ -1330,6 +1376,9 @@ async function exportPdf(
           },
     didParseCell: (hook) => {
       const statusIndex = data.headers.indexOf("Status");
+      if (hook.section === "foot") {
+        hook.cell.styles.halign = "right";
+      }
       if (hook.section === "body" && hook.column.index === statusIndex) {
         hook.cell.styles.fontStyle = "bold";
         hook.cell.styles.halign = "center";
@@ -1354,24 +1403,13 @@ async function exportPdf(
     (doc as typeof doc & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 112;
   doc.setPage(doc.getNumberOfPages());
   const signatureTop = pageHeight - 24;
-  let totalY = finalY + 9;
-  // Keep the total and both signatures together on the final page. When the
-  // final table is too long, use a dedicated sign-off page rather than
-  // crowding either element below the table.
-  if (totalY + 13 > signatureTop - 10) {
+  // The total is the final table row, directly beneath the Amount column. Keep
+  // the sign-off area on its own continuation page if the table leaves too
+  // little room for it.
+  if (finalY + 18 > signatureTop) {
     doc.addPage();
     drawHeader(true);
-    totalY = 31;
   }
-  doc.setFillColor(...colors.muted);
-  doc.setDrawColor(...colors.border);
-  doc.roundedRect(margin, totalY - 5, pageWidth - margin * 2, 11, 1.5, 1.5, "FD");
-  doc.setTextColor(...colors.ink);
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(8);
-  doc.text("TOTAL AMOUNT", pageWidth - margin - 61, totalY + 2);
-  doc.setFontSize(11);
-  doc.text(formatPHP(data.totalAmount), pageWidth - margin - 4, totalY + 2, { align: "right" });
 
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7);
@@ -1405,6 +1443,7 @@ async function exportDocx(
     Paragraph,
     Table,
     TableCell,
+    TableLayoutType,
     TableRow,
     TextRun,
     WidthType,
@@ -1424,12 +1463,16 @@ async function exportDocx(
   const headerRow = new TableRow({
     tableHeader: true,
     children: data.headers.map(
-      (header) =>
+      (header, index) =>
         new TableCell({
           shading: { fill: "372B1F" },
           margins: { top: 90, bottom: 90, left: 90, right: 90 },
           children: [
-            new Paragraph({ children: [text(header, { bold: true, color: "FFFFFF", size: 16 })] }),
+            new Paragraph({
+              alignment:
+                index === data.headers.length - 1 ? AlignmentType.RIGHT : AlignmentType.LEFT,
+              children: [text(header, { bold: true, color: "FFFFFF", size: 16 })],
+            }),
           ],
         }),
     ),
@@ -1455,46 +1498,64 @@ async function exportDocx(
         ),
       }),
   );
+  const totalRow = new TableRow({
+    children: [
+      new TableCell({
+        columnSpan: data.headers.length - 1,
+        shading: { fill: "F6F1E7" },
+        margins: { top: 90, bottom: 90, left: 90, right: 90 },
+        children: [
+          new Paragraph({
+            alignment: AlignmentType.RIGHT,
+            children: [text("TOTAL AMOUNT", { bold: true, size: 16, color: "372B1F" })],
+          }),
+        ],
+      }),
+      new TableCell({
+        shading: { fill: "F6F1E7" },
+        margins: { top: 90, bottom: 90, left: 90, right: 90 },
+        children: [
+          new Paragraph({
+            alignment: AlignmentType.RIGHT,
+            children: [
+              text(formatPHP(data.totalAmount), { bold: true, size: 16, color: "B9841A" }),
+            ],
+          }),
+        ],
+      }),
+    ],
+  });
+  const exportColumnWidths =
+    reportKind === "services"
+      ? [1859, 2434, 2562, 1729, 2690, 2177, 2243]
+      : [2207, 2712, 3217, 3280, 1847, 2441];
+  const noBorders = {
+    top: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
+    bottom: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
+    left: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
+    right: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
+    insideHorizontal: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
+    insideVertical: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
+  };
+  const summaryCell = (card: ExportSummaryCard) =>
+    new TableCell({
+      margins: { top: 60, bottom: 60, left: 90, right: 90 },
+      children: [
+        new Paragraph({
+          children: [
+            text(`${card.label}: `, { bold: true, size: 15, color: "372B1F" }),
+            text(card.value, { size: 15, color: "372B1F" }),
+          ],
+        }),
+      ],
+    });
   const summaryCards = new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
-    columnWidths: [3900, 3900, 3900, 3900],
-    borders: tableBorders,
+    columnWidths: [7852, 7852],
+    borders: noBorders,
     rows: [
-      new TableRow({
-        children: data.cards.map(
-          (card) =>
-            new TableCell({
-              shading: {
-                fill:
-                  card.tone === "primary"
-                    ? "FFF6DC"
-                    : card.tone === "success"
-                      ? "EBF7EE"
-                      : card.tone === "accent"
-                        ? "FFEFE2"
-                        : "EDF0FC",
-              },
-              margins: { top: 120, bottom: 120, left: 110, right: 110 },
-              children: [
-                new Paragraph({
-                  children: [
-                    text(card.label.toUpperCase(), { bold: true, size: 14, color: "6A5C4B" }),
-                  ],
-                }),
-                new Paragraph({
-                  children: [
-                    text(card.value, {
-                      bold: true,
-                      size: card.value.length > 16 ? 22 : 28,
-                      color: "B9841A",
-                    }),
-                  ],
-                }),
-                new Paragraph({ children: [text(card.detail, { size: 13, color: "6A5C4B" })] }),
-              ],
-            }),
-        ),
-      }),
+      new TableRow({ children: [summaryCell(data.cards[0]!), summaryCell(data.cards[1]!)] }),
+      new TableRow({ children: [summaryCell(data.cards[2]!), summaryCell(data.cards[3]!)] }),
     ],
   });
   const periodTable = new Table({
@@ -1530,37 +1591,6 @@ async function exportDocx(
       border: { bottom: { style: BorderStyle.SINGLE, color: "B9841A", size: 7, space: 1 } },
       children: [text(label.toUpperCase(), { bold: true, size: 17, color: "372B1F" })],
     });
-  const totalTable = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    columnWidths: [12500, 3200],
-    borders: tableBorders,
-    rows: [
-      new TableRow({
-        children: [
-          new TableCell({
-            shading: { fill: "F6F1E7" },
-            children: [
-              new Paragraph({
-                alignment: AlignmentType.RIGHT,
-                children: [text("TOTAL AMOUNT", { bold: true, size: 16, color: "372B1F" })],
-              }),
-            ],
-          }),
-          new TableCell({
-            shading: { fill: "F6F1E7" },
-            children: [
-              new Paragraph({
-                alignment: AlignmentType.RIGHT,
-                children: [
-                  text(formatPHP(data.totalAmount), { bold: true, size: 19, color: "B9841A" }),
-                ],
-              }),
-            ],
-          }),
-        ],
-      }),
-    ],
-  });
   const signatureTable = new Table({
     width: { size: 100, type: WidthType.PERCENTAGE },
     borders: {
@@ -1690,14 +1720,11 @@ async function exportDocx(
           ),
           new Table({
             width: { size: 100, type: WidthType.PERCENTAGE },
+            columnWidths: exportColumnWidths,
+            layout: TableLayoutType.FIXED,
             borders: tableBorders,
-            rows: [headerRow, ...rows],
+            rows: [headerRow, ...rows, totalRow],
           }),
-          new Paragraph({
-            spacing: { before: 360, after: 180 },
-            children: [text(" ", { size: 10 })],
-          }),
-          totalTable,
           new Paragraph({
             spacing: { before: 260, after: 120 },
             children: [text(" ", { size: 10 })],

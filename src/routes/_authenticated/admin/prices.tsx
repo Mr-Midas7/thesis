@@ -132,7 +132,7 @@ function PricesPage() {
       />
 
       <Tabs defaultValue="services">
-        <TabsList className="mb-4 grid h-auto w-full grid-cols-2 p-1 sm:inline-flex sm:w-auto">
+        <TabsList className="mb-4 grid h-auto w-full grid-cols-2 overflow-x-auto p-1 md:overflow-visible sm:inline-flex sm:w-auto">
           <TabsTrigger value="services" className="w-full font-display uppercase sm:w-auto">
             Services
           </TabsTrigger>
@@ -749,7 +749,7 @@ function ServicePriceTables({
   );
 
   const actionButtons = (configuration: PriceConfiguration) => (
-    <div className="flex items-center justify-center gap-1 whitespace-nowrap">
+    <div className="flex flex-wrap items-center justify-end gap-1 sm:flex-nowrap sm:justify-center">
       <Button size="sm" variant="outline" disabled={saving} onClick={() => onSave(configuration)}>
         Save
       </Button>
@@ -881,15 +881,18 @@ function PriceEditRow({
 }) {
   return (
     <TableRow>
-      <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+      <TableCell
+        data-label="Date & Time"
+        className="whitespace-nowrap text-xs text-muted-foreground"
+      >
         {formatDateTime(date)}
       </TableCell>
-      {brand !== undefined && <TableCell>{brand}</TableCell>}
-      {model !== undefined && <TableCell>{model}</TableCell>}
-      <TableCell className="text-right text-muted-foreground">
+      {brand !== undefined && <TableCell data-label="Brand">{brand}</TableCell>}
+      {model !== undefined && <TableCell data-label="Model">{model}</TableCell>}
+      <TableCell data-label="Old Price" className="text-right text-muted-foreground">
         {formatPHP(configuration.price)}
       </TableCell>
-      <TableCell>
+      <TableCell data-label="New Price">
         <Input
           className="min-w-28"
           type="number"
@@ -903,7 +906,7 @@ function PriceEditRow({
         />
         <FieldError message={error?.price} />
       </TableCell>
-      <TableCell>
+      <TableCell data-label="Reason for Change">
         <Input
           className="min-w-48"
           placeholder="Reason for change"
@@ -914,7 +917,9 @@ function PriceEditRow({
         />
         <FieldError message={error?.reason || error?.form} />
       </TableCell>
-      <TableCell className="align-middle text-center">{actions}</TableCell>
+      <TableCell data-label="Action" className="align-middle text-center">
+        {actions}
+      </TableCell>
     </TableRow>
   );
 }
