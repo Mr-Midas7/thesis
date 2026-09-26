@@ -10,7 +10,7 @@ import {
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
-import { useDeferredValue, useState } from "react";
+import { useDeferredValue, useEffect, useState } from "react";
 import type { DateRange } from "react-day-picker";
 
 import { PaginationControls } from "@/components/admin/pagination-controls";
@@ -474,6 +474,12 @@ function ArchivePage() {
     blocks: archivedBlocks.data,
     "blocked-numbers": archivedBlockedNumbers.data,
   }[activeTab];
+
+  useEffect(() => {
+    const total = activeArchive?.total ?? 0;
+    const lastPage = Math.max(0, Math.ceil(total / pageSize) - 1);
+    if (page > lastPage) setPage(lastPage);
+  }, [activeArchive?.total, page, pageSize]);
 
   const confirmDelete = (id: string, type: string) => {
     setDeleteTarget({ id, type });

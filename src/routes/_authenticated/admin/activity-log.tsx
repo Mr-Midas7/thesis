@@ -125,8 +125,10 @@ function ActivityLogPage() {
   const [activityCustomDateRange, setActivityCustomDateRange] = useState<DateRange>();
   const [page, setPage] = useState(0);
   const [pendingExport, setPendingExport] = useState<ExportFormat | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
+  const filtersAreUpdating = search !== deferredSearch;
   const today = manilaNow().date;
   const activityDateRange = useMemo(
     () => activityRangeFromPeriod(activityPeriod, today, activityCustomDateRange),
@@ -204,9 +206,12 @@ function ActivityLogPage() {
       : []),
   ];
   const filterDescription = useMemo(() => {
-    if (!hasFilters) return "Showing 10 records per page from the last 50 days.";
-    return `Showing page ${page + 1} of ${logs.data?.total ?? 0} matching records from the last 50 days.`;
-  }, [hasFilters, logs.data?.total, page]);
+    const total = logs.data?.total ?? 0;
+    if (!hasFilters) {
+      return `Showing ${rows.length} of ${total} activity records retained for the last 50 days.`;
+    }
+    return `Showing ${rows.length} of ${total} activity records matching the selected filters.`;
+  }, [hasFilters, logs.data?.total, rows.length]);
 
   useEffect(() => {
     setPage(0);
@@ -225,7 +230,55 @@ function ActivityLogPage() {
     setPage(0);
   }
 
-  async function exportPdf() {
+  async function fetchAllFilteredRows() {
+    const { error: cleanupError } = await supabase.rpc("purge_expired_admin_activity_logs");
+    if (cleanupError) throw cleanupError;
+
+    const exportPageSize = 1_000;
+    const allRows: ActivityLog[] = [];
+
+    for (let offset = 0; ; offset += exportPageSize) {
+      let query = supabase
+        .from("admin_activity_logs")
+        .select("*")
+        .order("created_at", { ascending: false })
+        .order("id", { ascending: false });
+
+      if (fromDate) query = query.gte("activity_date", fromDate);
+      if (toDate) query = query.lte("activity_date", toDate);
+      if (action !== "all") query = query.eq("action", action);
+      if (resource !== "all") query = query.eq("resource_type", resource);
+      if (deferredSearch.trim()) {
+        const term = cleanSearchTerm(deferredSearch);
+        query = query.or(
+          `summary.ilike.%${term}%,actor_email.ilike.%${term}%,target_label.ilike.%${term}%,ip_address.ilike.%${term}%`,
+        );
+      }
+
+      const { data, error } = await query.range(offset, offset + exportPageSize - 1);
+      if (error) throw error;
+
+      const batch = (data ?? []) as ActivityLog[];
+      allRows.push(...batch);
+      if (batch.length < exportPageSize) return allRows;
+    }
+  }
+
+  function exportScope(recordCount: number) {
+    const recordLabel = recordCount === 1 ? "activity record" : "activity records";
+    if (!hasFilters) return `All ${recordCount} ${recordLabel} retained for the last 50 days.`;
+    const selectedFilters = [
+      deferredSearch.trim() ? `Search: ${deferredSearch.trim()}` : "",
+      action !== "all" ? `Action: ${action}` : "",
+      resource !== "all" ? `Category: ${resource}` : "",
+      activityPeriod !== "all"
+        ? `Date: ${activityPeriodLabel(activityPeriod, activityCustomDateRange)}`
+        : "",
+    ].filter(Boolean);
+    return `All ${recordCount} ${recordLabel} matching ${selectedFilters.join("; ")}.`;
+  }
+
+  async function exportPdf(records: ActivityLog[], scope: string) {
     const [{ jsPDF }, { default: autoTable }] = await Promise.all([
       import("jspdf"),
       import("jspdf-autotable"),
@@ -243,7 +296,7 @@ function ActivityLogPage() {
     doc.text("ADMIN ACTIVITY LOG", 14, 54);
     doc.setFontSize(9);
     doc.text(`Generated: ${formatBusinessTimestamp()}`, 14, 60);
-    const scopeLines = doc.splitTextToSize(`Scope: ${filterDescription}`, pageWidth - 28);
+    const scopeLines = doc.splitTextToSize(`Scope: ${scope}`, pageWidth - 28);
     doc.text(scopeLines, 14, 66);
     const tableStartY = 66 + scopeLines.length * 5 + 4;
 
@@ -262,7 +315,7 @@ function ActivityLogPage() {
           "Changed fields",
         ],
       ],
-      body: exportRows(rows),
+      body: exportRows(records),
       theme: "grid",
       margin: { bottom: 48 },
       styles: { fontSize: 7 },
@@ -287,7 +340,7 @@ function ActivityLogPage() {
     doc.save(`fake-rider-activity-log-${fileDate()}.pdf`);
   }
 
-  async function exportDocx() {
+  async function exportDocx(records: ActivityLog[], scope: string) {
     const {
       AlignmentType,
       BorderStyle,
@@ -298,6 +351,7 @@ function ActivityLogPage() {
       Paragraph,
       Table,
       TableCell,
+      TableLayoutType,
       TableRow,
       TextRun,
       WidthType,
@@ -325,6 +379,8 @@ function ActivityLogPage() {
     ];
     const table = new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
+      columnWidths: [1250, 900, 1900, 2250, 1650, 1900, 2200, 1250, 2100],
+      layout: TableLayoutType.FIXED,
       borders: {
         top: { style: BorderStyle.SINGLE, size: 4, color: "555555" },
         bottom: { style: BorderStyle.SINGLE, size: 4, color: "555555" },
@@ -335,7 +391,7 @@ function ActivityLogPage() {
       },
       rows: [
         new TableRow({ tableHeader: true, children: headers.map((header) => cell(header, true)) }),
-        ...exportRows(rows).map(
+        ...exportRows(records).map(
           (row) => new TableRow({ children: row.map((value) => cell(value)) }),
         ),
       ],
@@ -370,7 +426,7 @@ function ActivityLogPage() {
               text: `Generated: ${formatBusinessTimestamp()}`,
               spacing: { after: 50 },
             }),
-            new Paragraph({ text: `Scope: ${filterDescription}`, spacing: { after: 180 } }),
+            new Paragraph({ text: `Scope: ${scope}`, spacing: { after: 180 } }),
             table,
             new Paragraph({ text: "", spacing: { before: 520 } }),
             new Paragraph({
@@ -397,22 +453,33 @@ function ActivityLogPage() {
   }
 
   async function confirmExport() {
+    const format = pendingExport;
+    if (!format || isExporting) return;
+
     try {
+      setIsExporting(true);
       setExportError(null);
-      if (pendingExport === "pdf") await exportPdf();
-      if (pendingExport === "docx") await exportDocx();
-      if (pendingExport) {
+      const records = await fetchAllFilteredRows();
+      const scope = exportScope(records.length);
+      if (format === "pdf") await exportPdf(records, scope);
+      if (format === "docx") await exportDocx(records, scope);
+
+      try {
         await recordAdminActivityEvent({
           action: "exported",
           resourceType: "Activity Log",
-          targetLabel: `${pendingExport.toUpperCase()} export`,
-          summary: `Exported ${rows.length} activity ${rows.length === 1 ? "record" : "records"} as ${pendingExport.toUpperCase()}.`,
+          targetLabel: `${format.toUpperCase()} export`,
+          summary: `Exported ${records.length} activity ${records.length === 1 ? "record" : "records"} as ${format.toUpperCase()}.`,
           changedFields: ["export_format"],
         });
+        queryClient.invalidateQueries({ queryKey: ["admin-activity-logs"] });
+      } catch {
+        setExportError("The file was exported, but its activity entry could not be recorded.");
       }
     } catch {
       setExportError("Could not create the activity log export. Please try again.");
     } finally {
+      setIsExporting(false);
       setPendingExport(null);
     }
   }
@@ -429,7 +496,10 @@ function ActivityLogPage() {
             </Button>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" disabled={rows.length === 0}>
+                <Button
+                  variant="outline"
+                  disabled={(logs.data?.total ?? 0) === 0 || logs.isFetching || filtersAreUpdating}
+                >
                   <Download /> Export
                 </Button>
               </DropdownMenuTrigger>
@@ -615,14 +685,15 @@ function ActivityLogPage() {
           <AlertDialogHeader>
             <AlertDialogTitle>Confirm activity log export</AlertDialogTitle>
             <AlertDialogDescription>
-              Export {rows.length} {rows.length === 1 ? "activity record" : "activity records"} as a{" "}
+              Export {logs.data?.total ?? 0}{" "}
+              {(logs.data?.total ?? 0) === 1 ? "activity record" : "activity records"} as a{" "}
               {pendingExport?.toUpperCase()} table?
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmExport}>
-              Export {pendingExport?.toUpperCase()}
+            <AlertDialogCancel disabled={isExporting}>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmExport} disabled={isExporting}>
+              {isExporting ? "Exporting..." : `Export ${pendingExport?.toUpperCase()}`}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
