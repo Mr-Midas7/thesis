@@ -19,7 +19,7 @@ export type ProductRow = {
 
 export function ProductCard({ product }: { product: ProductRow }) {
   return (
-    <Card className="group flex h-full flex-col overflow-hidden border-border/70 bg-card/70 py-0 transition-colors hover:border-primary/60">
+    <Card className="group flex h-full flex-col overflow-hidden border-border/70 bg-card/70 py-0 transition-colors hover:border-primary/60 lg:min-w-0">
       <div className="relative flex h-44 items-center justify-center overflow-hidden bg-secondary/50">
         {product.image_url ? (
           <img
@@ -45,7 +45,7 @@ export function ProductCard({ product }: { product: ProductRow }) {
           {product.brand ?? product.category}
         </p>
         <div className="mt-1 flex items-start justify-between gap-3">
-          <h3 className="min-w-0 flex-1 font-display text-lg leading-tight tracking-wide uppercase">
+          <h3 className="min-w-0 flex-1 font-display text-lg leading-tight tracking-wide uppercase lg:break-words">
             {product.name}
           </h3>
           <p className="shrink-0 font-display text-xl leading-tight font-bold tracking-wide text-primary">
@@ -53,7 +53,9 @@ export function ProductCard({ product }: { product: ProductRow }) {
           </p>
         </div>
         {product.description && (
-          <p className="mt-2 line-clamp-2 text-sm text-muted-foreground">{product.description}</p>
+          <p className="mt-2 line-clamp-2 text-sm text-muted-foreground lg:break-words">
+            {product.description}
+          </p>
         )}
         {product.in_stock ? (
           <div className="mt-auto pt-4">

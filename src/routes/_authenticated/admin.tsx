@@ -19,7 +19,7 @@ import {
   Users,
   Wrench,
 } from "lucide-react";
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import logo from "@/assets/logo-shp.png.asset.json";
 import { ThemeToggle } from "@/components/site/theme-toggle";
@@ -102,6 +102,8 @@ function AdminLayout() {
   const path = useRouterState({ select: (s) => s.location.pathname });
   const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const signingOutRef = useRef(false);
+  const [isSigningOut, setIsSigningOut] = useState(false);
+  const [signOutError, setSignOutError] = useState<string | null>(null);
 
   const role = useQuery({
     queryKey: ["my-role"],
@@ -145,10 +147,12 @@ function AdminLayout() {
   }, []);
 
   const signOut = useCallback(
-    async (reason: "manual" | "inactivity") => {
+    async (reason: "manual" | "inactivity" | "public") => {
       if (signingOutRef.current) return;
       signingOutRef.current = true;
+      setIsSigningOut(true);
       clearInactivityTimer();
+      setSignOutError(null);
 
       void recordAdminActivityEvent({
         action: "signed out",
@@ -157,21 +161,34 @@ function AdminLayout() {
         summary:
           reason === "inactivity"
             ? "Administrator was automatically signed out after 2 minutes of inactivity."
-            : "Administrator signed out of the admin console.",
+            : reason === "public"
+              ? "Administrator signed out before visiting the public site."
+              : "Administrator signed out of the admin console.",
       }).catch(() => {
         // Sign-out should always complete, even if the audit service is unavailable.
       });
 
       try {
-        void queryClient.cancelQueries();
-        queryClient.clear();
         // Keep separately authenticated admin tabs/devices active. The admin
         // client uses tab-scoped sessionStorage, so closing this tab also
         // clears its session without a fragile unload request.
-        await supabase.auth.signOut({ scope: "local" });
+        const { error } = await supabase.auth.signOut({ scope: "local" });
+        if (error) throw error;
+
+        const { data, error: sessionError } = await supabase.auth.getSession();
+        if (sessionError || data.session) {
+          throw new Error("The administrator session could not be cleared.");
+        }
+
+        await queryClient.cancelQueries();
+        queryClient.clear();
+        await navigate({ to: reason === "inactivity" ? "/auth" : "/", replace: true });
+      } catch (error) {
+        console.error("Could not sign out of the admin console:", error);
+        setSignOutError("Could not sign out. Please try again.");
       } finally {
-        if (reason === "inactivity") navigate({ to: "/auth", replace: true });
-        else navigate({ to: "/", replace: true });
+        signingOutRef.current = false;
+        setIsSigningOut(false);
       }
     },
     [clearInactivityTimer, navigate, queryClient],
@@ -285,14 +302,16 @@ function AdminLayout() {
         <div className="flex min-h-0 flex-1 flex-col">
           <header className="sticky top-0 z-10 flex min-h-14 items-center gap-2 border-b border-border bg-background/90 px-3 py-1.5 backdrop-blur md:h-14 md:px-4 md:py-0">
             <SidebarTrigger className="shrink-0" />
-            <Link
-              to="/"
+            <button
+              type="button"
+              onClick={() => void signOut("public")}
               className="inline-flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-secondary hover:text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring md:w-auto md:gap-2 md:px-2"
+              disabled={isSigningOut}
             >
               <Home className="h-4 w-4" />
               <span className="hidden text-xs uppercase md:inline">Public site</span>
               <span className="sr-only md:hidden">View public site</span>
-            </Link>
+            </button>
             <ThemeToggle className="shrink-0" />
             <div className="ml-auto flex shrink-0 items-center gap-1.5 sm:gap-3">
               <Link
@@ -312,6 +331,7 @@ function AdminLayout() {
                 size="sm"
                 onClick={() => void signOut("manual")}
                 className="font-display uppercase"
+                disabled={isSigningOut}
               >
                 <LogOut /> <span className="hidden sm:inline">Exit</span>
               </Button>
@@ -319,6 +339,11 @@ function AdminLayout() {
           </header>
 
           <main className="flex-1 p-4 md:p-6">
+            {signOutError && (
+              <p role="alert" className="mb-4 text-sm text-destructive">
+                {signOutError}
+              </p>
+            )}
             {role.isLoading ? (
               <p className="text-sm text-muted-foreground">Checking your access...</p>
             ) : isAdmin ? (
@@ -333,6 +358,7 @@ function AdminLayout() {
                   className="mt-5 font-display uppercase"
                   variant="outline"
                   onClick={() => void signOut("manual")}
+                  disabled={isSigningOut}
                 >
                   Exit
                 </Button>

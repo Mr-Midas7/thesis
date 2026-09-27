@@ -75,9 +75,9 @@ function ShopPage() {
   }
 
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen lg:flex lg:min-w-0 lg:flex-col lg:overflow-x-clip">
       <SiteHeader />
-      <main className="site-container py-12">
+      <main className="site-container py-12 lg:min-w-0 lg:flex-1">
         <p className="text-xs tracking-[0.3em] text-accent uppercase">Shop showcase</p>
         <h1 className="font-display text-4xl font-bold uppercase md:text-5xl">
           Parts & Accessories
@@ -89,7 +89,7 @@ function ShopPage() {
 
         <div className="mt-8 flex flex-wrap items-center justify-between gap-4">
           <Tabs value={tab} onValueChange={setTab}>
-            <TabsList>
+            <TabsList className="!overflow-visible">
               {tabs.map((t) => (
                 <TabsTrigger key={t.value} value={t.value} className="font-display uppercase">
                   {t.label}
@@ -126,7 +126,7 @@ function ShopPage() {
           </form>
         </div>
 
-        <div className="mt-8 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mt-8 grid gap-5 sm:grid-cols-2 lg:min-w-0 lg:grid-cols-4">
           {list.map((p) => (
             <ProductCard key={p.id} product={p} />
           ))}
@@ -135,7 +135,7 @@ function ShopPage() {
           <p className="py-16 text-center text-muted-foreground">No items match your search.</p>
         )}
       </main>
-      <SiteFooter />
+      <SiteFooter className="lg:mt-auto" />
     </div>
   );
 }
