@@ -46,8 +46,7 @@ function NotificationsPage() {
         .select(
           "*, appointments(status, reference_code, customer_name, phone, reschedule_count, pending_reschedule_request_id, pending_reschedule_date, pending_reschedule_start_time, pending_reschedule_reason, arrival_notification_snooze_count, service_started_at, service_ended_at)",
         )
-        .order("created_at", { ascending: false })
-        .limit(100);
+        .order("created_at", { ascending: false });
       if (error) throw error;
       return data;
     },

@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
 import {
   Building2,
-  CalendarClock,
   Eye,
   EyeOff,
   ImageUp,
@@ -30,20 +29,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import { recordAdminActivityEvent } from "@/lib/admin-activity";
-import {
-  DEFAULT_BOOKING_HOURS,
-  DEFAULT_BOOKING_TERMS,
-  isValidBookingHours,
-  SHOP,
-} from "@/lib/shop";
+import { DEFAULT_BOOKING_HOURS, DEFAULT_BOOKING_TERMS, SHOP } from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
-type SettingsTab = "shop" | "appointments" | "account";
+type SettingsTab = "shop" | "account";
 
 type ShopSettingsForm = {
   address: string;
@@ -69,14 +62,7 @@ type AccountForm = {
   avatarUrl: string | null;
 };
 
-type SettingsErrorField =
-  | "contactEmail"
-  | "operatingHours"
-  | "minimumBookingLeadHours"
-  | "maxAdvanceBookingDays"
-  | "defaultAppointmentDurationMinutes"
-  | "cancellationNoticeHours"
-  | "reschedulingNoticeHours";
+type SettingsErrorField = "contactEmail";
 
 type AccountErrorField =
   "name" | "email" | "currentPassword" | "newPassword" | "confirmNewPassword" | "profilePicture";
@@ -101,33 +87,14 @@ const settingFieldLabels: Array<[keyof ShopSettingsForm, string]> = [
   ["contactNumber", "Contact number"],
   ["contactEmail", "Contact email"],
   ["bookingTerms", "Booking terms & conditions"],
-  ["openingTime", "Opening time"],
-  ["closingTime", "Closing time"],
-  ["minimumBookingLeadHours", "Minimum booking lead time"],
-  ["maxAdvanceBookingDays", "Maximum advance booking"],
-  ["defaultAppointmentDurationMinutes", "Default appointment duration"],
-  ["allowSameDayAppointments", "Same-day appointments"],
-  ["cancellationNoticeHours", "Cancellation rule"],
-  ["reschedulingNoticeHours", "Rescheduling rule"],
 ];
 
 const tabLabels: Record<Exclude<SettingsTab, "account">, string> = {
   shop: "Shop information",
-  appointments: "Appointment settings",
 };
 
 const settingKeysByTab: Record<Exclude<SettingsTab, "account">, Array<keyof ShopSettingsForm>> = {
   shop: ["address", "contactNumber", "contactEmail", "bookingTerms"],
-  appointments: [
-    "openingTime",
-    "closingTime",
-    "minimumBookingLeadHours",
-    "maxAdvanceBookingDays",
-    "defaultAppointmentDurationMinutes",
-    "allowSameDayAppointments",
-    "cancellationNoticeHours",
-    "reschedulingNoticeHours",
-  ],
 };
 
 function fromDatabase(row: {
@@ -264,24 +231,12 @@ export function SettingsPage() {
     mutationFn: async (section: Exclude<SettingsTab, "account">) => {
       const previous = savedSettings.data ?? defaultSettings;
       const next = settings;
-      const updates =
-        section === "shop"
-          ? {
-              address: next.address.trim(),
-              contact_number: next.contactNumber.trim(),
-              contact_email: next.contactEmail.trim().toLowerCase(),
-              booking_terms: next.bookingTerms.trim(),
-            }
-          : {
-              opening_time: next.openingTime,
-              closing_time: next.closingTime,
-              minimum_booking_lead_hours: next.minimumBookingLeadHours,
-              max_advance_booking_days: next.maxAdvanceBookingDays,
-              default_appointment_duration_minutes: next.defaultAppointmentDurationMinutes,
-              allow_same_day_appointments: next.allowSameDayAppointments,
-              cancellation_notice_hours: next.cancellationNoticeHours,
-              rescheduling_notice_hours: next.reschedulingNoticeHours,
-            };
+      const updates = {
+        address: next.address.trim(),
+        contact_number: next.contactNumber.trim(),
+        contact_email: next.contactEmail.trim().toLowerCase(),
+        booking_terms: next.bookingTerms.trim(),
+      };
       const { error } = await supabase
         .from("shop_settings")
         .upsert({ id: true, ...updates }, { onConflict: "id" });
@@ -318,10 +273,9 @@ export function SettingsPage() {
         }
       }
     },
-    onError: (error: Error, section) => {
+    onError: (error: Error) => {
       const message = error.message || "Could not save settings.";
       if (message.includes("contact email")) setSettingsErrors({ contactEmail: message });
-      else if (section === "appointments") setSettingsErrors({ minimumBookingLeadHours: message });
       else setSettingsErrors({ contactEmail: message });
     },
   });
@@ -413,38 +367,11 @@ export function SettingsPage() {
     setSettings((current) => ({ ...current, [key]: value }));
   }
 
-  function validateSettings(section: Exclude<SettingsTab, "account">) {
+  function validateSettings() {
     const nextErrors: Partial<Record<SettingsErrorField, string | undefined>> = {};
 
-    if (section === "shop") {
-      if (!/^\S+@\S+\.\S+$/.test(settings.contactEmail.trim())) {
-        nextErrors.contactEmail = "Enter a valid shop contact email.";
-      }
-    }
-
-    if (section === "appointments") {
-      if (!isValidBookingHours(settings.openingTime, settings.closingTime)) {
-        nextErrors.operatingHours =
-          "Choose 30-minute times with an opening time before the closing time.";
-      }
-      if (settings.minimumBookingLeadHours < 0 || settings.minimumBookingLeadHours > 168) {
-        nextErrors.minimumBookingLeadHours = "Enter a value from 0 to 168 hours.";
-      }
-      if (settings.maxAdvanceBookingDays < 1 || settings.maxAdvanceBookingDays > 365) {
-        nextErrors.maxAdvanceBookingDays = "Enter a value from 1 to 365 days.";
-      }
-      if (
-        settings.defaultAppointmentDurationMinutes < 15 ||
-        settings.defaultAppointmentDurationMinutes > 600
-      ) {
-        nextErrors.defaultAppointmentDurationMinutes = "Enter a value from 15 to 600 minutes.";
-      }
-      if (settings.cancellationNoticeHours < 0 || settings.cancellationNoticeHours > 168) {
-        nextErrors.cancellationNoticeHours = "Enter a value from 0 to 168 hours.";
-      }
-      if (settings.reschedulingNoticeHours < 0 || settings.reschedulingNoticeHours > 168) {
-        nextErrors.reschedulingNoticeHours = "Enter a value from 0 to 168 hours.";
-      }
+    if (!/^\S+@\S+\.\S+$/.test(settings.contactEmail.trim())) {
+      nextErrors.contactEmail = "Enter a valid shop contact email.";
     }
 
     setSettingsErrors(nextErrors);
@@ -456,7 +383,7 @@ export function SettingsPage() {
       if (validateAccount()) setPendingSave(section);
       return;
     }
-    if (validateSettings(section)) setPendingSave(section);
+    if (validateSettings()) setPendingSave(section);
   }
 
   function confirmSave() {
@@ -514,16 +441,13 @@ export function SettingsPage() {
     <div className="mx-auto w-full max-w-5xl">
       <PageHeader
         title="Settings"
-        description="Manage customer-facing shop details, booking rules, and your administrator account."
+        description="Manage customer-facing shop details and your administrator account."
       />
 
       <Tabs value={tab} onValueChange={(value) => setTab(value as SettingsTab)}>
-        <TabsList className="grid h-auto w-full grid-cols-3 bg-secondary/50 p-1 md:inline-flex md:w-auto">
+        <TabsList className="grid h-auto w-full grid-cols-2 bg-secondary/50 p-1 md:inline-flex md:w-auto">
           <TabsTrigger value="shop" className="w-full gap-2 md:w-auto">
             <Store className="h-4 w-4" /> Shop information
-          </TabsTrigger>
-          <TabsTrigger value="appointments" className="w-full gap-2 md:w-auto">
-            <CalendarClock className="h-4 w-4" /> Appointments
           </TabsTrigger>
           <TabsTrigger value="account" className="w-full gap-2 md:w-auto">
             <UserRound className="h-4 w-4" /> Account
@@ -595,157 +519,6 @@ export function SettingsPage() {
                 loading={saveSettings.isPending}
                 onClick={() => requestSave("shop")}
                 label="Save shop information"
-              />
-            </TabsContent>
-
-            <TabsContent value="appointments" className="mt-6 space-y-5">
-              <div className="grid gap-5 md:grid-cols-2">
-                <SettingsCard
-                  title="Booking window"
-                  icon={<CalendarClock className="h-5 w-5 text-primary" />}
-                >
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <Field label="Shop opens">
-                      <Input
-                        type="time"
-                        step="1800"
-                        value={settings.openingTime}
-                        onChange={(event) => {
-                          setSetting("openingTime", event.target.value);
-                          setSettingsErrors((current) => ({
-                            ...current,
-                            operatingHours: undefined,
-                          }));
-                        }}
-                        aria-invalid={!!settingsErrors.operatingHours}
-                      />
-                    </Field>
-                    <Field label="Shop closes">
-                      <Input
-                        type="time"
-                        step="1800"
-                        value={settings.closingTime}
-                        onChange={(event) => {
-                          setSetting("closingTime", event.target.value);
-                          setSettingsErrors((current) => ({
-                            ...current,
-                            operatingHours: undefined,
-                          }));
-                        }}
-                        aria-invalid={!!settingsErrors.operatingHours}
-                      />
-                    </Field>
-                  </div>
-                  <FieldError message={settingsErrors.operatingHours} />
-                  <p className="text-xs text-muted-foreground">
-                    Customer appointment starts and service durations must fit within these hours.
-                  </p>
-                  <Field label="Minimum booking lead time">
-                    <NumberInput
-                      value={settings.minimumBookingLeadHours}
-                      suffix="hours before appointment"
-                      min={0}
-                      max={168}
-                      invalid={!!settingsErrors.minimumBookingLeadHours}
-                      onChange={(value) => {
-                        setSetting("minimumBookingLeadHours", value);
-                        setSettingsErrors((current) => ({
-                          ...current,
-                          minimumBookingLeadHours: undefined,
-                        }));
-                      }}
-                    />
-                    <FieldError message={settingsErrors.minimumBookingLeadHours} />
-                  </Field>
-                  <Field label="Maximum advance booking">
-                    <NumberInput
-                      value={settings.maxAdvanceBookingDays}
-                      suffix="days"
-                      min={1}
-                      max={365}
-                      invalid={!!settingsErrors.maxAdvanceBookingDays}
-                      onChange={(value) => {
-                        setSetting("maxAdvanceBookingDays", value);
-                        setSettingsErrors((current) => ({
-                          ...current,
-                          maxAdvanceBookingDays: undefined,
-                        }));
-                      }}
-                    />
-                    <FieldError message={settingsErrors.maxAdvanceBookingDays} />
-                  </Field>
-                  <Field label="Default appointment duration">
-                    <NumberInput
-                      value={settings.defaultAppointmentDurationMinutes}
-                      suffix="minutes"
-                      min={15}
-                      max={600}
-                      invalid={!!settingsErrors.defaultAppointmentDurationMinutes}
-                      onChange={(value) => {
-                        setSetting("defaultAppointmentDurationMinutes", value);
-                        setSettingsErrors((current) => ({
-                          ...current,
-                          defaultAppointmentDurationMinutes: undefined,
-                        }));
-                      }}
-                    />
-                    <FieldError message={settingsErrors.defaultAppointmentDurationMinutes} />
-                  </Field>
-                </SettingsCard>
-                <SettingsCard
-                  title="Appointment policies"
-                  icon={<CalendarClock className="h-5 w-5 text-primary" />}
-                >
-                  <ToggleRow
-                    label="Enable same-day appointments"
-                    description="Customers can book later today when the lead time allows it."
-                    checked={settings.allowSameDayAppointments}
-                    onCheckedChange={(value) => setSetting("allowSameDayAppointments", value)}
-                  />
-                  <Field label="Cancellation rule">
-                    <NumberInput
-                      value={settings.cancellationNoticeHours}
-                      suffix="hours notice required"
-                      min={0}
-                      max={168}
-                      invalid={!!settingsErrors.cancellationNoticeHours}
-                      onChange={(value) => {
-                        setSetting("cancellationNoticeHours", value);
-                        setSettingsErrors((current) => ({
-                          ...current,
-                          cancellationNoticeHours: undefined,
-                        }));
-                      }}
-                    />
-                    <FieldError message={settingsErrors.cancellationNoticeHours} />
-                  </Field>
-                  <Field label="Rescheduling rule">
-                    <NumberInput
-                      value={settings.reschedulingNoticeHours}
-                      suffix="hours notice required"
-                      min={0}
-                      max={168}
-                      invalid={!!settingsErrors.reschedulingNoticeHours}
-                      onChange={(value) => {
-                        setSetting("reschedulingNoticeHours", value);
-                        setSettingsErrors((current) => ({
-                          ...current,
-                          reschedulingNoticeHours: undefined,
-                        }));
-                      }}
-                    />
-                    <FieldError message={settingsErrors.reschedulingNoticeHours} />
-                  </Field>
-                </SettingsCard>
-              </div>
-              <p className="rounded-lg border border-border bg-card/60 p-4 text-sm text-muted-foreground">
-                The booking window and cancellation notice are enforced on customer bookings.
-                Individual service durations still determine the reserved service time.
-              </p>
-              <SaveButton
-                loading={saveSettings.isPending}
-                onClick={() => requestSave("appointments")}
-                label="Save appointment settings"
               />
             </TabsContent>
 
@@ -986,59 +759,6 @@ function SettingsCard({
         <div className="space-y-5">{children}</div>
       </CardContent>
     </Card>
-  );
-}
-
-function NumberInput({
-  value,
-  suffix,
-  min,
-  max,
-  invalid,
-  onChange,
-}: {
-  value: number;
-  suffix: string;
-  min: number;
-  max: number;
-  invalid?: boolean;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <div className="flex min-w-0 items-center gap-3">
-      <Input
-        type="number"
-        min={min}
-        max={max}
-        value={value}
-        onChange={(event) => onChange(Number(event.target.value) || 0)}
-        aria-invalid={invalid}
-        className="w-24 shrink-0"
-      />
-      <span className="min-w-0 text-xs leading-snug text-muted-foreground">{suffix}</span>
-    </div>
-  );
-}
-
-function ToggleRow({
-  label,
-  description,
-  checked,
-  onCheckedChange,
-}: {
-  label: string;
-  description: string;
-  checked: boolean;
-  onCheckedChange: (checked: boolean) => void;
-}) {
-  return (
-    <div className="flex items-start justify-between gap-4">
-      <div className="min-w-0">
-        <p className="text-sm font-medium">{label}</p>
-        <p className="mt-1 max-w-xl text-xs leading-relaxed text-muted-foreground">{description}</p>
-      </div>
-      <Switch checked={checked} onCheckedChange={onCheckedChange} className="mt-1 shrink-0" />
-    </div>
   );
 }
 

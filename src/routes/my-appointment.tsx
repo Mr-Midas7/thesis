@@ -138,6 +138,14 @@ function MyAppointment() {
     null | Extract<Awaited<ReturnType<typeof lookupAppointment>>, { ok: true }>["appointment"]
   >(null);
 
+  function clearRecoveryError(field: keyof typeof recoveryErrors) {
+    setRecoveryErrors((current) => {
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+  }
+
   useEffect(() => {
     setSupportsSlideTransition(
       typeof window !== "undefined" &&
@@ -519,7 +527,7 @@ function MyAppointment() {
                               ...current,
                               lastName: formatNamePartInput(event.target.value),
                             }));
-                            setRecoveryErrors((current) => ({ ...current, lastName: undefined }));
+                            clearRecoveryError("lastName");
                           }}
                           aria-invalid={Boolean(recoveryErrors.lastName)}
                         />
@@ -537,7 +545,7 @@ function MyAppointment() {
                               ...current,
                               firstName: formatNamePartInput(event.target.value),
                             }));
-                            setRecoveryErrors((current) => ({ ...current, firstName: undefined }));
+                            clearRecoveryError("firstName");
                           }}
                           aria-invalid={Boolean(recoveryErrors.firstName)}
                         />
@@ -558,7 +566,7 @@ function MyAppointment() {
                             ...current,
                             phone: sanitizePhilippineMobileInput(event.target.value),
                           }));
-                          setRecoveryErrors((current) => ({ ...current, phone: undefined }));
+                          clearRecoveryError("phone");
                         }}
                         placeholder="09171234567"
                         aria-invalid={Boolean(recoveryErrors.phone)}

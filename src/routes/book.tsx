@@ -55,6 +55,7 @@ import { createBooking, getAvailability, getRescheduleDetails } from "@/lib/book
 import {
   DEFAULT_BOOKING_TERMS,
   DEFAULT_BOOKING_HOURS,
+  bookingSubmissionClosedMessage,
   PHONE_VALIDATION_MESSAGE,
   SHOP,
   MAX_BOOKING_SERVICE_SELECTIONS,
@@ -63,6 +64,7 @@ import {
   formatPHP,
   formatTime,
   formatNamePartInput,
+  isBookingSubmissionOpen,
   normalizePhilippineMobile,
   sanitizePhilippineMobileInput,
 } from "@/lib/shop";
@@ -236,6 +238,7 @@ function BookPage() {
   const isReschedule = Boolean(search.reschedule && search.phone);
   const [rescheduleReason, setRescheduleReason] = useState("");
   const [reschedulePrefillReady, setReschedulePrefillReady] = useState(!isReschedule);
+  const [clock, setClock] = useState(() => Date.now());
 
   const rescheduleDetails = useQuery({
     queryKey: ["reschedule-details", search.reschedule, search.phone],
@@ -457,6 +460,8 @@ function BookPage() {
             : DEFAULT_BOOKING_HOURS.closingTime,
         }
       : DEFAULT_BOOKING_HOURS);
+  const bookingSubmissionOpen = isBookingSubmissionOpen(new Date(clock));
+  const bookingClosedMessage = bookingSubmissionClosedMessage();
   const serviceStepOverflowMinutes =
     !isReschedule && serviceIds.length > 1
       ? bookingDurationOverflowMinutes(operatingHours.openingTime, totalDuration, operatingHours)
@@ -468,6 +473,12 @@ function BookPage() {
       : 0;
   const needsMultiDayContinuationConfirmation = multiDayOverflowMinutes > 30;
   const bookingTerms = shopSettings.data?.booking_terms || DEFAULT_BOOKING_TERMS;
+
+  useEffect(() => {
+    const refreshClock = () => setClock(Date.now());
+    const interval = window.setInterval(refreshClock, 15_000);
+    return () => window.clearInterval(interval);
+  }, []);
 
   useEffect(() => {
     if (!focusRequest) return;
@@ -658,6 +669,10 @@ function BookPage() {
   }
 
   function continueMobileBooking() {
+    if (!bookingSubmissionOpen) {
+      setErrors((current) => ({ ...current, schedule: bookingClosedMessage }));
+      return;
+    }
     const e = validationErrors([mobileStep]);
     if (!showValidationErrors(e)) return;
     const requiresMultiDayConfirmation =
@@ -673,6 +688,11 @@ function BookPage() {
   }
 
   function continueWithMultiDayBooking() {
+    if (!bookingSubmissionOpen) {
+      setMultiDayContinuationOpen(false);
+      setErrors((current) => ({ ...current, schedule: bookingClosedMessage }));
+      return;
+    }
     setMultiDayContinuationAccepted(true);
     setMultiDayContinuationOpen(false);
     setMobileStep((multiDayConfirmationStep ?? mobileStep) + 1);
@@ -687,6 +707,10 @@ function BookPage() {
   }
 
   function submitBooking() {
+    if (!bookingSubmissionOpen) {
+      setErrors((current) => ({ ...current, schedule: bookingClosedMessage }));
+      return;
+    }
     if (!rescheduleReady || !validate()) return;
     if (isReschedule) {
       mutation.mutate();
@@ -696,6 +720,11 @@ function BookPage() {
   }
 
   function confirmBooking() {
+    if (!bookingSubmissionOpen) {
+      setBookingConfirmationOpen(false);
+      setErrors((current) => ({ ...current, schedule: bookingClosedMessage }));
+      return;
+    }
     if (!validate()) {
       setBookingConfirmationOpen(false);
       return;
@@ -836,6 +865,22 @@ function BookPage() {
             : "Schedule your motorcycle service online and secure an available appointment slot in advance."}
         </p>
 
+        {!bookingSubmissionOpen && (
+          <div
+            role="alert"
+            className="mt-6 flex items-start gap-3 rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm"
+          >
+            <Info className="mt-0.5 h-5 w-5 shrink-0 text-destructive" aria-hidden="true" />
+            <div>
+              <p className="font-medium text-foreground">Online booking is currently closed</p>
+              <p className="mt-1 leading-5 text-muted-foreground">
+                The shop is currently outside booking hours. New booking submissions are accepted
+                from 8:00 AM to 5:00 PM, Philippine time.
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="sticky top-20 z-20 -mx-4 mt-6 border-y border-border/70 bg-background/95 px-4 py-3 backdrop-blur">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span className="font-medium text-foreground">Step {mobileStep} of 5</span>
@@ -948,7 +993,7 @@ function BookPage() {
                 />
               </Field>
             </div>
-            <WizardActions onContinue={continueMobileBooking} />
+            <WizardActions onContinue={continueMobileBooking} disabled={!bookingSubmissionOpen} />
           </Section>
 
           <Section title="2. Motorcycle details" className={cn(mobileStep !== 2 && "hidden")}>
@@ -1027,7 +1072,11 @@ function BookPage() {
                 />
               </Field>
             </div>
-            <WizardActions onBack={goBackMobileBooking} onContinue={continueMobileBooking} />
+            <WizardActions
+              onBack={goBackMobileBooking}
+              onContinue={continueMobileBooking}
+              disabled={!bookingSubmissionOpen}
+            />
           </Section>
 
           <Section
@@ -1117,7 +1166,11 @@ function BookPage() {
               </Link>{" "}
               for details to understand what each service includes.
             </p>
-            <WizardActions onBack={goBackMobileBooking} onContinue={continueMobileBooking} />
+            <WizardActions
+              onBack={goBackMobileBooking}
+              onContinue={continueMobileBooking}
+              disabled={!bookingSubmissionOpen}
+            />
           </Section>
 
           <Section
@@ -1279,7 +1332,11 @@ function BookPage() {
                 <FieldError message={errors.startTime} className="mt-2" />
               </>
             )}
-            <WizardActions onBack={goBackMobileBooking} onContinue={continueMobileBooking} />
+            <WizardActions
+              onBack={goBackMobileBooking}
+              onContinue={continueMobileBooking}
+              disabled={!bookingSubmissionOpen}
+            />
           </Section>
 
           <Section
@@ -1434,7 +1491,10 @@ function BookPage() {
                   type="submit"
                   size="lg"
                   disabled={
-                    !rescheduleReady || mutation.isPending || (turnstileEnabled && !turnstileToken)
+                    !bookingSubmissionOpen ||
+                    !rescheduleReady ||
+                    mutation.isPending ||
+                    (turnstileEnabled && !turnstileToken)
                   }
                   className="w-full font-display tracking-wide uppercase sm:w-auto"
                 >
@@ -1470,7 +1530,7 @@ function BookPage() {
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel / Go back</AlertDialogCancel>
                   <AlertDialogAction
-                    disabled={mutation.isPending}
+                    disabled={!bookingSubmissionOpen || mutation.isPending}
                     onClick={confirmBooking}
                     className="bg-primary text-primary-foreground hover:bg-primary/90"
                   >
@@ -1572,7 +1632,15 @@ function Section({
   );
 }
 
-function WizardActions({ onBack, onContinue }: { onBack?: () => void; onContinue: () => void }) {
+function WizardActions({
+  onBack,
+  onContinue,
+  disabled = false,
+}: {
+  onBack?: () => void;
+  onContinue: () => void;
+  disabled?: boolean;
+}) {
   return (
     <div className="mt-6 flex justify-between gap-3 border-t border-border/70 pt-4">
       {onBack ? (
@@ -1585,6 +1653,7 @@ function WizardActions({ onBack, onContinue }: { onBack?: () => void; onContinue
       <Button
         type="button"
         onClick={onContinue}
+        disabled={disabled}
         className="flex-1 font-display uppercase sm:flex-none"
       >
         Continue

@@ -10,6 +10,7 @@ export const SHOP = {
   facebook: "https://www.facebook.com/profile.php?id=100082988659961",
   messenger: "https://www.facebook.com/messages/t/101547759281909/",
   noticeHours: 48,
+  timeZone: "Asia/Manila",
 };
 
 /** Default copy shown on the customer booking form; administrators can replace it in Settings. */
@@ -83,6 +84,9 @@ export const DEFAULT_BOOKING_HOURS = {
   openingTime: "08:00",
   closingTime: "17:00",
 } as const;
+
+/** New online booking requests are accepted only during this Manila time window. */
+export const BOOKING_SUBMISSION_HOURS = DEFAULT_BOOKING_HOURS;
 
 export type BookingHours = {
   openingTime: string;
@@ -173,6 +177,21 @@ export function isBookingStartTime(time: string, hours: BookingHours = DEFAULT_B
     minutes < closingMinutes &&
     (minutes - openingMinutes) % BOOKING_INTERVAL_MINUTES === 0
   );
+}
+
+/**
+ * True only while online booking submissions are open in the shop's configured
+ * local timezone. Closing time is exclusive, so 5:00 PM is the cutoff.
+ */
+export function isBookingSubmissionOpen(now = new Date()) {
+  const currentMinutes = timeToMinutes(manilaNow(now).time);
+  const openingMinutes = timeToMinutes(BOOKING_SUBMISSION_HOURS.openingTime);
+  const closingMinutes = timeToMinutes(BOOKING_SUBMISSION_HOURS.closingTime);
+  return currentMinutes >= openingMinutes && currentMinutes < closingMinutes;
+}
+
+export function bookingSubmissionClosedMessage() {
+  return `Online booking is currently closed. Booking submissions are available from ${formatTime(BOOKING_SUBMISSION_HOURS.openingTime)} to ${formatTime(BOOKING_SUBMISSION_HOURS.closingTime)} (${SHOP.timeZone}).`;
 }
 
 /** True when the entire appointment fits inside the shop's operating hours. */
@@ -278,17 +297,17 @@ export function formatDateLong(iso: string) {
   });
 }
 
-/** Current date/time parts in Asia/Manila. */
-export function manilaNow() {
+/** Current date/time parts in the shop's configured local timezone. */
+export function manilaNow(now = new Date()) {
   const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Manila",
+    timeZone: SHOP.timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
-  }).formatToParts(new Date());
+  }).formatToParts(now);
   const get = (t: string) => parts.find((p) => p.type === t)?.value ?? "00";
   return {
     date: `${get("year")}-${get("month")}-${get("day")}`,

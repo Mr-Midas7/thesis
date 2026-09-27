@@ -7,6 +7,7 @@ import type { Database } from "@/integrations/supabase/types";
 import { buildPublicAvailability } from "./availability";
 import {
   addDays,
+  bookingSubmissionClosedMessage,
   buildBookingTimeSlots,
   DEFAULT_BOOKING_HOURS,
   decodeBlockReason,
@@ -19,6 +20,7 @@ import {
   bookingDurationForFirstDay,
   bookingDurationOverflowMinutes,
   isBookingStartTime,
+  isBookingSubmissionOpen,
   isBookingTimeRangeWithinHours,
   isShopOpenDate,
   isSlotBookable,
@@ -961,6 +963,10 @@ export const createBooking = createServerFn({ method: "POST" })
         reference: existingRequest.data.reference_code,
         total: Number(existingRequest.data.total_estimate),
       };
+    }
+
+    if (!isBookingSubmissionOpen()) {
+      return { ok: false as const, error: bookingSubmissionClosedMessage() };
     }
 
     let rescheduledFrom: {

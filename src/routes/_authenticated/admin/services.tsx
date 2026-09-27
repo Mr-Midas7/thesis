@@ -125,6 +125,14 @@ function ServicesAdmin() {
   const [saveConfirmationOpen, setSaveConfirmationOpen] = useState(false);
   const [archiveError, setArchiveError] = useState<string | null>(null);
 
+  function clearFormError(field: keyof typeof formErrors) {
+    setFormErrors((current) => {
+      const next = { ...current };
+      delete next[field];
+      return next;
+    });
+  }
+
   const services = useQuery({
     queryKey: ["admin-services"],
     queryFn: async () => {
@@ -572,7 +580,7 @@ function ServicesAdmin() {
                   value={form.name}
                   onChange={(event) => {
                     setForm({ ...form, name: event.target.value });
-                    setFormErrors((current) => ({ ...current, name: undefined }));
+                    clearFormError("name");
                   }}
                   aria-invalid={!!formErrors.name}
                 />
@@ -590,7 +598,7 @@ function ServicesAdmin() {
                       setIsCustomCategory(false);
                       setForm({ ...form, category: value });
                     }
-                    setFormErrors((current) => ({ ...current, category: undefined }));
+                    clearFormError("category");
                   }}
                 >
                   <SelectTrigger id="service-category" aria-invalid={!!formErrors.category}>
@@ -610,7 +618,7 @@ function ServicesAdmin() {
                     value={form.category}
                     onChange={(event) => {
                       setForm({ ...form, category: event.target.value });
-                      setFormErrors((current) => ({ ...current, category: undefined }));
+                      clearFormError("category");
                     }}
                     placeholder="e.g. maintenance"
                     aria-label="New service category"
@@ -641,7 +649,7 @@ function ServicesAdmin() {
                       ...form,
                       defaultDuration: value === "" ? Number.NaN : Number(value),
                     });
-                    setFormErrors((current) => ({ ...current, defaultDuration: undefined }));
+                    clearFormError("defaultDuration");
                   }}
                   aria-invalid={!!formErrors.defaultDuration}
                 />
@@ -690,7 +698,7 @@ function ServicesAdmin() {
                       ...form,
                       defaultPrice: value === "" ? Number.NaN : Number(value),
                     });
-                    setFormErrors((current) => ({ ...current, defaultPrice: undefined }));
+                    clearFormError("defaultPrice");
                   }}
                   aria-invalid={!!formErrors.defaultPrice}
                 />
@@ -710,14 +718,14 @@ function ServicesAdmin() {
                 ...items,
                 { brand: "", model: "", duration_minutes: 60, price: 0 },
               ]);
-              setFormErrors((current) => ({ ...current, overrides: undefined }));
+              clearFormError("overrides");
               setEditingOverride(modelOverrides.length);
             }}
             onEdit={setEditingOverride}
             onDone={() => setEditingOverride(null)}
             onRemove={(index) => {
               removeOverride(index);
-              setFormErrors((current) => ({ ...current, overrides: undefined }));
+              clearFormError("overrides");
             }}
             onChange={(index, changes) => {
               setModelOverrides((items) =>
@@ -725,7 +733,7 @@ function ServicesAdmin() {
                   itemIndex === index ? { ...item, ...changes } : item,
                 ),
               );
-              setFormErrors((current) => ({ ...current, overrides: undefined }));
+              clearFormError("overrides");
             }}
           />
           <FieldError message={formErrors.overrides} />
