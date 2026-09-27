@@ -1412,7 +1412,7 @@ function BookPage() {
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
                 <div className="space-y-1">
                   <p className="font-medium text-foreground">
-                    Your estimated total covers labor and selected service charges only.
+                    Your estimated total covers the labor/service charge for the selected services only.
                   </p>
                   <p className="leading-5 text-muted-foreground">
                     Parts &amp; Accessories, replacement parts, tools, materials, or other work
@@ -1528,7 +1528,7 @@ function BookPage() {
                 </div>
 
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel / Go back</AlertDialogCancel>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
                   <AlertDialogAction
                     disabled={!bookingSubmissionOpen || mutation.isPending}
                     onClick={confirmBooking}
