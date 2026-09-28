@@ -10,7 +10,7 @@ import {
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
-import { useDeferredValue, useEffect, useState } from "react";
+import { useDeferredValue, useEffect, useRef, useState } from "react";
 import type { DateRange } from "react-day-picker";
 
 import { PaginationControls } from "@/components/admin/pagination-controls";
@@ -731,7 +731,7 @@ function ArchivePage() {
                     <TableHead>Service</TableHead>
                     <TableHead>Duration</TableHead>
                     <TableHead>Price</TableHead>
-                    <TableHead>Description</TableHead>
+                    <TableHead>Service details</TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -747,11 +747,22 @@ function ArchivePage() {
                       <TableCell data-label="Price" className="text-sm text-primary">
                         {formatPHP(s.price)}
                       </TableCell>
-                      <TableCell data-label="Description" className="text-xs text-muted-foreground">
-                        {s.description ?? "-"}
+                      <TableCell
+                        data-label="Service details"
+                        className="min-w-0 text-xs text-muted-foreground"
+                      >
+                        <ArchiveServiceDetails
+                          serviceId={s.id}
+                          serviceName={s.name}
+                          description={s.description}
+                        />
                       </TableCell>
-                      <TableCell data-label="Actions" className="text-right">
+                      <TableCell
+                        data-label="Actions"
+                        className="align-middle text-right md:w-[10.75rem]"
+                      >
                         <ArchiveRowActions
+                          className="flex-nowrap"
                           onRestore={() => restoreService.mutate(s.id)}
                           onDelete={() => confirmDelete(s.id, "service")}
                         />
@@ -1308,18 +1319,80 @@ function endOfDay(date: string) {
 function ArchiveRowActions({
   onRestore,
   onDelete,
+  className,
 }: {
   onRestore: () => void;
   onDelete: () => void;
+  className?: string;
 }) {
   return (
-    <div className="flex flex-wrap justify-end gap-2">
+    <div className={cn("flex flex-wrap justify-end gap-2", className)}>
       <Button size="sm" variant="outline" onClick={onRestore}>
         <RotateCcw /> Restore
       </Button>
       <Button size="sm" variant="destructive" onClick={onDelete}>
         <Trash2 /> Delete
       </Button>
+    </div>
+  );
+}
+
+function ArchiveServiceDetails({
+  serviceId,
+  serviceName,
+  description,
+}: {
+  serviceId: string;
+  serviceName: string;
+  description: string | null;
+}) {
+  const detailsRef = useRef<HTMLParagraphElement>(null);
+  const [expanded, setExpanded] = useState(false);
+  const [canExpand, setCanExpand] = useState(false);
+  const details = description?.trim() ?? "";
+  const detailsId = `archive-service-details-${serviceId}`;
+
+  useEffect(() => {
+    const element = detailsRef.current;
+    if (!element || !details) return;
+
+    const checkOverflow = () => {
+      if (!expanded) setCanExpand(element.scrollHeight > element.clientHeight + 1);
+    };
+
+    checkOverflow();
+    if (typeof ResizeObserver === "undefined") return;
+
+    const observer = new ResizeObserver(checkOverflow);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [details, expanded]);
+
+  if (!details) return "-";
+
+  return (
+    <div className="w-full max-w-[22rem] text-left">
+      <p
+        id={detailsId}
+        ref={detailsRef}
+        className={cn("break-words whitespace-pre-wrap", !expanded && "line-clamp-3")}
+      >
+        {details}
+      </p>
+      {canExpand && (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="mt-1 h-auto p-0 text-xs"
+          onClick={() => setExpanded((current) => !current)}
+          aria-controls={detailsId}
+          aria-expanded={expanded}
+          aria-label={`${expanded ? "Collapse" : "Expand"} details for ${serviceName}`}
+        >
+          {expanded ? "See Less" : "See More"}
+        </Button>
+      )}
     </div>
   );
 }
