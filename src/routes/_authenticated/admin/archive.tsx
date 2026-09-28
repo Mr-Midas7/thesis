@@ -94,6 +94,25 @@ type ArchiveFilters = {
 
 type ArchiveDatePeriod = "all" | "today" | "week" | "month" | "custom";
 
+type ArchiveItemType =
+  "appointment" | "service" | "product" | "motorcycle" | "crew" | "block" | "blockedNumber";
+
+type ArchiveActionTarget = {
+  id: string;
+  type: ArchiveItemType;
+  label: string;
+};
+
+const ARCHIVE_ITEM_LABELS: Record<ArchiveItemType, string> = {
+  appointment: "appointment",
+  service: "service",
+  product: "product",
+  motorcycle: "motorcycle catalog item",
+  crew: "pit crew member",
+  block: "schedule block",
+  blockedNumber: "blocked number",
+};
+
 const EMPTY_FILTERS: ArchiveFilters = {
   term: "",
   datePeriod: "all",
@@ -111,7 +130,8 @@ function ArchivePage() {
   const [filters, setFilters] = useState<ArchiveFilters>(EMPTY_FILTERS);
   const [activeTab, setActiveTab] = useState("appointments");
   const [page, setPage] = useState(0);
-  const [deleteTarget, setDeleteTarget] = useState<{ id: string; type: string } | null>(null);
+  const [restoreTarget, setRestoreTarget] = useState<ArchiveActionTarget | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ArchiveActionTarget | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const deferredTerm = useDeferredValue(filters.term);
   const cleanedSearchTerm = cleanSearchTerm(deferredTerm);
@@ -397,8 +417,8 @@ function ArchivePage() {
   });
 
   const deleteItem = useMutation({
-    mutationFn: async ({ id, type }: { id: string; type: string }) => {
-      const tables: Record<string, string> = {
+    mutationFn: async ({ id, type }: Pick<ArchiveActionTarget, "id" | "type">) => {
+      const tables: Record<ArchiveItemType, string> = {
         appointment: "appointments",
         service: "services",
         product: "products",
@@ -481,8 +501,42 @@ function ArchivePage() {
     if (page > lastPage) setPage(lastPage);
   }, [activeArchive?.total, page, pageSize]);
 
-  const confirmDelete = (id: string, type: string) => {
-    setDeleteTarget({ id, type });
+  const confirmRestore = (target: ArchiveActionTarget) => {
+    setRestoreTarget(target);
+  };
+
+  const confirmDelete = (target: ArchiveActionTarget) => {
+    setDeleteTarget(target);
+  };
+
+  const handleRestore = () => {
+    const target = restoreTarget;
+    if (!target) return;
+
+    setRestoreTarget(null);
+    switch (target.type) {
+      case "appointment":
+        restoreAppointment.mutate(target.id);
+        break;
+      case "service":
+        restoreService.mutate(target.id);
+        break;
+      case "product":
+        restoreProduct.mutate(target.id);
+        break;
+      case "motorcycle":
+        restoreMotorcycle.mutate(target.id);
+        break;
+      case "crew":
+        restoreCrew.mutate(target.id);
+        break;
+      case "block":
+        restoreBlock.mutate(target.id);
+        break;
+      case "blockedNumber":
+        restoreBlockedNumber.mutate(target.id);
+        break;
+    }
   };
 
   const handleDelete = () => {
@@ -702,8 +756,20 @@ function ArchivePage() {
                       </TableCell>
                       <TableCell data-label="Actions" className="text-right">
                         <ArchiveRowActions
-                          onRestore={() => restoreAppointment.mutate(a.id)}
-                          onDelete={() => confirmDelete(a.id, "appointment")}
+                          onRestore={() =>
+                            confirmRestore({
+                              id: a.id,
+                              type: "appointment",
+                              label: a.reference_code,
+                            })
+                          }
+                          onDelete={() =>
+                            confirmDelete({
+                              id: a.id,
+                              type: "appointment",
+                              label: a.reference_code,
+                            })
+                          }
                         />
                       </TableCell>
                     </TableRow>
@@ -763,8 +829,12 @@ function ArchivePage() {
                       >
                         <ArchiveRowActions
                           className="flex-nowrap"
-                          onRestore={() => restoreService.mutate(s.id)}
-                          onDelete={() => confirmDelete(s.id, "service")}
+                          onRestore={() =>
+                            confirmRestore({ id: s.id, type: "service", label: s.name })
+                          }
+                          onDelete={() =>
+                            confirmDelete({ id: s.id, type: "service", label: s.name })
+                          }
                         />
                       </TableCell>
                     </TableRow>
@@ -818,8 +888,12 @@ function ArchivePage() {
                       </TableCell>
                       <TableCell data-label="Actions" className="text-right">
                         <ArchiveRowActions
-                          onRestore={() => restoreProduct.mutate(p.id)}
-                          onDelete={() => confirmDelete(p.id, "product")}
+                          onRestore={() =>
+                            confirmRestore({ id: p.id, type: "product", label: p.name })
+                          }
+                          onDelete={() =>
+                            confirmDelete({ id: p.id, type: "product", label: p.name })
+                          }
                         />
                       </TableCell>
                     </TableRow>
@@ -862,8 +936,20 @@ function ArchivePage() {
                       </TableCell>
                       <TableCell data-label="Actions" className="text-right">
                         <ArchiveRowActions
-                          onRestore={() => restoreMotorcycle.mutate(p.id)}
-                          onDelete={() => confirmDelete(p.id, "motorcycle")}
+                          onRestore={() =>
+                            confirmRestore({
+                              id: p.id,
+                              type: "motorcycle",
+                              label: `${p.brand ?? ""} ${p.model}`.trim(),
+                            })
+                          }
+                          onDelete={() =>
+                            confirmDelete({
+                              id: p.id,
+                              type: "motorcycle",
+                              label: `${p.brand ?? ""} ${p.model}`.trim(),
+                            })
+                          }
                         />
                       </TableCell>
                     </TableRow>
@@ -910,8 +996,10 @@ function ArchivePage() {
                       </TableCell>
                       <TableCell data-label="Actions" className="text-right">
                         <ArchiveRowActions
-                          onRestore={() => restoreCrew.mutate(c.id)}
-                          onDelete={() => confirmDelete(c.id, "crew")}
+                          onRestore={() =>
+                            confirmRestore({ id: c.id, type: "crew", label: c.name })
+                          }
+                          onDelete={() => confirmDelete({ id: c.id, type: "crew", label: c.name })}
                         />
                       </TableCell>
                     </TableRow>
@@ -958,8 +1046,20 @@ function ArchivePage() {
                       </TableCell>
                       <TableCell data-label="Actions" className="text-right">
                         <ArchiveRowActions
-                          onRestore={() => restoreBlock.mutate(b.id)}
-                          onDelete={() => confirmDelete(b.id, "block")}
+                          onRestore={() =>
+                            confirmRestore({
+                              id: b.id,
+                              type: "block",
+                              label: b.reason?.trim() || formatDateLong(b.block_date),
+                            })
+                          }
+                          onDelete={() =>
+                            confirmDelete({
+                              id: b.id,
+                              type: "block",
+                              label: b.reason?.trim() || formatDateLong(b.block_date),
+                            })
+                          }
                         />
                       </TableCell>
                     </TableRow>
@@ -1010,8 +1110,20 @@ function ArchivePage() {
                       </TableCell>
                       <TableCell data-label="Actions" className="text-right">
                         <ArchiveRowActions
-                          onRestore={() => restoreBlockedNumber.mutate(blockedNumber.id)}
-                          onDelete={() => confirmDelete(blockedNumber.id, "blockedNumber")}
+                          onRestore={() =>
+                            confirmRestore({
+                              id: blockedNumber.id,
+                              type: "blockedNumber",
+                              label: toLocalPhilippineMobile(blockedNumber.phone),
+                            })
+                          }
+                          onDelete={() =>
+                            confirmDelete({
+                              id: blockedNumber.id,
+                              type: "blockedNumber",
+                              label: toLocalPhilippineMobile(blockedNumber.phone),
+                            })
+                          }
                         />
                       </TableCell>
                     </TableRow>
@@ -1041,12 +1153,34 @@ function ArchivePage() {
         </Card>
       </Tabs>
 
+      <AlertDialog open={!!restoreTarget} onOpenChange={(open) => !open && setRestoreTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              Restore {restoreTarget && ARCHIVE_ITEM_LABELS[restoreTarget.type]}?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Restore <span className="font-medium text-foreground">{restoreTarget?.label}</span> to
+              the active {restoreTarget && ARCHIVE_ITEM_LABELS[restoreTarget.type]} list? It will be
+              available in the corresponding admin module again.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction onClick={handleRestore}>Restore</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
       <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Confirm Permanent Delete</AlertDialogTitle>
+            <AlertDialogTitle>
+              Permanently delete {deleteTarget && ARCHIVE_ITEM_LABELS[deleteTarget.type]}?
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              This action cannot be undone. The item will be permanently removed from the database.
+              <span className="font-medium text-foreground">{deleteTarget?.label}</span> will be
+              removed permanently from the database. This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
