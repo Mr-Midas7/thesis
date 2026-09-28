@@ -1,7 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { CircleAlert, CircleHelp, Loader2, Search } from "lucide-react";
+import { CircleAlert, CircleHelp, Copy, Loader2, Search } from "lucide-react";
 import { format, parseISO } from "date-fns";
 import { useEffect, useMemo, useState } from "react";
 
@@ -124,6 +124,9 @@ function MyAppointment() {
     date: string;
     startTime: string;
   } | null>(null);
+  const [rescheduleReferenceCopyStatus, setRescheduleReferenceCopyStatus] = useState<
+    "copied" | "error" | null
+  >(null);
   const [rescheduleTermsAccepted, setRescheduleTermsAccepted] = useState(false);
   const [rescheduleErrors, setRescheduleErrors] = useState<{
     date?: string;
@@ -310,6 +313,7 @@ function MyAppointment() {
         setRescheduleErrors((current) => ({ ...current, request: result.error }));
         return;
       }
+      setRescheduleReferenceCopyStatus(null);
       setRescheduleConfirmation({
         reference: result.reference,
         date: newDate,
@@ -688,6 +692,27 @@ function MyAppointment() {
             <p className="font-display mt-2 text-3xl tracking-widest text-primary">
               {rescheduleConfirmation.reference}
             </p>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="mt-4"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(rescheduleConfirmation.reference);
+                  setRescheduleReferenceCopyStatus("copied");
+                } catch {
+                  setRescheduleReferenceCopyStatus("error");
+                }
+              }}
+            >
+              <Copy /> {rescheduleReferenceCopyStatus === "copied" ? "Copied" : "Copy code"}
+            </Button>
+            {rescheduleReferenceCopyStatus === "error" && (
+              <p className="mt-2 text-xs text-destructive" role="alert">
+                Could not copy the code automatically. Please copy it manually.
+              </p>
+            )}
             <p className="mt-3 text-sm text-muted-foreground">
               Reserved for {formatDateLong(rescheduleConfirmation.date)} at{" "}
               {formatTime(rescheduleConfirmation.startTime)}. Save this code; the linked booking
