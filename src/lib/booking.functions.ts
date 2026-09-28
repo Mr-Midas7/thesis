@@ -1652,9 +1652,8 @@ export const createBooking = createServerFn({ method: "POST" })
         hint: inserted.error.hint,
       });
       if (
-        /PGRST202|create_(re)?scheduled_booking_atomic|function .* does not exist/i.test(
-          inserted.error.message,
-        )
+        inserted.error.code === "PGRST202" ||
+        /could not find the function public\.create_booking_atomic/i.test(inserted.error.message)
       ) {
         return {
           ok: false as const,

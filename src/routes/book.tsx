@@ -1341,12 +1341,13 @@ function BookPage() {
 
           <Section
             title="5. Review"
-            error={errors.terms}
+            error={errors.terms ?? errors.schedule}
             className={cn(mobileStep !== 5 && "hidden")}
           >
             <p className="mb-5 text-sm text-muted-foreground">
               Review the details below before confirming your appointment.
             </p>
+            <FieldError message={errors.schedule} className="mb-5" />
             <div className="grid gap-5 lg:grid-cols-2">
               <div className="space-y-3">
                 <p className="text-xs tracking-widest text-muted-foreground uppercase">
