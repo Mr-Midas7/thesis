@@ -62,14 +62,25 @@ function AuthPage() {
         email: email.trim().toLowerCase(),
         password,
       });
-      if (error) throw error;
+      if (error) throw new Error(`AUTHENTICATION_FAILED: ${error.message}`);
 
       const { error: claimError } = await supabase.rpc("claim_admin_session", {
         p_handover_token: null,
       });
       if (claimError) {
         await supabase.auth.signOut({ scope: "local" });
-        throw new Error(claimError.message);
+        throw new Error(`ADMIN_SESSION_FAILED: ${claimError.message}`);
+      }
+
+      // Do not navigate until the same server-side check used by protected
+      // admin routes confirms this JWT owns the lease.
+      const { data: isActive, error: validationError } =
+        await supabase.rpc("validate_admin_session");
+      if (validationError || !isActive) {
+        await supabase.auth.signOut({ scope: "local" });
+        throw new Error(
+          `ADMIN_SESSION_FAILED: ${validationError?.message ?? "The new administrator session could not be verified."}`,
+        );
       }
     },
     onSuccess: async () => {
@@ -87,11 +98,15 @@ function AuthPage() {
       navigate({ to: "/admin", replace: true });
     },
     onError: (error: Error) => {
+      const message = error.message.replace(
+        /^(AUTHENTICATION_FAILED|ADMIN_SESSION_FAILED):\s*/,
+        "",
+      );
       setErrors((current) => ({
         ...current,
-        password: /administrator session is already active/i.test(error.message)
-          ? error.message
-          : "Invalid email or password.",
+        password: /^AUTHENTICATION_FAILED:/.test(error.message)
+          ? "Invalid email or password."
+          : message || "We could not start the administrator session. Please try again.",
       }));
     },
   });
