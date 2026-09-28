@@ -1530,6 +1530,7 @@ function BookPage() {
                 <AlertDialogFooter>
                   <AlertDialogCancel>Cancel</AlertDialogCancel>
                   <AlertDialogAction
+                    type="button"
                     disabled={!bookingSubmissionOpen || mutation.isPending}
                     onClick={confirmBooking}
                     className="bg-primary text-primary-foreground hover:bg-primary/90"

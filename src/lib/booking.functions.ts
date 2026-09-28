@@ -958,9 +958,20 @@ export const createBooking = createServerFn({ method: "POST" })
       };
     }
     if (existingRequest.data) {
+      const reference = normalizeReferenceCode(existingRequest.data.reference_code);
+      if (!REFERENCE_CODE_PATTERN.test(reference)) {
+        console.error("[Booking] existing booking has an invalid reference", {
+          bookingRequestId: data.idempotencyKey,
+        });
+        return {
+          ok: false as const,
+          error:
+            "We saved your booking, but could not prepare its reference code. Please contact the shop.",
+        };
+      }
       return {
         ok: true as const,
-        reference: existingRequest.data.reference_code,
+        reference,
         total: Number(existingRequest.data.total_estimate),
       };
     }
@@ -980,6 +991,27 @@ export const createBooking = createServerFn({ method: "POST" })
         return {
           ok: false as const,
           error: "We could not verify the original appointment. Please look it up again.",
+        };
+      }
+      const continuations = await supabaseAdmin
+        .from("appointment_continuations")
+        .select("id", { count: "exact", head: true })
+        .eq("appointment_id", original.id);
+      if (continuations.error) {
+        console.error("[Reschedule] continuation lookup failed", continuations.error);
+        return {
+          ok: false as const,
+          error: "We could not verify the original appointment schedule. Please try again.",
+        };
+      }
+      // The approval RPC creates a linked replacement for a one-day booking.
+      // Allowing a multi-day parent through would release its continuation
+      // reservations without recreating them on the replacement appointment.
+      if ((continuations.count ?? 0) > 0) {
+        return {
+          ok: false as const,
+          error:
+            "This appointment includes a multi-day service. Please call the shop to reschedule all reserved service days together.",
         };
       }
       if (original.rescheduled_to_appointment_id) {
@@ -1633,15 +1665,43 @@ export const createBooking = createServerFn({ method: "POST" })
       return { ok: false as const, error: "We could not save your booking. Please try again." };
     }
 
-    if (!inserted.data) {
-      console.error("[Booking] atomic database write returned no result");
-      return { ok: false as const, error: "We could not save your booking. Please try again." };
+    // `create_booking_atomic` is idempotent, but a proxy/RPC response can be
+    // empty even after PostgreSQL has committed the booking. Resolve the saved
+    // appointment from its request key instead of withholding a real reference
+    // code because of that transport-level response shape.
+    const savedBooking = await supabaseAdmin
+      .from("appointments")
+      .select("reference_code,total_estimate")
+      .eq("booking_request_id", data.idempotencyKey)
+      .maybeSingle();
+    if (savedBooking.error || !savedBooking.data) {
+      console.error("[Booking] could not resolve saved atomic booking", {
+        bookingRequestId: data.idempotencyKey,
+        code: savedBooking.error?.code,
+        message: savedBooking.error?.message,
+      });
+      return {
+        ok: false as const,
+        error: "Your booking could not be confirmed. Please try again.",
+      };
+    }
+
+    const savedReference = normalizeReferenceCode(savedBooking.data.reference_code);
+    if (!REFERENCE_CODE_PATTERN.test(savedReference)) {
+      console.error("[Booking] saved booking has an invalid reference", {
+        bookingRequestId: data.idempotencyKey,
+      });
+      return {
+        ok: false as const,
+        error:
+          "We saved your booking, but could not prepare its reference code. Please contact the shop.",
+      };
     }
 
     return {
       ok: true as const,
-      reference: inserted.data[0]?.reference_code ?? reference,
-      total,
+      reference: savedReference,
+      total: Number(savedBooking.data.total_estimate),
       continuationSegments: continuationPlan.segments.map((segment) => ({
         date: segment.appointmentDate,
         startTime: segment.startTime,
@@ -1848,6 +1908,25 @@ export const getRescheduleDetails = createServerFn({ method: "POST" })
       return {
         ok: false as const,
         error: `Rescheduling needs ${bookingRules.reschedulingNoticeHours} hours notice. Please call the shop instead.`,
+      };
+    }
+
+    const continuations = await supabaseAdmin
+      .from("appointment_continuations")
+      .select("id", { count: "exact", head: true })
+      .eq("appointment_id", appt.id);
+    if (continuations.error) {
+      console.error("[Reschedule] continuation lookup failed", continuations.error);
+      return {
+        ok: false as const,
+        error: "We could not verify the original appointment schedule. Please try again.",
+      };
+    }
+    if ((continuations.count ?? 0) > 0) {
+      return {
+        ok: false as const,
+        error:
+          "This appointment includes a multi-day service. Please call the shop to reschedule all reserved service days together.",
       };
     }
 
