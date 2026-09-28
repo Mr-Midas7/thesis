@@ -197,6 +197,7 @@ export type Database = {
           moto_variant: string | null;
           moto_year: number | null;
           notes: string | null;
+          no_show_count_at_booking: number;
           phone: string;
           plate_number: string;
           pending_reschedule_date: string | null;
@@ -241,6 +242,7 @@ export type Database = {
           moto_variant?: string | null;
           moto_year?: number | null;
           notes?: string | null;
+          no_show_count_at_booking?: number;
           phone: string;
           plate_number: string;
           pending_reschedule_date?: string | null;
@@ -285,6 +287,7 @@ export type Database = {
           moto_variant?: string | null;
           moto_year?: number | null;
           notes?: string | null;
+          no_show_count_at_booking?: number;
           phone?: string;
           plate_number?: string;
           pending_reschedule_date?: string | null;
@@ -961,6 +964,16 @@ export type Database = {
         };
         Returns: undefined;
       };
+      claim_admin_session: {
+        Args: {
+          p_handover_token?: string | null;
+        };
+        Returns: boolean;
+      };
+      create_admin_session_handover: {
+        Args: Record<PropertyKey, never>;
+        Returns: string;
+      };
       create_booking_atomic: {
         Args: {
           p_appointment_date: string;
@@ -1005,6 +1018,14 @@ export type Database = {
         };
         Returns: undefined;
       };
+      release_admin_session: {
+        Args: Record<PropertyKey, never>;
+        Returns: boolean;
+      };
+      renew_admin_session: {
+        Args: Record<PropertyKey, never>;
+        Returns: boolean;
+      };
       submit_reschedule_request: {
         Args: {
           p_appointment_date: string;
@@ -1014,6 +1035,10 @@ export type Database = {
           p_start_time: string;
         };
         Returns: undefined;
+      };
+      validate_admin_session: {
+        Args: Record<PropertyKey, never>;
+        Returns: boolean;
       };
       update_appointment_details_atomic: {
         Args: {

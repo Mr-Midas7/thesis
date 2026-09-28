@@ -40,9 +40,20 @@ function AuthPage() {
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => {
-      if (data.session) navigate({ to: "/admin", replace: true });
+    let isMounted = true;
+    void supabase.auth.getSession().then(async ({ data }) => {
+      if (!data.session) return;
+      const { data: isActive, error } = await supabase.rpc("validate_admin_session");
+      if (!isMounted) return;
+      if (!error && isActive) {
+        navigate({ to: "/admin", replace: true });
+        return;
+      }
+      await supabase.auth.signOut({ scope: "local" });
     });
+    return () => {
+      isMounted = false;
+    };
   }, [navigate]);
 
   const signIn = useMutation({
@@ -52,6 +63,14 @@ function AuthPage() {
         password,
       });
       if (error) throw error;
+
+      const { error: claimError } = await supabase.rpc("claim_admin_session", {
+        p_handover_token: null,
+      });
+      if (claimError) {
+        await supabase.auth.signOut({ scope: "local" });
+        throw new Error(claimError.message);
+      }
     },
     onSuccess: async () => {
       try {
@@ -67,10 +86,12 @@ function AuthPage() {
       }
       navigate({ to: "/admin", replace: true });
     },
-    onError: () => {
+    onError: (error: Error) => {
       setErrors((current) => ({
         ...current,
-        password: "Invalid email or password.",
+        password: /administrator session is already active/i.test(error.message)
+          ? error.message
+          : "Invalid email or password.",
       }));
     },
   });

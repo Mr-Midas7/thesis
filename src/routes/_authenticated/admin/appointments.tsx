@@ -940,6 +940,18 @@ function AppointmentsPage() {
               </p>
             )}
 
+            {selectedAppointment.no_show_count_at_booking > 2 && (
+              <p
+                className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-muted-foreground"
+                role="alert"
+              >
+                <strong className="text-amber-700 dark:text-amber-400">Customer no-show warning.</strong>{" "}
+                This customer had {selectedAppointment.no_show_count_at_booking} recorded no-show
+                {selectedAppointment.no_show_count_at_booking === 1 ? "" : "s"} when this booking
+                was made. Review the customer&apos;s booking history before confirming service.
+              </p>
+            )}
+
             {isEditing && editForm ? (
               <div className="space-y-5">
                 <AppointmentReadOnlyDetails appointment={selectedAppointment} hideName />

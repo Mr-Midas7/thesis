@@ -95,6 +95,7 @@ const groups = [
 
 const ADMIN_INACTIVITY_TIMEOUT_MS = 120_000;
 const NOTIFICATION_POLL_INTERVAL_MS = 30_000;
+const ADMIN_SESSION_HEARTBEAT_INTERVAL_MS = 30_000;
 
 function AdminLayout() {
   const navigate = useNavigate();
@@ -169,9 +170,12 @@ function AdminLayout() {
       });
 
       try {
-        // Keep separately authenticated admin tabs/devices active. The admin
-        // client uses tab-scoped sessionStorage, so closing this tab also
-        // clears its session without a fragile unload request.
+        // Release the database lease before clearing the local Supabase session.
+        // If the request cannot complete (for example, the browser is offline),
+        // the short server-side lease expires automatically.
+        const { error: releaseError } = await supabase.rpc("release_admin_session");
+        if (releaseError) console.warn("Could not release the administrator session:", releaseError);
+
         const { error } = await supabase.auth.signOut({ scope: "local" });
         if (error) throw error;
 
@@ -195,6 +199,37 @@ function AdminLayout() {
   );
 
   const isAdmin = (role.data ?? []).includes("admin");
+
+  useEffect(() => {
+    if (!isAdmin) return;
+
+    let isMounted = true;
+    let isRenewing = false;
+    const renewSession = async () => {
+      if (isRenewing || signingOutRef.current) return;
+      isRenewing = true;
+      try {
+        const { data: renewed, error } = await supabase.rpc("renew_admin_session");
+        if (!isMounted || (!error && renewed)) return;
+
+        // A lease can be lost after it expires, after a server-side logout, or
+        // when another approved session handover completes.
+        await supabase.auth.signOut({ scope: "local" });
+        await queryClient.cancelQueries();
+        queryClient.clear();
+        await navigate({ to: "/auth", replace: true });
+      } finally {
+        isRenewing = false;
+      }
+    };
+
+    void renewSession();
+    const intervalId = window.setInterval(() => void renewSession(), ADMIN_SESSION_HEARTBEAT_INTERVAL_MS);
+    return () => {
+      isMounted = false;
+      window.clearInterval(intervalId);
+    };
+  }, [isAdmin, navigate, queryClient]);
 
   useEffect(() => {
     if (!isAdmin) return;

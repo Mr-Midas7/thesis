@@ -294,11 +294,30 @@ export function SettingsPage() {
         if (account.newPassword !== account.confirmNewPassword) {
           throw new Error("The new passwords do not match.");
         }
+        // Password verification creates a fresh Supabase Auth session. Create a
+        // short-lived handover from the active, server-verified session first so
+        // this same browser can rotate its session without weakening the
+        // one-device restriction.
+        const { data: handoverToken, error: handoverError } = await supabase.rpc(
+          "create_admin_session_handover",
+        );
+        if (handoverError || !handoverToken) {
+          throw new Error("Your administrator session has expired. Please sign in again.");
+        }
+
         const { error } = await supabase.auth.signInWithPassword({
           email: user.email ?? "",
           password: account.currentPassword,
         });
         if (error) throw new Error("Your current password is incorrect.");
+
+        const { error: claimError } = await supabase.rpc("claim_admin_session", {
+          p_handover_token: handoverToken,
+        });
+        if (claimError) {
+          await supabase.auth.signOut({ scope: "local" });
+          throw new Error("Your administrator session could not be renewed. Please sign in again.");
+        }
       }
 
       const oldName =
