@@ -247,7 +247,7 @@ function ScheduleBlocks() {
               }}
               aria-invalid={!!formErrors.date}
             />
-            <FieldError message={formErrors.date} />
+            <ReservedFieldError message={formErrors.date} />
           </div>
           <div className="space-y-1.5">
             <Label>Slot</Label>
@@ -267,6 +267,7 @@ function ScheduleBlocks() {
                 <SelectItem value="custom">Custom Time Range</SelectItem>
               </SelectContent>
             </Select>
+            <ValidationSpace className="hidden sm:block" />
           </div>
           {slot === "custom" && (
             <>
@@ -291,7 +292,7 @@ function ScheduleBlocks() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <FieldError message={formErrors.start} />
+                  <ReservedFieldError message={formErrors.start} />
                 </div>
                 <div className="space-y-1.5">
                   <Label>End</Label>
@@ -313,7 +314,7 @@ function ScheduleBlocks() {
                       ))}
                     </SelectContent>
                   </Select>
-                  <FieldError message={formErrors.end} />
+                  <ReservedFieldError message={formErrors.end} />
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">
@@ -329,15 +330,19 @@ function ScheduleBlocks() {
               onChange={(e) => setReason(e.target.value)}
               placeholder="Holiday, team event..."
             />
+            <ValidationSpace className="hidden sm:block" />
           </div>
-          <div className="flex flex-wrap gap-2">
-            <Button
-              onClick={requestScheduleBlock}
-              disabled={save.isPending || !!editingId}
-              className="font-display uppercase"
-            >
-              <Plus /> Block
-            </Button>
+          <div className="flex flex-col gap-1.5">
+            <div className="flex flex-wrap gap-2">
+              <Button
+                onClick={requestScheduleBlock}
+                disabled={save.isPending || !!editingId}
+                className="font-display uppercase"
+              >
+                <Plus /> Block
+              </Button>
+            </div>
+            <ValidationSpace className="hidden sm:block" />
           </div>
         </CardContent>
       </Card>
@@ -563,4 +568,16 @@ function ScheduleBlocks() {
       />
     </div>
   );
+}
+
+function ReservedFieldError({ message }: { message?: string }) {
+  return (
+    <div className="min-h-8">
+      <FieldError message={message} />
+    </div>
+  );
+}
+
+function ValidationSpace({ className = "" }: { className?: string }) {
+  return <div aria-hidden="true" className={`min-h-8 ${className}`} />;
 }

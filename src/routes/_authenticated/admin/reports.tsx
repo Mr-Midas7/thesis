@@ -18,6 +18,7 @@ import type { DateRange } from "react-day-picker";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import exportLogoUrl from "@/assets/export-logo.png";
+import reportPdfFontUrl from "@/assets/NotoSans-Regular.ttf";
 import { PaginationControls } from "@/components/admin/pagination-controls";
 import {
   AlertDialog,
@@ -33,6 +34,14 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field-error";
 import {
   DropdownMenu,
@@ -98,6 +107,8 @@ const statusOptions = [
   "rejected",
   "no_show",
 ];
+const REPORT_PDF_FONT = "NotoSans";
+const REPORT_PDF_FONT_FILE = "NotoSans-Regular.ttf";
 
 type ReportKind = "bookings" | "services";
 type PeriodPreset = (typeof periodOptions)[number]["value"];
@@ -163,6 +174,10 @@ function ReportsPage() {
   const [page, setPage] = useState(0);
   const [pendingExport, setPendingExport] = useState<ExportType | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
+  const [serviceListDialog, setServiceListDialog] = useState<{
+    referenceCode: string;
+    services: string[];
+  } | null>(null);
   const reportKind: ReportKind = "bookings";
   const { from, to, status, category, serviceName } = filters;
   const customDateError =
@@ -554,6 +569,14 @@ function ReportsPage() {
                         >
                           {cell}
                         </Badge>
+                      ) : preview.headers[cellIndex] === "Service" ? (
+                        <ReportServicesCell
+                          value={cell}
+                          referenceCode={row[0] ?? "this booking"}
+                          onSeeMore={(services) =>
+                            setServiceListDialog({ referenceCode: row[0] ?? "", services })
+                          }
+                        />
                       ) : (
                         cell
                       )}
@@ -589,6 +612,35 @@ function ReportsPage() {
           />
         </CardContent>
       </Card>
+
+      <Dialog
+        open={serviceListDialog !== null}
+        onOpenChange={(open) => !open && setServiceListDialog(null)}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="font-display uppercase">Services</DialogTitle>
+            <DialogDescription>
+              Complete service list for booking {serviceListDialog?.referenceCode}.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
+            {serviceListDialog?.services.map((service, index) => (
+              <li
+                key={`${service}-${index}`}
+                className="rounded-md border border-border/70 bg-muted/30 px-3 py-2 text-sm"
+              >
+                {service}
+              </li>
+            ))}
+          </ul>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => setServiceListDialog(null)}>
+              Close
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog
         open={pendingExport !== null}
@@ -781,6 +833,47 @@ function ExportDocumentTable({
       </tfoot>
     </table>
   );
+}
+
+function ReportServicesCell({
+  value,
+  referenceCode,
+  onSeeMore,
+}: {
+  value: string;
+  referenceCode: string;
+  onSeeMore: (services: string[]) => void;
+}) {
+  const services = splitServiceNames(value);
+  const needsSeeMore = services.length > 1 || value.length > 42;
+
+  if (!needsSeeMore) return <span className="break-words">{value}</span>;
+
+  const summary =
+    services.length > 1 ? `${services[0]} +${services.length - 1} more` : (services[0] ?? value);
+
+  return (
+    <div className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-2 text-left">
+      <span className="min-w-0 truncate">{summary}</span>
+      <Button
+        type="button"
+        variant="link"
+        size="sm"
+        className="h-auto shrink-0 px-0 py-0 text-xs leading-5"
+        aria-label={`See all services for booking ${referenceCode}`}
+        onClick={() => onSeeMore(services)}
+      >
+        See More
+      </Button>
+    </div>
+  );
+}
+
+function splitServiceNames(value: string) {
+  return value
+    .split(",")
+    .map((service) => service.trim())
+    .filter(Boolean);
 }
 
 function FilterSelect({
@@ -1041,7 +1134,7 @@ function makeExportData(
         statusLabel(row.status),
         row.service_name,
         row.category,
-        `PHP ${Number(row.price).toFixed(2)}`,
+        formatPHP(row.price),
       ]),
       cards: [
         {
@@ -1093,7 +1186,7 @@ function makeExportData(
       formatDateLong(row.appointment_date),
       row.service || "—",
       statusLabel(row.status),
-      `PHP ${Number(row.total_estimate).toFixed(2)}`,
+      formatPHP(row.total_estimate),
     ]),
     cards: [
       {
@@ -1186,6 +1279,22 @@ function periodRange(preset: Exclude<PeriodPreset, "custom">, today: string) {
   };
 }
 
+async function addReportPdfFont(doc: import("jspdf").jsPDF) {
+  const response = await fetch(reportPdfFontUrl);
+  if (!response.ok) throw new Error("Could not load the PDF export font.");
+
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  let binary = "";
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
+  }
+
+  doc.addFileToVFS(REPORT_PDF_FONT_FILE, binary);
+  doc.addFont(REPORT_PDF_FONT_FILE, REPORT_PDF_FONT, "normal");
+  doc.addFont(REPORT_PDF_FONT_FILE, REPORT_PDF_FONT, "bold");
+}
+
 async function exportPdf(
   data: ExportData,
   reportKind: ReportKind,
@@ -1199,6 +1308,7 @@ async function exportPdf(
     import("jspdf-autotable"),
   ]);
   const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
+  await addReportPdfFont(doc);
   const logo = await getShopLogoDataUrl();
   const pageWidth = doc.internal.pageSize.getWidth();
   const pageHeight = doc.internal.pageSize.getHeight();
@@ -1230,7 +1340,7 @@ async function exportPdf(
       "F",
     );
     if (continuation) {
-      doc.setFont("helvetica", "bold");
+      doc.setFont(REPORT_PDF_FONT, "bold");
       doc.setFontSize(7);
       doc.setTextColor(...colors.white);
       doc.text(`${SHOP_EXPORT_NAME}  ·  ${title.toUpperCase()}`, margin + 5, 15);
@@ -1242,17 +1352,17 @@ async function exportPdf(
     // Keep the source logo's 360:202 aspect ratio while giving it a stronger
     // presence in the header.
     doc.addImage(logo, "PNG", margin + 4, 13, 42, 23.55);
-    doc.setFont("helvetica", "bold");
+    doc.setFont(REPORT_PDF_FONT, "bold");
     doc.setTextColor(...colors.white);
     doc.setFontSize(15);
     doc.text(SHOP_EXPORT_NAME, margin + 51, 21);
-    doc.setFont("helvetica", "normal");
+    doc.setFont(REPORT_PDF_FONT, "normal");
     doc.setFontSize(7.5);
     doc.text(SHOP.tagline, margin + 51, 27);
-    doc.setFont("helvetica", "bold");
+    doc.setFont(REPORT_PDF_FONT, "bold");
     doc.setFontSize(13);
     doc.text(title.toUpperCase(), pageWidth - margin - 5, 20, { align: "right" });
-    doc.setFont("helvetica", "normal");
+    doc.setFont(REPORT_PDF_FONT, "normal");
     doc.setFontSize(7.5);
     doc.text(`Generated: ${formatBusinessTimestamp()}`, pageWidth - margin - 5, 27, {
       align: "right",
@@ -1268,20 +1378,20 @@ async function exportPdf(
   doc.setLineWidth(1.1);
   doc.line(margin + 6, periodY + 4, margin + 6, periodY + 11);
   doc.line(margin + 3, periodY + 6, margin + 9, periodY + 6);
-  doc.setFont("helvetica", "bold");
+  doc.setFont(REPORT_PDF_FONT, "bold");
   doc.setTextColor(...colors.ink);
   doc.setFontSize(7);
   doc.text("REPORT PERIOD", margin + 14, periodY + 6);
-  doc.setFont("helvetica", "bold");
+  doc.setFont(REPORT_PDF_FONT, "bold");
   doc.setFontSize(10.5);
   doc.text(`${formatDateRange(from, to)}`, margin + 14, periodY + 11.5);
-  doc.setFont("helvetica", "normal");
+  doc.setFont(REPORT_PDF_FONT, "normal");
   doc.setFontSize(5.6);
   const scopeLines = doc.splitTextToSize(`Filters: ${scope}`, pageWidth - margin * 2 - 28);
   doc.text(scopeLines, margin + 14, periodY + 16);
 
   const drawSectionHeading = (label: string, y: number) => {
-    doc.setFont("helvetica", "bold");
+    doc.setFont(REPORT_PDF_FONT, "bold");
     doc.setFontSize(9);
     doc.setTextColor(...colors.ink);
     doc.text(label.toUpperCase(), margin + 10, y);
@@ -1302,10 +1412,10 @@ async function exportPdf(
       const x = summaryColumns[columnIndex]!;
       const y = 84 + rowIndex * 10;
       doc.setTextColor(...colors.ink);
-      doc.setFont("helvetica", "bold");
+      doc.setFont(REPORT_PDF_FONT, "bold");
       doc.setFontSize(8.5);
       doc.text(`${card.label}:`, x, y);
-      doc.setFont("helvetica", "normal");
+      doc.setFont(REPORT_PDF_FONT, "normal");
       doc.text(card.value, x + doc.getTextWidth(`${card.label}: `), y);
     });
   });
@@ -1332,7 +1442,7 @@ async function exportPdf(
     theme: "grid",
     margin: { left: margin, right: margin, top: 27, bottom: 34 },
     styles: {
-      font: "helvetica",
+      font: REPORT_PDF_FONT,
       fontSize: 7.2,
       cellPadding: 2.1,
       textColor: colors.ink,
@@ -1370,9 +1480,9 @@ async function exportPdf(
             0: { cellWidth: 35 },
             1: { cellWidth: 43 },
             2: { cellWidth: 51 },
-            3: { cellWidth: 52 },
+            3: { cellWidth: 54, overflow: "linebreak" },
             4: { cellWidth: 29, halign: "center" },
-            5: { cellWidth: 39, halign: "right" },
+            5: { cellWidth: 55, halign: "right", overflow: "linebreak" },
           },
     didParseCell: (hook) => {
       const statusIndex = data.headers.indexOf("Status");
@@ -1411,15 +1521,15 @@ async function exportPdf(
     drawHeader(true);
   }
 
-  doc.setFont("helvetica", "normal");
+  doc.setFont(REPORT_PDF_FONT, "normal");
   doc.setFontSize(7);
   doc.text("Prepared By", margin + 2, signatureTop);
   doc.setDrawColor(...colors.border);
   doc.line(margin + 2, signatureTop + 14, margin + 72, signatureTop + 14);
   doc.text("Approved By", pageWidth - margin - 72, signatureTop);
-  doc.setFont("helvetica", "bold");
+  doc.setFont(REPORT_PDF_FONT, "bold");
   doc.text(SHOP_OWNER_NAME, pageWidth - margin - 36, signatureTop + 6, { align: "center" });
-  doc.setFont("helvetica", "normal");
+  doc.setFont(REPORT_PDF_FONT, "normal");
   doc.text("Shop Owner", pageWidth - margin - 36, signatureTop + 10, { align: "center" });
   doc.line(pageWidth - margin - 72, signatureTop + 14, pageWidth - margin, signatureTop + 14);
   doc.save(`fake-rider-${fileName(reportKind)}-${from}-to-${to}.pdf`);

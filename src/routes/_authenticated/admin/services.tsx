@@ -96,14 +96,15 @@ type ServiceForm = {
 
 const blank: ServiceForm = {
   name: "",
-  category: "general",
+  category: "",
   description: "",
-  defaultPrice: 0,
-  defaultDuration: 60,
+  defaultPrice: Number.NaN,
+  defaultDuration: Number.NaN,
   isActive: true,
 };
 const ALL_CATEGORIES = "__all_categories__";
 const NEW_CATEGORY = "__new_category__";
+const DEFAULT_CATEGORY = "general";
 const DEFAULT_MODEL_OVERRIDES: ModelOverride[] = [];
 
 const cloneOverrides = (items: ModelOverride[]) => items.map((item) => ({ ...item }));
@@ -118,7 +119,12 @@ function ServicesAdmin() {
   const [editingOverride, setEditingOverride] = useState<number | null>(null);
   const [isCustomCategory, setIsCustomCategory] = useState(false);
   const [formErrors, setFormErrors] = useState<
-    Partial<Record<"name" | "category" | "defaultPrice" | "defaultDuration" | "overrides", string>>
+    Partial<
+      Record<
+        "name" | "category" | "description" | "defaultPrice" | "defaultDuration" | "overrides",
+        string
+      >
+    >
   >({});
   const [filterCategory, setFilterCategory] = useState<string>(ALL_CATEGORIES);
   const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
@@ -186,7 +192,7 @@ function ServicesAdmin() {
     ).sort();
   }, [services.data]);
   const categoryOptions = useMemo(
-    () => Array.from(new Set([blank.category, ...distinctCategories])).sort(),
+    () => Array.from(new Set([DEFAULT_CATEGORY, ...distinctCategories])).sort(),
     [distinctCategories],
   );
   const motorcycleBrands = useMemo(
@@ -210,7 +216,7 @@ function ServicesAdmin() {
       const payload = {
         name: form.name.trim(),
         category: form.category.trim().toLowerCase(),
-        description: form.description.trim() || null,
+        description: form.description.trim(),
         duration_minutes: form.defaultDuration,
         is_active: form.isActive,
       };
@@ -333,16 +339,25 @@ function ServicesAdmin() {
 
   function validateForm() {
     const nextErrors: Partial<
-      Record<"name" | "category" | "defaultPrice" | "defaultDuration", string>
+      Record<"name" | "category" | "description" | "defaultPrice" | "defaultDuration", string>
     > = {};
-    if (form.name.trim().length < 2)
+    if (!form.name.trim()) nextErrors.name = "Service name is required.";
+    else if (form.name.trim().length < 2)
       nextErrors.name = "Enter a service name with at least 2 characters.";
-    if (form.category.trim().length < 2)
+    if (!form.category.trim()) nextErrors.category = "Category is required.";
+    else if (form.category.trim().length < 2)
       nextErrors.category = "Enter a service category with at least 2 characters.";
-    if (!editing && (!Number.isFinite(form.defaultPrice) || form.defaultPrice < 0)) {
-      nextErrors.defaultPrice = "Enter a valid default price of PHP 0 or more.";
+    if (!form.description.trim()) nextErrors.description = "Service details are required.";
+    if (!editing) {
+      if (!Number.isFinite(form.defaultPrice)) {
+        nextErrors.defaultPrice = "Default price is required.";
+      } else if (form.defaultPrice < 0) {
+        nextErrors.defaultPrice = "Enter a valid default price of PHP 0 or more.";
+      }
     }
-    if (
+    if (!Number.isFinite(form.defaultDuration)) {
+      nextErrors.defaultDuration = "Default duration is required.";
+    } else if (
       !Number.isInteger(form.defaultDuration) ||
       form.defaultDuration < 15 ||
       form.defaultDuration > 480
@@ -575,13 +590,15 @@ function ServicesAdmin() {
             <h3 className="font-display text-base uppercase">Service Details</h3>
             <div className="grid gap-3 md:grid-cols-2">
               <div className="space-y-1.5">
-                <Label>Service Name</Label>
+                <Label htmlFor="service-name">Service Name</Label>
                 <Input
+                  id="service-name"
                   value={form.name}
                   onChange={(event) => {
                     setForm({ ...form, name: event.target.value });
                     clearFormError("name");
                   }}
+                  required
                   aria-invalid={!!formErrors.name}
                 />
                 <FieldError message={formErrors.name} />
@@ -601,7 +618,11 @@ function ServicesAdmin() {
                     clearFormError("category");
                   }}
                 >
-                  <SelectTrigger id="service-category" aria-invalid={!!formErrors.category}>
+                  <SelectTrigger
+                    id="service-category"
+                    aria-required="true"
+                    aria-invalid={!!formErrors.category}
+                  >
                     <SelectValue placeholder="Select a category" />
                   </SelectTrigger>
                   <SelectContent>
@@ -622,22 +643,32 @@ function ServicesAdmin() {
                     }}
                     placeholder="e.g. maintenance"
                     aria-label="New service category"
+                    required
+                    aria-invalid={!!formErrors.category}
                   />
                 )}
                 <FieldError message={formErrors.category} />
               </div>
             </div>
             <div className="space-y-1.5">
-              <Label>Description</Label>
+              <Label htmlFor="service-details">Details</Label>
               <Textarea
+                id="service-details"
                 value={form.description}
-                onChange={(event) => setForm({ ...form, description: event.target.value })}
+                onChange={(event) => {
+                  setForm({ ...form, description: event.target.value });
+                  clearFormError("description");
+                }}
+                required
+                aria-invalid={!!formErrors.description}
               />
+              <FieldError message={formErrors.description} />
             </div>
             <div className={editing ? "grid gap-3 md:grid-cols-2" : undefined}>
               <div className="space-y-1.5">
-                <Label>Default Duration (minutes)</Label>
+                <Label htmlFor="service-default-duration">Default Duration (minutes)</Label>
                 <Input
+                  id="service-default-duration"
                   type="number"
                   min="15"
                   max="480"
@@ -651,6 +682,7 @@ function ServicesAdmin() {
                     });
                     clearFormError("defaultDuration");
                   }}
+                  required
                   aria-invalid={!!formErrors.defaultDuration}
                 />
                 <FieldError message={formErrors.defaultDuration} />
@@ -686,8 +718,9 @@ function ServicesAdmin() {
             </div>
             {!editing && (
               <div className="space-y-1.5">
-                <Label>Default Price</Label>
+                <Label htmlFor="service-default-price">Default Price</Label>
                 <Input
+                  id="service-default-price"
                   type="number"
                   min="0"
                   step="0.01"
@@ -700,6 +733,7 @@ function ServicesAdmin() {
                     });
                     clearFormError("defaultPrice");
                   }}
+                  required
                   aria-invalid={!!formErrors.defaultPrice}
                 />
                 <FieldError message={formErrors.defaultPrice} />
