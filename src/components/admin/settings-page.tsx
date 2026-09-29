@@ -11,7 +11,7 @@ import {
   Store,
   UserRound,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { PageHeader } from "@/components/admin/page-header";
 import {
@@ -158,6 +158,7 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<SettingsTab>("shop");
   const [settings, setSettings] = useState<ShopSettingsForm>(defaultSettings);
+  const bookingTermsRef = useRef<HTMLTextAreaElement>(null);
   const [user, setUser] = useState<User | null>(null);
   const [account, setAccount] = useState<AccountForm>({
     name: "",
@@ -196,6 +197,14 @@ export function SettingsPage() {
   useEffect(() => {
     if (savedSettings.data) setSettings(savedSettings.data);
   }, [savedSettings.data]);
+
+  useEffect(() => {
+    const textarea = bookingTermsRef.current;
+    if (!textarea) return;
+
+    textarea.style.height = "auto";
+    textarea.style.height = `${textarea.scrollHeight}px`;
+  }, [settings.bookingTerms]);
 
   useEffect(() => {
     void supabase.auth.getUser().then(({ data }) => {
@@ -526,9 +535,10 @@ export function SettingsPage() {
                     </Field>
                     <Field label="Booking terms & conditions" className="md:col-span-2">
                       <Textarea
+                        ref={bookingTermsRef}
                         value={settings.bookingTerms}
                         onChange={(e) => setSetting("bookingTerms", e.target.value)}
-                        className="min-h-36"
+                        className="min-h-36 resize-y overflow-y-hidden"
                       />
                     </Field>
                   </div>
