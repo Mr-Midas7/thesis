@@ -96,13 +96,7 @@ const searchSchema = z.object({
 });
 
 const turnstileEnabled = Boolean(import.meta.env["VITE_TURNSTILE_SITE_KEY"]);
-const MOBILE_BOOKING_STEPS = [
-  "Personal information",
-  "Motorcycle details",
-  "Service selection",
-  "Date & time",
-  "Review",
-] as const;
+const BOOKING_PAGES = ["Booking details", "Review booking"] as const;
 
 export const Route = createFileRoute("/book")({
   validateSearch: searchSchema,
@@ -172,22 +166,6 @@ const validationFocusTargets: Partial<Record<keyof Errors, string>> = {
   terms: "#booking-terms",
 };
 
-const validationSteps: Partial<Record<keyof Errors, number>> = {
-  firstName: 1,
-  middleName: 1,
-  lastName: 1,
-  phone: 1,
-  motoBrand: 2,
-  motoModel: 2,
-  plateNumber: 2,
-  services: 3,
-  rescheduleReason: 4,
-  date: 4,
-  startTime: 4,
-  schedule: 4,
-  terms: 5,
-};
-
 function isDuplicateBookingMessage(message: string) {
   return /you already have an appointment for/i.test(message);
 }
@@ -217,13 +195,11 @@ function BookPage() {
   const [date, setDate] = useState<string>(search.date ?? "");
   const [startTime, setStartTime] = useState<string>(search.startTime ?? "");
   const [terms, setTerms] = useState(false);
-  const [mobileStep, setMobileStep] = useState(1);
+  const [bookingPage, setBookingPage] = useState<"details" | "review">("details");
   const [errors, setErrors] = useState<Errors>({});
   const [focusRequest, setFocusRequest] = useState<keyof Errors | null>(null);
-  const [bookingConfirmationOpen, setBookingConfirmationOpen] = useState(false);
   const [multiDayContinuationOpen, setMultiDayContinuationOpen] = useState(false);
   const [multiDayContinuationAccepted, setMultiDayContinuationAccepted] = useState(false);
-  const [multiDayConfirmationStep, setMultiDayConfirmationStep] = useState<number | null>(null);
   const [duplicateBookingMessage, setDuplicateBookingMessage] = useState<string | null>(null);
   const [result, setResult] = useState<{
     reference: string;
@@ -312,7 +288,7 @@ function BookPage() {
     setServiceCategory("all");
     setDate("");
     setStartTime("");
-    setMobileStep(4);
+    setBookingPage("details");
     setReschedulePrefillReady(true);
   }, [isReschedule, rescheduleDetails.data]);
 
@@ -446,7 +422,7 @@ function BookPage() {
     .join(" ");
   const totalDuration = estimatedServices.reduce(
     (sum, service) => sum + service.durationMinutes,
-    estimatedServices.length > 0 ? 30 : 0,
+    0,
   );
   const operatingHours =
     availability.data?.operatingHours ??
@@ -466,12 +442,12 @@ function BookPage() {
     !isReschedule && serviceIds.length > 1
       ? bookingDurationOverflowMinutes(operatingHours.openingTime, totalDuration, operatingHours)
       : 0;
-  const needsServiceStepMultiDayConfirmation = serviceStepOverflowMinutes > 30;
+  const needsServiceStepMultiDayConfirmation = serviceStepOverflowMinutes > 0;
   const multiDayOverflowMinutes =
     !isReschedule && date && startTime && serviceIds.length > 1
       ? bookingDurationOverflowMinutes(startTime, totalDuration, operatingHours)
       : 0;
-  const needsMultiDayContinuationConfirmation = multiDayOverflowMinutes > 30;
+  const needsMultiDayContinuationConfirmation = multiDayOverflowMinutes > 0;
   const bookingTerms = shopSettings.data?.booking_terms || DEFAULT_BOOKING_TERMS;
 
   useEffect(() => {
@@ -486,7 +462,7 @@ function BookPage() {
     const target = validationFocusTargets[focusRequest];
     if (!target) return;
 
-    // Let React reveal the appropriate mobile step before trying to focus its input.
+    // Let React show the appropriate booking page before trying to focus its input.
     const timer = window.setTimeout(() => {
       const element = document.querySelector<HTMLElement>(target);
       element?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -495,7 +471,7 @@ function BookPage() {
     }, 0);
 
     return () => window.clearTimeout(timer);
-  }, [focusRequest, mobileStep]);
+  }, [bookingPage, focusRequest]);
 
   useEffect(() => {
     if (!availability.data || !date) return;
@@ -545,7 +521,6 @@ function BookPage() {
     onSuccess: ({ res, submittedSchedule }) => {
       if (!res.ok) {
         if (!isReschedule && isDuplicateBookingMessage(res.error)) {
-          setBookingConfirmationOpen(false);
           setDuplicateBookingMessage(res.error);
           setErrors(({ schedule: _, ...current }) => current);
           setDate("");
@@ -581,7 +556,6 @@ function BookPage() {
     },
     onError: (err: Error) => {
       if (!isReschedule && isDuplicateBookingMessage(err.message)) {
-        setBookingConfirmationOpen(false);
         setDuplicateBookingMessage(err.message);
         setErrors(({ schedule: _, ...current }) => current);
         setDate("");
@@ -653,7 +627,7 @@ function BookPage() {
     return e;
   }
 
-  function validate() {
+  function validateBooking() {
     const e = validationErrors([1, 2, 3, 4, 5]);
     return showValidationErrors(e);
   }
@@ -663,27 +637,25 @@ function BookPage() {
     const firstInvalidField = validationFieldOrder.find((field) => e[field]);
     if (!firstInvalidField) return true;
 
-    setMobileStep(validationSteps[firstInvalidField] ?? 1);
+    setBookingPage(firstInvalidField === "terms" ? "review" : "details");
     setFocusRequest(firstInvalidField);
     return false;
   }
 
-  function continueMobileBooking() {
+  function continueToReview() {
     if (!bookingSubmissionOpen) {
       setErrors((current) => ({ ...current, schedule: bookingClosedMessage }));
       return;
     }
-    const e = validationErrors([mobileStep]);
+    const e = validationErrors([1, 2, 3, 4]);
     if (!showValidationErrors(e)) return;
     const requiresMultiDayConfirmation =
-      (mobileStep === 3 && needsServiceStepMultiDayConfirmation) ||
-      (mobileStep === 4 && needsMultiDayContinuationConfirmation);
+      needsServiceStepMultiDayConfirmation || needsMultiDayContinuationConfirmation;
     if (requiresMultiDayConfirmation && !multiDayContinuationAccepted) {
-      setMultiDayConfirmationStep(mobileStep);
       setMultiDayContinuationOpen(true);
       return;
     }
-    setMobileStep((step) => Math.min(step + 1, 5));
+    setBookingPage("review");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -695,14 +667,13 @@ function BookPage() {
     }
     setMultiDayContinuationAccepted(true);
     setMultiDayContinuationOpen(false);
-    setMobileStep((multiDayConfirmationStep ?? mobileStep) + 1);
-    setMultiDayConfirmationStep(null);
+    setBookingPage("review");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
-  function goBackMobileBooking() {
+  function returnToBookingDetails() {
     setErrors({});
-    setMobileStep((step) => Math.max(step - 1, 1));
+    setBookingPage("details");
     window.scrollTo({ top: 0, behavior: "smooth" });
   }
 
@@ -711,25 +682,7 @@ function BookPage() {
       setErrors((current) => ({ ...current, schedule: bookingClosedMessage }));
       return;
     }
-    if (!rescheduleReady || !validate()) return;
-    if (isReschedule) {
-      mutation.mutate();
-      return;
-    }
-    setBookingConfirmationOpen(true);
-  }
-
-  function confirmBooking() {
-    if (!bookingSubmissionOpen) {
-      setBookingConfirmationOpen(false);
-      setErrors((current) => ({ ...current, schedule: bookingClosedMessage }));
-      return;
-    }
-    if (!validate()) {
-      setBookingConfirmationOpen(false);
-      return;
-    }
-    setBookingConfirmationOpen(false);
+    if (!rescheduleReady || !validateBooking()) return;
     mutation.mutate();
   }
 
@@ -883,27 +836,32 @@ function BookPage() {
 
         <div className="sticky top-20 z-20 -mx-4 mt-6 border-y border-border/70 bg-background/95 px-4 py-3 backdrop-blur">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">Step {mobileStep} of 5</span>
-            <span>{MOBILE_BOOKING_STEPS[mobileStep - 1]}</span>
+            <span className="font-medium text-foreground">
+              {bookingPage === "details" ? "Steps 1–4 of 4" : "Review Booking"}
+            </span>
+            <span>
+              {bookingPage === "details" ? "Complete your details" : "Final confirmation"}
+            </span>
           </div>
-          <ol className="mt-3 grid grid-cols-5 gap-1.5 sm:gap-2" aria-label="Booking progress">
-            {MOBILE_BOOKING_STEPS.map((step, index) => {
-              const stepNumber = index + 1;
-              const complete = stepNumber < mobileStep;
-              const current = stepNumber === mobileStep;
+          <ol className="mt-3 grid grid-cols-2 gap-2" aria-label="Booking progress">
+            {BOOKING_PAGES.map((page, index) => {
+              const current =
+                (index === 0 && bookingPage === "details") ||
+                (index === 1 && bookingPage === "review");
+              const complete = index === 0 && bookingPage === "review";
               return (
-                <li key={step} className="min-w-0">
+                <li key={page} className="min-w-0">
                   <span
                     className={cn(
-                      "flex h-8 w-full items-center justify-center rounded-full border text-xs font-medium sm:h-9",
+                      "flex h-9 w-full items-center justify-center rounded-full border px-3 text-xs font-medium sm:text-sm",
                       complete && "border-primary bg-primary text-primary-foreground",
                       current && "border-primary text-primary",
                       !complete && !current && "border-border text-muted-foreground",
                     )}
                     aria-current={current ? "step" : undefined}
-                    title={step}
+                    title={page}
                   >
-                    {complete ? "✓" : stepNumber}
+                    {complete ? "✓ Booking details" : page}
                   </span>
                 </li>
               );
@@ -912,7 +870,7 @@ function BookPage() {
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
             <div
               className="h-full rounded-full bg-primary transition-[width] duration-200"
-              style={{ width: `${((mobileStep - 1) / 5) * 100}%` }}
+              style={{ width: bookingPage === "review" ? "100%" : "50%" }}
             />
           </div>
         </div>
@@ -921,428 +879,419 @@ function BookPage() {
           className="mt-10 space-y-8"
           onSubmit={(e) => {
             e.preventDefault();
-            if (mobileStep === 5) submitBooking();
-            else continueMobileBooking();
+            if (bookingPage === "review") submitBooking();
+            else continueToReview();
           }}
         >
-          <Section title="1. Personal information" className={cn(mobileStep !== 1 && "hidden")}>
-            {isReschedule && (
-              <p className="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-muted-foreground">
-                These details are verified against your original appointment when you submit.
-              </p>
-            )}
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              <Field label="Last Name" error={errors.lastName}>
-                <Input
-                  id="booking-last-name"
-                  value={form.lastName}
-                  maxLength={40}
-                  disabled={isReschedule}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      lastName: formatNamePartInput(e.target.value),
-                    })
-                  }
-                  placeholder="Dela Cruz"
-                />
-              </Field>
-              <Field label="First Name" error={errors.firstName}>
-                <Input
-                  id="booking-first-name"
-                  value={form.firstName}
-                  maxLength={40}
-                  disabled={isReschedule}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      firstName: formatNamePartInput(e.target.value),
-                    })
-                  }
-                  placeholder="Juan"
-                />
-              </Field>
-              <Field label="Middle Name (Optional)" error={errors.middleName}>
-                <Input
-                  id="booking-middle-name"
-                  value={form.middleName}
-                  maxLength={40}
-                  disabled={isReschedule}
-                  onChange={(e) =>
-                    setForm({
-                      ...form,
-                      middleName: formatNamePartInput(e.target.value),
-                    })
-                  }
-                  placeholder="Santos"
-                />
-              </Field>
-              <Field label="Mobile number" error={errors.phone}>
-                <Input
-                  id="booking-phone"
-                  type="tel"
-                  value={form.phone}
-                  maxLength={11}
-                  inputMode="tel"
-                  autoComplete="tel"
-                  disabled={isReschedule}
-                  onChange={(e) => {
-                    setForm({ ...form, phone: sanitizePhilippineMobileInput(e.target.value) });
-                  }}
-                  placeholder="09171234567"
-                />
-              </Field>
-            </div>
-            <WizardActions onContinue={continueMobileBooking} disabled={!bookingSubmissionOpen} />
-          </Section>
-
-          <Section title="2. Motorcycle details" className={cn(mobileStep !== 2 && "hidden")}>
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-              <div className="md:col-span-2 lg:col-span-3">
-                <p className="text-sm text-muted-foreground">
-                  Select your motorcycle from the catalog. Choose a brand first to see its valid
-                  models.
+          <div className={cn(bookingPage !== "details" && "hidden")}>
+            <Section title="1. Personal information">
+              {isReschedule && (
+                <p className="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-muted-foreground">
+                  These details are verified against your original appointment when you submit.
                 </p>
-                {catalogUnavailable && (
-                  <p className="mt-1 text-sm text-destructive">
-                    The motorcycle catalog is unavailable. Please try again shortly.
-                  </p>
-                )}
-              </div>
-
-              <Field label="Brand" error={errors.motoBrand}>
-                <Select
-                  value={form.motoBrand}
-                  onValueChange={(v) => {
-                    setForm({ ...form, motoBrand: v, motoModel: "" });
-                    setDate("");
-                    setStartTime("");
-                  }}
-                  disabled={isReschedule || motorcycleCatalog.isLoading || catalogUnavailable}
-                >
-                  <SelectTrigger id="booking-moto-brand">
-                    <SelectValue placeholder="Select a brand" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {brands.map((b) => (
-                      <SelectItem key={b} value={b}>
-                        {b}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="Model" error={errors.motoModel}>
-                <Select
-                  value={form.motoModel}
-                  onValueChange={(v) => {
-                    setForm({ ...form, motoModel: v });
-                    setDate("");
-                    setStartTime("");
-                  }}
-                  disabled={
-                    isReschedule ||
-                    catalogUnavailable ||
-                    !form.motoBrand ||
-                    modelsForBrand.length === 0
-                  }
-                >
-                  <SelectTrigger id="booking-moto-model">
-                    <SelectValue
-                      placeholder={form.motoBrand ? "Select a model" : "Select a brand first"}
-                    />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {modelsForBrand.map((m) => (
-                      <SelectItem key={m.value} value={m.value}>
-                        {m.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field label="Plate number" error={errors.plateNumber}>
-                <Input
-                  id="booking-plate-number"
-                  value={form.plateNumber}
-                  maxLength={20}
-                  disabled={isReschedule}
-                  onChange={(e) => setForm({ ...form, plateNumber: e.target.value.toUpperCase() })}
-                  placeholder="ABC 1234"
-                />
-              </Field>
-            </div>
-            <WizardActions
-              onBack={goBackMobileBooking}
-              onContinue={continueMobileBooking}
-              disabled={!bookingSubmissionOpen}
-            />
-          </Section>
-
-          <Section
-            title="3. Service selection"
-            error={errors.services}
-            className={cn(mobileStep !== 3 && "hidden")}
-          >
-            <div className="mb-4 flex flex-wrap items-center gap-3">
-              <Label htmlFor="booking-service-category">Service category</Label>
-              <Select
-                value={serviceCategory}
-                onValueChange={setServiceCategory}
-                disabled={isReschedule}
-              >
-                <SelectTrigger id="booking-service-category" className="w-full sm:w-52">
-                  <SelectValue placeholder="All categories" />
-                </SelectTrigger>
-                <SelectContent position="item-aligned" className="max-h-64">
-                  <SelectItem value="all">All categories</SelectItem>
-                  {serviceCategories.map((category) => (
-                    <SelectItem key={category} value={category} className="capitalize">
-                      {category.replace(/[-_]/g, " ")}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div
-              id="booking-services"
-              tabIndex={-1}
-              className={cn(
-                "grid gap-3 rounded-lg md:grid-cols-2",
-                errors.services && "ring-1 ring-destructive",
               )}
-            >
-              {filteredServices.map((s) => {
-                const checked = serviceIds.includes(s.id);
-                return (
-                  <button
-                    type="button"
-                    key={s.id}
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <Field label="Last Name" error={errors.lastName}>
+                  <Input
+                    id="booking-last-name"
+                    value={form.lastName}
+                    maxLength={40}
                     disabled={isReschedule}
-                    onClick={() => {
-                      if (!checked && serviceIds.length >= MAX_BOOKING_SERVICE_SELECTIONS) {
-                        setErrors((current) => ({
-                          ...current,
-                          services: `You can select up to ${MAX_BOOKING_SERVICE_SELECTIONS} services per appointment.`,
-                        }));
-                        return;
-                      }
-                      setServiceIds((prev) =>
-                        checked ? prev.filter((id) => id !== s.id) : [...prev, s.id],
-                      );
-                      setErrors((current) => {
-                        const { services: _, ...remainingErrors } = current;
-                        return remainingErrors;
-                      });
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        lastName: formatNamePartInput(e.target.value),
+                      })
+                    }
+                    placeholder="Dela Cruz"
+                  />
+                </Field>
+                <Field label="First Name" error={errors.firstName}>
+                  <Input
+                    id="booking-first-name"
+                    value={form.firstName}
+                    maxLength={40}
+                    disabled={isReschedule}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        firstName: formatNamePartInput(e.target.value),
+                      })
+                    }
+                    placeholder="Juan"
+                  />
+                </Field>
+                <Field label="Middle Name (Optional)" error={errors.middleName}>
+                  <Input
+                    id="booking-middle-name"
+                    value={form.middleName}
+                    maxLength={40}
+                    disabled={isReschedule}
+                    onChange={(e) =>
+                      setForm({
+                        ...form,
+                        middleName: formatNamePartInput(e.target.value),
+                      })
+                    }
+                    placeholder="Santos"
+                  />
+                </Field>
+                <Field label="Mobile number" error={errors.phone}>
+                  <Input
+                    id="booking-phone"
+                    type="tel"
+                    value={form.phone}
+                    maxLength={11}
+                    inputMode="tel"
+                    autoComplete="tel"
+                    disabled={isReschedule}
+                    onChange={(e) => {
+                      setForm({ ...form, phone: sanitizePhilippineMobileInput(e.target.value) });
+                    }}
+                    placeholder="09171234567"
+                  />
+                </Field>
+              </div>
+            </Section>
+
+            <Section title="2. Motorcycle details">
+              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                <div className="md:col-span-2 lg:col-span-3">
+                  <p className="text-sm text-muted-foreground">
+                    Select your motorcycle from the catalog. Choose a brand first to see its valid
+                    models.
+                  </p>
+                  {catalogUnavailable && (
+                    <p className="mt-1 text-sm text-destructive">
+                      The motorcycle catalog is unavailable. Please try again shortly.
+                    </p>
+                  )}
+                </div>
+
+                <Field label="Brand" error={errors.motoBrand}>
+                  <Select
+                    value={form.motoBrand}
+                    onValueChange={(v) => {
+                      setForm({ ...form, motoBrand: v, motoModel: "" });
                       setDate("");
                       setStartTime("");
-                      setMultiDayContinuationAccepted(false);
                     }}
+                    disabled={isReschedule || motorcycleCatalog.isLoading || catalogUnavailable}
+                  >
+                    <SelectTrigger id="booking-moto-brand">
+                      <SelectValue placeholder="Select a brand" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {brands.map((b) => (
+                        <SelectItem key={b} value={b}>
+                          {b}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Model" error={errors.motoModel}>
+                  <Select
+                    value={form.motoModel}
+                    onValueChange={(v) => {
+                      setForm({ ...form, motoModel: v });
+                      setDate("");
+                      setStartTime("");
+                    }}
+                    disabled={
+                      isReschedule ||
+                      catalogUnavailable ||
+                      !form.motoBrand ||
+                      modelsForBrand.length === 0
+                    }
+                  >
+                    <SelectTrigger id="booking-moto-model">
+                      <SelectValue
+                        placeholder={form.motoBrand ? "Select a model" : "Select a brand first"}
+                      />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {modelsForBrand.map((m) => (
+                        <SelectItem key={m.value} value={m.value}>
+                          {m.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </Field>
+                <Field label="Plate number" error={errors.plateNumber}>
+                  <Input
+                    id="booking-plate-number"
+                    value={form.plateNumber}
+                    maxLength={20}
+                    disabled={isReschedule}
+                    onChange={(e) =>
+                      setForm({ ...form, plateNumber: e.target.value.toUpperCase() })
+                    }
+                    placeholder="ABC 1234"
+                  />
+                </Field>
+              </div>
+            </Section>
+
+            <Section title="3. Service selection" error={errors.services}>
+              <div className="mb-4 flex flex-wrap items-center gap-3">
+                <Label htmlFor="booking-service-category">Service category</Label>
+                <Select
+                  value={serviceCategory}
+                  onValueChange={setServiceCategory}
+                  disabled={isReschedule}
+                >
+                  <SelectTrigger id="booking-service-category" className="w-full sm:w-52">
+                    <SelectValue placeholder="All categories" />
+                  </SelectTrigger>
+                  <SelectContent position="item-aligned" className="max-h-64">
+                    <SelectItem value="all">All categories</SelectItem>
+                    {serviceCategories.map((category) => (
+                      <SelectItem key={category} value={category} className="capitalize">
+                        {category.replace(/[-_]/g, " ")}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div
+                id="booking-services"
+                tabIndex={-1}
+                className={cn(
+                  "grid gap-3 rounded-lg md:grid-cols-2",
+                  errors.services && "ring-1 ring-destructive",
+                )}
+              >
+                {filteredServices.map((s) => {
+                  const checked = serviceIds.includes(s.id);
+                  return (
+                    <button
+                      type="button"
+                      key={s.id}
+                      disabled={isReschedule}
+                      onClick={() => {
+                        if (!checked && serviceIds.length >= MAX_BOOKING_SERVICE_SELECTIONS) {
+                          setErrors((current) => ({
+                            ...current,
+                            services: `You can select up to ${MAX_BOOKING_SERVICE_SELECTIONS} services per appointment.`,
+                          }));
+                          return;
+                        }
+                        setServiceIds((prev) =>
+                          checked ? prev.filter((id) => id !== s.id) : [...prev, s.id],
+                        );
+                        setErrors((current) => {
+                          const { services: _, ...remainingErrors } = current;
+                          return remainingErrors;
+                        });
+                        setDate("");
+                        setStartTime("");
+                        setMultiDayContinuationAccepted(false);
+                      }}
+                      className={cn(
+                        "flex items-center rounded-lg border p-4 text-left transition-colors",
+                        checked
+                          ? "border-primary bg-primary/10"
+                          : "border-border bg-card/50 hover:border-primary/50",
+                        isReschedule && "cursor-not-allowed opacity-75",
+                      )}
+                    >
+                      <span className="font-display block tracking-wide uppercase">{s.name}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {filteredServices.length === 0 && (
+                <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+                  No services are available in this category.
+                </p>
+              )}
+              <p className="mt-3 text-sm text-muted-foreground">
+                Not sure which service to choose?{" "}
+                <Link
+                  to="/services"
+                  className="font-medium text-primary underline underline-offset-4"
+                >
+                  Browse our services
+                </Link>{" "}
+                for details to understand what each service includes.
+              </p>
+            </Section>
+
+            <Section title="4. Date and time selection" error={errors.schedule}>
+              {serviceIds.length === 0 ? (
+                <p className="text-sm text-muted-foreground">
+                  Select a service first to view available dates and time slots.
+                </p>
+              ) : availability.isLoading ? (
+                <p className="text-sm text-muted-foreground">Loading available schedules...</p>
+              ) : availability.isError || availabilityError ? (
+                <p className="text-sm text-destructive">
+                  {availabilityError ??
+                    "We could not load availability. Please refresh and try again."}
+                </p>
+              ) : (
+                <>
+                  {isReschedule && (
+                    <div className="mb-5">
+                      <Label htmlFor="reschedule-reason">Reason for Rescheduling</Label>
+                      <Textarea
+                        id="reschedule-reason"
+                        value={rescheduleReason}
+                        maxLength={500}
+                        onChange={(event) => setRescheduleReason(event.target.value)}
+                        placeholder="Tell the shop why you need a different schedule."
+                        aria-invalid={Boolean(errors.rescheduleReason)}
+                        className="mt-2"
+                      />
+                      <FieldError message={errors.rescheduleReason} className="mt-1" />
+                    </div>
+                  )}
+                  <p className="mb-2 text-sm text-muted-foreground">
+                    Available dates have an assigned mechanic, an open shop schedule, and enough
+                    time for your selected services. Other dates cannot be selected.
+                  </p>
+
+                  <div
+                    id="booking-schedule"
+                    tabIndex={-1}
                     className={cn(
-                      "flex items-center rounded-lg border p-4 text-left transition-colors",
-                      checked
-                        ? "border-primary bg-primary/10"
-                        : "border-border bg-card/50 hover:border-primary/50",
-                      isReschedule && "cursor-not-allowed opacity-75",
+                      "w-full rounded-xl border border-border bg-card/50 p-4 sm:p-5",
+                      (errors.date || errors.startTime || errors.schedule) && "border-destructive",
                     )}
                   >
-                    <span className="font-display block tracking-wide uppercase">{s.name}</span>
-                  </button>
-                );
-              })}
-            </div>
-            {filteredServices.length === 0 && (
-              <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-                No services are available in this category.
-              </p>
-            )}
-            <p className="mt-3 text-sm text-muted-foreground">
-              Not sure which service to choose?{" "}
-              <Link
-                to="/services"
-                className="font-medium text-primary underline underline-offset-4"
-              >
-                Browse our services
-              </Link>{" "}
-              for details to understand what each service includes.
-            </p>
-            <WizardActions
-              onBack={goBackMobileBooking}
-              onContinue={continueMobileBooking}
-              disabled={!bookingSubmissionOpen}
-            />
-          </Section>
-
-          <Section
-            title="4. Date and time selection"
-            error={errors.schedule}
-            className={cn(mobileStep !== 4 && "hidden")}
-          >
-            {serviceIds.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
-                Select a service first to view available dates and time slots.
-              </p>
-            ) : availability.isLoading ? (
-              <p className="text-sm text-muted-foreground">Loading available schedules...</p>
-            ) : availability.isError || availabilityError ? (
-              <p className="text-sm text-destructive">
-                {availabilityError ??
-                  "We could not load availability. Please refresh and try again."}
-              </p>
-            ) : (
-              <>
-                {isReschedule && (
-                  <div className="mb-5">
-                    <Label htmlFor="reschedule-reason">Reason for Rescheduling</Label>
-                    <Textarea
-                      id="reschedule-reason"
-                      value={rescheduleReason}
-                      maxLength={500}
-                      onChange={(event) => setRescheduleReason(event.target.value)}
-                      placeholder="Tell the shop why you need a different schedule."
-                      aria-invalid={Boolean(errors.rescheduleReason)}
-                      className="mt-2"
-                    />
-                    <FieldError message={errors.rescheduleReason} className="mt-1" />
-                  </div>
-                )}
-                <p className="mb-2 text-sm text-muted-foreground">
-                  Available dates have an assigned mechanic, an open shop schedule, and enough time
-                  for your selected services. Other dates cannot be selected.
-                </p>
-
-                <div
-                  id="booking-schedule"
-                  tabIndex={-1}
-                  className={cn(
-                    "w-full rounded-xl border border-border bg-card/50 p-4 sm:p-5",
-                    (errors.date || errors.startTime || errors.schedule) && "border-destructive",
-                  )}
-                >
-                  <div className="grid gap-6 lg:grid-cols-[minmax(18rem,0.8fr)_minmax(0,1.7fr)] lg:gap-8">
-                    <div className="border-b border-border/70 pb-5 lg:border-r lg:border-b-0 lg:pr-8 lg:pb-0">
-                      <div
-                        id="booking-date"
-                        tabIndex={-1}
-                        className="flex justify-center lg:justify-start"
-                      >
-                        <Calendar
-                          mode="single"
-                          selected={selectedDate}
-                          onSelect={(d) => {
-                            if (!d) return;
-                            const iso = format(d, "yyyy-MM-dd");
-                            setDate(iso);
-                            setStartTime("");
-                          }}
-                          disabled={(d) => !availableDateSet.has(format(d, "yyyy-MM-dd"))}
-                          modifiers={{
-                            fullyBooked: fullyBookedDates.map((value) => parseISO(value)),
-                          }}
-                          modifiersClassNames={{
-                            fullyBooked:
-                              "bg-destructive/15 text-destructive line-through opacity-100",
-                          }}
-                          className="p-0 min-[360px]:p-3"
-                          classNames={{
-                            nav: "justify-between gap-1",
-                            month_caption:
-                              "flex h-(--cell-size) w-full items-center justify-center px-(--cell-size)",
-                          }}
-                        />
-                      </div>
-                      {fullyBookedDates.length > 0 && (
-                        <p className="mt-4 flex items-center justify-center gap-2 text-xs text-muted-foreground lg:justify-start">
-                          <span className="h-3 w-3 rounded-sm bg-destructive/15 ring-1 ring-destructive/40" />
-                          Fully booked dates cannot be selected.
-                        </p>
-                      )}
-                    </div>
-
-                    <div id="booking-start-time" tabIndex={-1}>
-                      <h3 className="font-display text-lg uppercase">Available time slots</h3>
-                      <p className="mt-1 mb-4 text-sm text-muted-foreground">
-                        {date
-                          ? formatDateLong(date)
-                          : "Choose a calendar date to view available times."}
-                      </p>
-                      {date ? (
+                    <div className="grid gap-6 lg:grid-cols-[minmax(18rem,0.8fr)_minmax(0,1.7fr)] lg:gap-8">
+                      <div className="border-b border-border/70 pb-5 lg:border-r lg:border-b-0 lg:pr-8 lg:pb-0">
                         <div
-                          className={cn(
-                            "grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4",
-                            (errors.startTime || errors.schedule) &&
-                              "rounded-lg ring-1 ring-destructive",
-                          )}
+                          id="booking-date"
+                          tabIndex={-1}
+                          className="flex justify-center lg:justify-start"
                         >
-                          {availableSlots.map((slot) => (
-                            <button
-                              type="button"
-                              key={slot.id}
-                              disabled={slot.disabled}
-                              onClick={() => {
-                                setStartTime(slot.startTime);
-                              }}
-                              className={cn(
-                                "rounded-lg border p-3 text-center transition-colors",
-                                slot.disabled && "cursor-not-allowed opacity-40",
-                                startTime === slot.startTime
-                                  ? "border-primary bg-primary text-primary-foreground"
-                                  : "border-border bg-card/50 hover:border-primary/50",
-                              )}
-                            >
-                              <span className="font-display block">
-                                {formatTime(slot.startTime)}
-                              </span>
-                              <span
+                          <Calendar
+                            mode="single"
+                            selected={selectedDate}
+                            onSelect={(d) => {
+                              if (!d) return;
+                              const iso = format(d, "yyyy-MM-dd");
+                              setDate(iso);
+                              setStartTime("");
+                            }}
+                            disabled={(d) => !availableDateSet.has(format(d, "yyyy-MM-dd"))}
+                            modifiers={{
+                              fullyBooked: fullyBookedDates.map((value) => parseISO(value)),
+                            }}
+                            modifiersClassNames={{
+                              fullyBooked:
+                                "bg-destructive/15 text-destructive line-through opacity-100",
+                            }}
+                            className="p-0 min-[360px]:p-3"
+                            classNames={{
+                              nav: "justify-between gap-1",
+                              month_caption:
+                                "flex h-(--cell-size) w-full items-center justify-center px-(--cell-size)",
+                            }}
+                          />
+                        </div>
+                        {fullyBookedDates.length > 0 && (
+                          <p className="mt-4 flex items-center justify-center gap-2 text-xs text-muted-foreground lg:justify-start">
+                            <span className="h-3 w-3 rounded-sm bg-destructive/15 ring-1 ring-destructive/40" />
+                            Fully booked dates cannot be selected.
+                          </p>
+                        )}
+                      </div>
+
+                      <div id="booking-start-time" tabIndex={-1}>
+                        <h3 className="font-display text-lg uppercase">Available time slots</h3>
+                        <p className="mt-1 mb-4 text-sm text-muted-foreground">
+                          {date
+                            ? formatDateLong(date)
+                            : "Choose a calendar date to view available times."}
+                        </p>
+                        {date ? (
+                          <div
+                            className={cn(
+                              "grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4",
+                              (errors.startTime || errors.schedule) &&
+                                "rounded-lg ring-1 ring-destructive",
+                            )}
+                          >
+                            {availableSlots.map((slot) => (
+                              <button
+                                type="button"
+                                key={slot.id}
+                                disabled={slot.disabled}
+                                onClick={() => {
+                                  setStartTime(slot.startTime);
+                                }}
                                 className={cn(
-                                  "block text-[11px] text-muted-foreground",
-                                  startTime === slot.startTime && "text-primary-foreground/80",
+                                  "rounded-lg border p-3 text-center transition-colors",
+                                  slot.disabled && "cursor-not-allowed opacity-40",
+                                  startTime === slot.startTime
+                                    ? "border-primary bg-primary text-primary-foreground"
+                                    : "border-border bg-card/50 hover:border-primary/50",
                                 )}
                               >
-                                Available
-                              </span>
-                            </button>
-                          ))}
-                          {availableSlots.length === 0 && (
-                            <p className="col-span-full rounded-lg border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
-                              No times remain available for this date. Select another available
-                              date.
+                                <span className="font-display block">
+                                  {formatTime(slot.startTime)}
+                                </span>
+                                <span
+                                  className={cn(
+                                    "block text-[11px] text-muted-foreground",
+                                    startTime === slot.startTime && "text-primary-foreground/80",
+                                  )}
+                                >
+                                  Available
+                                </span>
+                              </button>
+                            ))}
+                            {availableSlots.length === 0 && (
+                              <p className="col-span-full rounded-lg border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
+                                No times remain available for this date. Select another available
+                                date.
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+                            Time slots will appear here after you choose a date.
+                          </div>
+                        )}
+                        {date && startTime && (
+                          <div className="mt-4 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+                            <p className="text-xs tracking-widest text-muted-foreground uppercase">
+                              Selected schedule
                             </p>
-                          )}
-                        </div>
-                      ) : (
-                        <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-                          Time slots will appear here after you choose a date.
-                        </div>
-                      )}
-                      {date && startTime && (
-                        <div className="mt-4 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
-                          <p className="text-xs tracking-widest text-muted-foreground uppercase">
-                            Selected schedule
-                          </p>
-                          <p className="mt-1 font-medium text-foreground">
-                            {formatDateLong(date)} at {formatTime(startTime)}
-                          </p>
-                        </div>
-                      )}
+                            <p className="mt-1 font-medium text-foreground">
+                              {formatDateLong(date)} at {formatTime(startTime)}
+                            </p>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-                <FieldError message={errors.date} className="mt-2" />
-                <FieldError message={errors.startTime} className="mt-2" />
-              </>
-            )}
-            <WizardActions
-              onBack={goBackMobileBooking}
-              onContinue={continueMobileBooking}
-              disabled={!bookingSubmissionOpen}
-            />
-          </Section>
+                  <FieldError message={errors.date} className="mt-2" />
+                  <FieldError message={errors.startTime} className="mt-2" />
+                </>
+              )}
+            </Section>
+
+            <div className="flex justify-end">
+              <Button
+                type="submit"
+                size="lg"
+                disabled={!bookingSubmissionOpen || !rescheduleReady}
+                className="w-full font-display tracking-wide uppercase sm:w-auto"
+              >
+                Submit
+              </Button>
+            </div>
+          </div>
 
           <Section
-            title="5. Review"
+            title="Review Booking"
             error={errors.terms ?? errors.schedule}
-            className={cn(mobileStep !== 5 && "hidden")}
+            className={cn(bookingPage !== "review" && "hidden")}
           >
             <p className="mb-5 text-sm text-muted-foreground">
               Review the details below before confirming your appointment.
@@ -1413,7 +1362,8 @@ function BookPage() {
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
                 <div className="space-y-1">
                   <p className="font-medium text-foreground">
-                    Your estimated total covers the labor/service charge for the selected services only.
+                    Your estimated total covers the labor/service charge for the selected services
+                    only.
                   </p>
                   <p className="leading-5 text-muted-foreground">
                     Parts &amp; Accessories, replacement parts, tools, materials, or other work
@@ -1483,10 +1433,10 @@ function BookPage() {
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={goBackMobileBooking}
+                  onClick={returnToBookingDetails}
                   className="w-full sm:w-auto"
                 >
-                  Back
+                  Back to details
                 </Button>
                 <Button
                   type="submit"
@@ -1500,7 +1450,7 @@ function BookPage() {
                   className="w-full font-display tracking-wide uppercase sm:w-auto"
                 >
                   {mutation.isPending && <Loader2 className="animate-spin" />}{" "}
-                  {isReschedule ? "Submit reschedule request" : "Confirm booking"}
+                  {isReschedule ? "Submit reschedule request" : "Book Now"}
                 </Button>
               </div>
             </div>
@@ -1508,44 +1458,10 @@ function BookPage() {
         </form>
         {!isReschedule && (
           <>
-            <AlertDialog open={bookingConfirmationOpen} onOpenChange={setBookingConfirmationOpen}>
-              <AlertDialogContent className="sm:max-w-md">
-                <AlertDialogHeader>
-                  <AlertDialogTitle className="font-display text-2xl uppercase">
-                    Confirm booking?
-                  </AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Your booking details are shown in the Review step. Submit the appointment only
-                    if everything is correct.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <div className="rounded-lg border border-border/70 bg-muted/20 p-3 text-sm">
-                  <p className="text-xs tracking-widest text-muted-foreground uppercase">
-                    Appointment schedule
-                  </p>
-                  <p className="mt-1 font-medium text-foreground">
-                    {formatDateLong(date)} at {formatTime(startTime)}
-                  </p>
-                </div>
-
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancel</AlertDialogCancel>
-                  <AlertDialogAction
-                    type="button"
-                    disabled={!bookingSubmissionOpen || mutation.isPending}
-                    onClick={confirmBooking}
-                    className="bg-primary text-primary-foreground hover:bg-primary/90"
-                  >
-                    {mutation.isPending && <Loader2 className="animate-spin" />} Confirm Booking
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
             <AlertDialog
               open={multiDayContinuationOpen}
               onOpenChange={(open) => {
                 setMultiDayContinuationOpen(open);
-                if (!open) setMultiDayConfirmationStep(null);
               }}
             >
               <AlertDialogContent className="sm:max-w-md">
@@ -1631,36 +1547,6 @@ function Section({
       {children}
       <FieldError message={error} className="mt-3" />
     </section>
-  );
-}
-
-function WizardActions({
-  onBack,
-  onContinue,
-  disabled = false,
-}: {
-  onBack?: () => void;
-  onContinue: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div className="mt-6 flex justify-between gap-3 border-t border-border/70 pt-4">
-      {onBack ? (
-        <Button type="button" variant="outline" onClick={onBack} className="flex-1 sm:flex-none">
-          Back
-        </Button>
-      ) : (
-        <span />
-      )}
-      <Button
-        type="button"
-        onClick={onContinue}
-        disabled={disabled}
-        className="flex-1 font-display uppercase sm:flex-none"
-      >
-        Continue
-      </Button>
-    </div>
   );
 }
 

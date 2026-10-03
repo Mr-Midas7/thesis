@@ -57,10 +57,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import {
+  ACTIVE_RESERVATION_STATUSES,
   type Availability,
   computeAvailableDates,
   computeAvailableSlots,
   computeFullyBookedDates,
+  evaluateCrewAvailability,
+  isActiveReservationStatus,
 } from "@/lib/availability";
 import { getAvailability } from "@/lib/booking.functions";
 import {
@@ -70,14 +73,12 @@ import {
   formatPHP,
   formatTime,
   formatNamePartInput,
-  intervalsOverlap,
   manilaNow,
   normalizePhilippineMobile,
   PHONE_VALIDATION_MESSAGE,
   sanitizePhilippineMobileInput,
   statusLabel,
   statusTone,
-  timeToMinutes,
   toLocalPhilippineMobile,
 } from "@/lib/shop";
 import { cn } from "@/lib/utils";
@@ -389,7 +390,7 @@ function AppointmentsPage() {
             (total, serviceId) =>
               total +
               (services.data?.find((service) => service.id === serviceId)?.duration_minutes ?? 60),
-            30,
+            0,
           )
         : 0,
     [editServiceIds, services.data],
@@ -405,69 +406,88 @@ function AppointmentsPage() {
       },
     ],
     queryFn: async () => {
-      const startMinutes = timeToMinutes(editForm?.startTime ?? "");
-      const endMinutes = startMinutes + editableAppointmentDuration;
       let appointmentsQuery = supabase
         .from("appointments")
         .select("id, assigned_crew_id, start_time, booking_duration_minutes")
         .eq("appointment_date", editableAppointmentDate)
         .eq("is_archived", false)
         .is("rescheduled_to_appointment_id", null)
-        .not("status", "in", "(cancelled,rejected,no_show)");
+        .in("status", ACTIVE_RESERVATION_STATUSES);
       if (openId) appointmentsQuery = appointmentsQuery.neq("id", openId);
+      const continuationsQuery = supabase
+        .from("appointment_continuations")
+        .select("appointment_id, assigned_crew_id, start_time, booking_duration_minutes")
+        .eq("appointment_date", editableAppointmentDate);
 
-      const [schedules, exceptions, appointments] = await Promise.all([
+      const [schedules, exceptions, appointments, continuations] = await Promise.all([
         supabase
           .from("crew_schedules")
-          .select("crew_id, start_time, end_time, is_working")
+          .select("crew_id, day_of_week, schedule_date, start_time, end_time, is_working")
           .eq("schedule_date", editableAppointmentDate)
           .eq("is_working", true),
         supabase
           .from("crew_availability_exceptions")
-          .select("crew_id, start_time, end_time, is_all_day")
+          .select("crew_id, start_date, end_date, start_time, end_time, is_all_day")
           .lte("start_date", editableAppointmentDate)
           .gte("end_date", editableAppointmentDate),
         appointmentsQuery,
+        continuationsQuery,
       ]);
 
-      if (schedules.error || exceptions.error || appointments.error) {
-        throw schedules.error ?? exceptions.error ?? appointments.error;
+      if (schedules.error || exceptions.error || appointments.error || continuations.error) {
+        throw schedules.error ?? exceptions.error ?? appointments.error ?? continuations.error;
       }
 
-      return (crew.data ?? []).filter((member) => {
-        const schedule = schedules.data?.find(
-          (item) => item.crew_id === member.id && item.start_time && item.end_time,
-        );
-        if (!schedule) return false;
+      const continuationParentIds = Array.from(
+        new Set((continuations.data ?? []).map((continuation) => continuation.appointment_id)),
+      );
+      const continuationParents = continuationParentIds.length
+        ? await supabase
+            .from("appointments")
+            .select("id, is_archived, status, rescheduled_to_appointment_id")
+            .in("id", continuationParentIds)
+        : { data: [], error: null };
+      if (continuationParents.error) throw continuationParents.error;
 
-        const shiftStart = timeToMinutes(String(schedule.start_time).slice(0, 5));
-        const shiftEnd = timeToMinutes(String(schedule.end_time).slice(0, 5));
-        if (startMinutes < shiftStart || endMinutes > shiftEnd) return false;
-
-        const hasException = (exceptions.data ?? []).some((exception) => {
-          if (exception.crew_id !== member.id) return false;
-          if (exception.is_all_day) return true;
-          if (!exception.start_time || !exception.end_time) return false;
-          return intervalsOverlap(
-            startMinutes,
-            endMinutes,
-            timeToMinutes(String(exception.start_time).slice(0, 5)),
-            timeToMinutes(String(exception.end_time).slice(0, 5)),
-          );
-        });
-        if (hasException) return false;
-
-        return !(appointments.data ?? []).some((appointment) => {
-          if (appointment.assigned_crew_id !== member.id) return false;
-          const appointmentStart = timeToMinutes(String(appointment.start_time).slice(0, 5));
-          return intervalsOverlap(
-            startMinutes,
-            endMinutes,
-            appointmentStart,
-            appointmentStart + (appointment.booking_duration_minutes ?? 75),
-          );
-        });
+      const activeContinuationParentIds = new Set(
+        (continuationParents.data ?? [])
+          .filter(
+            (appointment) =>
+              !appointment.is_archived &&
+              !appointment.rescheduled_to_appointment_id &&
+              isActiveReservationStatus(appointment.status),
+          )
+          .map((appointment) => appointment.id),
+      );
+      const activeCrewIds = new Set((crew.data ?? []).map((member) => member.id));
+      const { availableCrewIds } = evaluateCrewAvailability({
+        date: editableAppointmentDate,
+        startTime: editForm?.startTime ?? "",
+        durationMinutes: editableAppointmentDuration,
+        // The picker only determines whether an individual crew member can
+        // work this range; the atomic database write remains the capacity gate.
+        capacity: Number.MAX_SAFE_INTEGER,
+        schedules: (schedules.data ?? []).filter((schedule) => activeCrewIds.has(schedule.crew_id)),
+        exceptions: exceptions.data ?? [],
+        assignments: [
+          ...(appointments.data ?? []).map((appointment) => ({
+            date: editableAppointmentDate,
+            startTime: String(appointment.start_time).slice(0, 5),
+            durationMinutes: appointment.booking_duration_minutes ?? 60,
+            crewId: appointment.assigned_crew_id,
+          })),
+          ...(continuations.data ?? [])
+            .filter((continuation) => activeContinuationParentIds.has(continuation.appointment_id))
+            .map((continuation) => ({
+              date: editableAppointmentDate,
+              startTime: String(continuation.start_time).slice(0, 5),
+              durationMinutes: continuation.booking_duration_minutes,
+              crewId: continuation.assigned_crew_id,
+            })),
+        ],
       });
+      const availableCrewIdSet = new Set(availableCrewIds);
+      return (crew.data ?? []).filter((member) => availableCrewIdSet.has(member.id));
     },
     enabled:
       isEditing &&
@@ -945,7 +965,9 @@ function AppointmentsPage() {
                 className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm text-muted-foreground"
                 role="alert"
               >
-                <strong className="text-amber-700 dark:text-amber-400">Customer no-show warning.</strong>{" "}
+                <strong className="text-amber-700 dark:text-amber-400">
+                  Customer no-show warning.
+                </strong>{" "}
                 This customer had {selectedAppointment.no_show_count_at_booking} recorded no-show
                 {selectedAppointment.no_show_count_at_booking === 1 ? "" : "s"} when this booking
                 was made. Review the customer&apos;s booking history before confirming service.

@@ -2,10 +2,24 @@ import {
   addDays,
   intervalsOverlap,
   isBookingTimeRangeWithinHours,
+  isShopOpenDate,
   isSlotBookable,
   timeToMinutes,
   type BookingHours,
 } from "./shop";
+
+export const ACTIVE_RESERVATION_STATUSES = [
+  "pending",
+  "confirmed",
+  "in_progress",
+  "rescheduled",
+] as const;
+
+const activeReservationStatusSet = new Set<string>(ACTIVE_RESERVATION_STATUSES);
+
+export function isActiveReservationStatus(status: string | null | undefined): boolean {
+  return Boolean(status && activeReservationStatusSet.has(status));
+}
 
 export type TimeSlot = {
   id: string;
@@ -21,9 +35,8 @@ export type DateBlock = {
   reason: string | null;
 };
 
-export type CrewSchedule = {
+export type CrewAvailabilitySchedule = {
   crew_id: string;
-  day_of_week: number;
   start_time: string | null;
   end_time: string | null;
   is_working: boolean;
@@ -46,6 +59,131 @@ export type Assignment = {
   crewId: string | null;
 };
 
+export type CrewAvailabilityResult = {
+  availableCrewIds: string[];
+  unassignedReservationCount: number;
+  remainingCapacity: number;
+};
+
+/**
+ * Finds the crew who can perform one reservation and the capacity left after
+ * existing unassigned reservations. All callers must pass only active crew
+ * schedules; this keeps public availability, final booking, and continuations
+ * on the same staffing rules.
+ */
+export function evaluateCrewAvailability({
+  date,
+  startTime,
+  durationMinutes,
+  capacity,
+  schedules,
+  exceptions,
+  assignments,
+}: {
+  date: string;
+  startTime: string;
+  durationMinutes: number;
+  capacity: number;
+  schedules: CrewAvailabilitySchedule[];
+  exceptions: CrewException[];
+  assignments: Assignment[];
+}): CrewAvailabilityResult {
+  const startMinutes = timeToMinutes(startTime);
+  const endMinutes = startMinutes + durationMinutes;
+  if (
+    !Number.isFinite(startMinutes) ||
+    !Number.isFinite(durationMinutes) ||
+    durationMinutes <= 0 ||
+    !Number.isFinite(endMinutes)
+  ) {
+    return { availableCrewIds: [], unassignedReservationCount: 0, remainingCapacity: 0 };
+  }
+
+  const schedulesByCrew = new Map<string, CrewAvailabilitySchedule[]>();
+  for (const schedule of schedules) {
+    if (
+      schedule.schedule_date !== date ||
+      !schedule.is_working ||
+      !schedule.start_time ||
+      !schedule.end_time
+    ) {
+      continue;
+    }
+    const crewSchedules = schedulesByCrew.get(schedule.crew_id) ?? [];
+    crewSchedules.push(schedule);
+    schedulesByCrew.set(schedule.crew_id, crewSchedules);
+  }
+
+  const overlappingAssignments = assignments.filter((assignment) => {
+    if (assignment.date !== date) return false;
+    const assignmentStart = timeToMinutes(assignment.startTime);
+    return (
+      Number.isFinite(assignmentStart) &&
+      Number.isFinite(assignment.durationMinutes) &&
+      assignment.durationMinutes > 0 &&
+      intervalsOverlap(
+        startMinutes,
+        endMinutes,
+        assignmentStart,
+        assignmentStart + assignment.durationMinutes,
+      )
+    );
+  });
+  const occupiedCrewIds = new Set(
+    overlappingAssignments.flatMap((assignment) => (assignment.crewId ? [assignment.crewId] : [])),
+  );
+  const unassignedReservationCount = overlappingAssignments.filter(
+    (assignment) => !assignment.crewId,
+  ).length;
+
+  const availableCrewIds = [...schedulesByCrew.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .flatMap(([crewId, crewSchedules]) => {
+      if (occupiedCrewIds.has(crewId)) return [];
+
+      const shiftCoversReservation = crewSchedules.some((schedule) => {
+        const shiftStart = timeToMinutes(String(schedule.start_time).slice(0, 5));
+        const shiftEnd = timeToMinutes(String(schedule.end_time).slice(0, 5));
+        return (
+          Number.isFinite(shiftStart) &&
+          Number.isFinite(shiftEnd) &&
+          startMinutes >= shiftStart &&
+          endMinutes <= shiftEnd
+        );
+      });
+      if (!shiftCoversReservation) return [];
+
+      const hasException = exceptions.some((exception) => {
+        if (
+          exception.crew_id !== crewId ||
+          exception.start_date > date ||
+          exception.end_date < date
+        ) {
+          return false;
+        }
+        if (exception.is_all_day) return true;
+        if (!exception.start_time || !exception.end_time) return false;
+        return intervalsOverlap(
+          startMinutes,
+          endMinutes,
+          timeToMinutes(String(exception.start_time).slice(0, 5)),
+          timeToMinutes(String(exception.end_time).slice(0, 5)),
+        );
+      });
+      return hasException ? [] : [crewId];
+    });
+
+  const normalizedCapacity = Number.isInteger(capacity) && capacity > 0 ? capacity : 0;
+  return {
+    availableCrewIds,
+    unassignedReservationCount,
+    remainingCapacity: Math.max(
+      0,
+      Math.min(normalizedCapacity, availableCrewIds.length) - unassignedReservationCount,
+    ),
+  };
+}
+
 /** Internal scheduling data. It must stay on the server. */
 export type AvailabilitySource = {
   from: string;
@@ -57,7 +195,7 @@ export type AvailabilitySource = {
   slots: TimeSlot[];
   blocks: DateBlock[];
   assignments: Assignment[];
-  schedules: CrewSchedule[];
+  schedules: CrewAvailabilitySchedule[];
   exceptions: CrewException[];
 };
 
@@ -73,6 +211,13 @@ export type ComputedSlot = {
 };
 
 type InternalComputedSlot = ComputedSlot & { capacity: number };
+
+export type ContinuationSegment = {
+  appointmentDate: string;
+  startTime: string;
+  durationMinutes: number;
+  crewId: string;
+};
 
 /** The minimal availability payload exposed to public booking pages. */
 export type Availability = {
@@ -98,6 +243,105 @@ function isNonSundayUnblockedDate(source: AvailabilitySource, date: string) {
   const dayOfWeek = new Date(Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1)).getUTCDay();
   const fullDayBlocked = source.blocks.some((block) => block.date === date && !block.startTime);
   return dayOfWeek !== 0 && !fullDayBlocked;
+}
+
+function hasOverlappingBlock(
+  blocks: DateBlock[],
+  date: string,
+  startTime: string,
+  durationMinutes: number,
+) {
+  const startMinutes = timeToMinutes(startTime);
+  const endMinutes = startMinutes + durationMinutes;
+  return blocks.some((block) => {
+    if (block.date !== date) return false;
+    if (!block.startTime) return true;
+    if (block.startTime === startTime) return true;
+    if (!block.endTime) return false;
+    return intervalsOverlap(
+      startMinutes,
+      endMinutes,
+      timeToMinutes(block.startTime),
+      timeToMinutes(block.endTime),
+    );
+  });
+}
+
+/**
+ * Reserves the remaining work on later days using the same staffing and
+ * capacity calculation as the public availability grid. A null result means
+ * the full multi-day reservation cannot be completed in the displayed window.
+ */
+export function planContinuationSegments({
+  source,
+  firstDate,
+  remainingMinutes,
+}: {
+  source: AvailabilitySource;
+  firstDate: string;
+  remainingMinutes: number;
+}): ContinuationSegment[] | null {
+  if (remainingMinutes <= 0) return [];
+
+  const closingMinutes = timeToMinutes(source.operatingHours?.closingTime ?? "17:00");
+  if (!Number.isFinite(closingMinutes)) return null;
+
+  const assignments = [...source.assignments];
+  const segments: ContinuationSegment[] = [];
+  let remaining = remainingMinutes;
+  let cursor = addDays(firstDate, 1);
+
+  while (remaining > 0 && cursor <= source.to) {
+    if (!isShopOpenDate(cursor)) {
+      cursor = addDays(cursor, 1);
+      continue;
+    }
+
+    for (const slot of source.slots) {
+      const slotStart = timeToMinutes(slot.startTime);
+      const duration = Math.min(remaining, closingMinutes - slotStart);
+      if (
+        duration <= 0 ||
+        slot.capacity <= 0 ||
+        !isBookingTimeRangeWithinHours(slot.startTime, duration, source.operatingHours) ||
+        hasOverlappingBlock(source.blocks, cursor, slot.startTime, duration)
+      ) {
+        continue;
+      }
+
+      const { availableCrewIds, unassignedReservationCount, remainingCapacity } =
+        evaluateCrewAvailability({
+          date: cursor,
+          startTime: slot.startTime,
+          durationMinutes: duration,
+          capacity: slot.capacity,
+          schedules: source.schedules,
+          exceptions: source.exceptions,
+          assignments,
+        });
+      const crewId = availableCrewIds[unassignedReservationCount];
+      if (remainingCapacity <= 0 || !crewId) continue;
+
+      const segment: ContinuationSegment = {
+        appointmentDate: cursor,
+        startTime: slot.startTime,
+        durationMinutes: duration,
+        crewId,
+      };
+      segments.push(segment);
+      assignments.push({
+        date: segment.appointmentDate,
+        startTime: segment.startTime,
+        durationMinutes: segment.durationMinutes,
+        crewId: segment.crewId,
+      });
+      remaining -= duration;
+      break;
+    }
+    cursor = addDays(cursor, 1);
+  }
+
+  return remaining === 0 ? segments : null;
 }
 
 /** Compute availability without exposing its staffing and booking inputs. */
@@ -145,7 +389,7 @@ function computeAvailableSlotsFromSource(
 ): InternalComputedSlot[] {
   if (!date || !availability.slots?.length) return [];
 
-  const totalDuration = availability.totalDurationMinutes ?? 90;
+  const totalDuration = availability.totalDurationMinutes ?? 60;
   const computedSlots = availability.slots.map((slot) => {
     const slotStartMin =
       parseInt(slot.startTime.slice(0, 2)) * 60 + parseInt(slot.startTime.slice(3, 5));
@@ -154,102 +398,35 @@ function computeAvailableSlotsFromSource(
     );
     const continuationEligible =
       availability.allowMultiDayContinuation &&
-      slotStartMin + totalDuration - configuredClosingMinutes > 30;
+      slotStartMin + totalDuration > configuredClosingMinutes;
     const slotDuration = continuationEligible
       ? Math.min(totalDuration, Math.max(0, configuredClosingMinutes - slotStartMin))
       : totalDuration;
-    const slotEndMin = slotStartMin + slotDuration;
 
     const notBookable =
       !isSlotBookable(date, slot.startTime, availability.minimumBookingLeadHours) ||
       (!continuationEligible &&
         !isBookingTimeRangeWithinHours(slot.startTime, totalDuration, availability.operatingHours));
 
-    const blocked = availability.blocks.some((b) => {
-      if (b.date !== date) return false;
-      if (!b.startTime) return true; // whole-day block
-      if (b.startTime === slot.startTime) return true; // exact slot match
-      if (!b.endTime) return false; // single-slot block that doesn't match
-      const bsMin = parseInt(b.startTime.slice(0, 2)) * 60 + parseInt(b.startTime.slice(3, 5));
-      const beMin = parseInt(b.endTime.slice(0, 2)) * 60 + parseInt(b.endTime.slice(3, 5));
-      return slotStartMin < beMin && slotEndMin > bsMin;
+    const blocked = hasOverlappingBlock(availability.blocks, date, slot.startTime, slotDuration);
+
+    const { remainingCapacity: remaining } = evaluateCrewAvailability({
+      date,
+      startTime: slot.startTime,
+      durationMinutes: slotDuration,
+      capacity: slot.capacity,
+      schedules: availability.schedules,
+      exceptions: availability.exceptions,
+      assignments: availability.assignments,
     });
-
-    let availableMechanics = 0;
-
-    // Only active crew explicitly assigned to this date provide public booking
-    // coverage. A date without an assigned crew has no available time slots.
-    const allSchedules = availability.schedules ?? [];
-    const schedulesForDate = allSchedules.filter(
-      (schedule) => schedule.schedule_date === date && schedule.is_working,
-    );
-
-    // Keep this guard so a legacy duplicate cannot make a mechanic appear twice.
-    const crewSchedMap = new Map<string, CrewSchedule>();
-    for (const s of schedulesForDate) {
-      if (!crewSchedMap.has(s.crew_id)) crewSchedMap.set(s.crew_id, s);
-    }
-
-    const dateExceptions = (availability.exceptions ?? []).filter((e) => {
-      const sd = new Date(e.start_date);
-      const ed = new Date(e.end_date);
-      const target = new Date(date);
-      return sd <= target && ed >= target;
-    });
-
-    const overlappingAppointments = (availability.assignments ?? []).filter((appointment) => {
-      if (appointment.date !== date) return false;
-      const appointmentStartMin = timeToMinutes(appointment.startTime);
-      return intervalsOverlap(
-        slotStartMin,
-        slotEndMin,
-        appointmentStartMin,
-        appointmentStartMin + appointment.durationMinutes,
-      );
-    });
-    const occupiedCrewIds = new Set(
-      overlappingAppointments.flatMap((appointment) =>
-        appointment.crewId ? [appointment.crewId] : [],
-      ),
-    );
-    const unassignedAppointments = overlappingAppointments.filter(
-      (appointment) => !appointment.crewId,
-    ).length;
-
-    for (const sched of crewSchedMap.values()) {
-      const shiftStart = String(sched.start_time).slice(0, 5);
-      const shiftEnd = String(sched.end_time).slice(0, 5);
-      const shiftStartMin =
-        parseInt(shiftStart.slice(0, 2)) * 60 + parseInt(shiftStart.slice(3, 5));
-      const shiftEndMin = parseInt(shiftEnd.slice(0, 2)) * 60 + parseInt(shiftEnd.slice(3, 5));
-
-      if (slotStartMin < shiftStartMin || slotEndMin > shiftEndMin) continue;
-
-      const hasException = dateExceptions.some((e) => {
-        if (e.crew_id !== sched.crew_id) return false;
-        if (e.is_all_day) return true;
-        if (e.start_time && e.end_time) {
-          const excStart = String(e.start_time).slice(0, 5);
-          const excEnd = String(e.end_time).slice(0, 5);
-          const excStartMin = parseInt(excStart.slice(0, 2)) * 60 + parseInt(excStart.slice(3, 5));
-          const excEndMin = parseInt(excEnd.slice(0, 2)) * 60 + parseInt(excEnd.slice(3, 5));
-          if (slotStartMin < excEndMin && slotEndMin > excStartMin) return true;
-        }
-        return false;
-      });
-
-      if (hasException) continue;
-
-      if (occupiedCrewIds.has(sched.crew_id)) continue;
-
-      availableMechanics++;
-    }
-
-    const remaining = Math.max(
-      0,
-      Math.min(slot.capacity, availableMechanics) - unassignedAppointments,
-    );
-    const disabled = notBookable || blocked || remaining === 0;
+    const continuationPlan = continuationEligible
+      ? planContinuationSegments({
+          source: availability,
+          firstDate: date,
+          remainingMinutes: totalDuration - slotDuration,
+        })
+      : [];
+    const disabled = notBookable || blocked || remaining === 0 || continuationPlan === null;
 
     return {
       ...slot,

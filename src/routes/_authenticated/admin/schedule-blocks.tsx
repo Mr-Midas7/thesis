@@ -570,7 +570,7 @@ function ScheduleBlocks() {
   );
 }
 
-function ReservedFieldError({ message }: { message?: string }) {
+function ReservedFieldError({ message }: { message?: string | undefined }) {
   return (
     <div className="min-h-8">
       <FieldError message={message} />

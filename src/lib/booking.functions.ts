@@ -4,7 +4,13 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { z } from "zod";
 
 import type { Database } from "@/integrations/supabase/types";
-import { buildPublicAvailability } from "./availability";
+import {
+  ACTIVE_RESERVATION_STATUSES,
+  buildPublicAvailability,
+  evaluateCrewAvailability,
+  isActiveReservationStatus,
+  planContinuationSegments as planContinuationSegmentsFromAvailability,
+} from "./availability";
 import {
   addDays,
   bookingSubmissionClosedMessage,
@@ -14,7 +20,6 @@ import {
   earliestBookableDate,
   formatDateLong,
   formatTime,
-  intervalsOverlap,
   NAME_PART_PATTERN,
   NAME_PART_VALIDATION_MESSAGE,
   bookingDurationForFirstDay,
@@ -235,7 +240,7 @@ function unavailableAvailability(from: string, to: string, error: string) {
     from,
     to,
     error,
-    totalDurationMinutes: 90,
+    totalDurationMinutes: 60,
     dates: [],
     fullyBookedDates: [],
     slotsByDate: {},
@@ -249,48 +254,6 @@ type ContinuationSegment = {
   bookingDurationMinutes: number;
   assignedCrewId: string;
 };
-
-type ScheduledReservation = {
-  appointmentDate: string;
-  startTime: string;
-  bookingDurationMinutes: number;
-  assignedCrewId: string | null;
-};
-
-function overlapsScheduledRange(
-  startTime: string,
-  durationMinutes: number,
-  other: ScheduledReservation,
-) {
-  const start = timeToMinutes(startTime);
-  const otherStart = timeToMinutes(other.startTime);
-  return intervalsOverlap(
-    start,
-    start + durationMinutes,
-    otherStart,
-    otherStart + other.bookingDurationMinutes,
-  );
-}
-
-function scheduleHasOverlappingBlock(
-  blocks: Array<{ start_time: string | null; reason: string | null }>,
-  startTime: string,
-  durationMinutes: number,
-) {
-  const start = timeToMinutes(startTime);
-  return blocks.some((block) => {
-    if (!block.start_time) return true;
-    const { endTime } = decodeBlockReason(block.reason);
-    const blockStart = String(block.start_time).slice(0, 5);
-    if (!endTime) return blockStart === startTime;
-    return intervalsOverlap(
-      start,
-      start + durationMinutes,
-      timeToMinutes(blockStart),
-      timeToMinutes(endTime),
-    );
-  });
-}
 
 async function planContinuationSegments({
   supabaseAdmin,
@@ -343,7 +306,7 @@ async function planContinuationSegments({
         .select("appointment_date,start_time,assigned_crew_id,booking_duration_minutes")
         .eq("is_archived", false)
         .is("rescheduled_to_appointment_id", null)
-        .not("status", "in", "(cancelled,rejected,no_show)")
+        .in("status", ACTIVE_RESERVATION_STATUSES)
         .gte("appointment_date", from)
         .lte("appointment_date", lastAvailableDate),
       supabaseAdmin
@@ -399,137 +362,69 @@ async function planContinuationSegments({
         (appointment) =>
           !appointment.is_archived &&
           !appointment.rescheduled_to_appointment_id &&
-          ["pending", "confirmed", "in_progress", "rescheduled"].includes(appointment.status),
+          isActiveReservationStatus(appointment.status),
       )
       .map((appointment) => appointment.id),
   );
-  const reservations: ScheduledReservation[] = [
+  const assignments = [
     ...(appointmentsRes.data ?? []).map((appointment) => ({
-      appointmentDate: appointment.appointment_date,
+      date: appointment.appointment_date,
       startTime: String(appointment.start_time).slice(0, 5),
-      bookingDurationMinutes: appointment.booking_duration_minutes ?? 75,
-      assignedCrewId: appointment.assigned_crew_id,
+      durationMinutes: appointment.booking_duration_minutes ?? 60,
+      crewId: appointment.assigned_crew_id,
     })),
     ...(continuationsRes.data ?? [])
       .filter((continuation) => activeContinuationParentIds.has(continuation.appointment_id))
       .map((continuation) => ({
-        appointmentDate: continuation.appointment_date,
+        date: continuation.appointment_date,
         startTime: String(continuation.start_time).slice(0, 5),
-        bookingDurationMinutes: continuation.booking_duration_minutes,
-        assignedCrewId: continuation.assigned_crew_id,
+        durationMinutes: continuation.booking_duration_minutes,
+        crewId: continuation.assigned_crew_id,
       })),
   ];
   const activeCrewIds = new Set((crewRes.data ?? []).map((crew) => crew.id));
-  const bookingSlots = buildBookingTimeSlots(slotConfig, operatingHours);
-  const closingMinutes = timeToMinutes(operatingHours.closingTime);
-  const segments: ContinuationSegment[] = [];
-  let remaining = remainingMinutes;
-  let cursor = from;
-
-  while (remaining > 0 && cursor <= lastAvailableDate) {
-    if (!isShopOpenDate(cursor)) {
-      cursor = addDays(cursor, 1);
-      continue;
-    }
-
-    const dateBlocks = (blocksRes.data ?? []).filter((block) => block.block_date === cursor);
-    const schedulesByCrew = new Map(
-      (schedulesRes.data ?? [])
-        .filter(
-          (schedule) =>
-            schedule.schedule_date === cursor &&
-            schedule.is_working &&
-            activeCrewIds.has(schedule.crew_id) &&
-            schedule.start_time &&
-            schedule.end_time,
-        )
-        .map((schedule) => [schedule.crew_id, schedule]),
-    );
-    const dateExceptions = (exceptionsRes.data ?? []).filter(
-      (exception) => exception.start_date <= cursor && exception.end_date >= cursor,
-    );
-
-    for (const slot of bookingSlots) {
-      const slotStart = timeToMinutes(slot.startTime);
-      const duration = Math.min(remaining, closingMinutes - slotStart);
-      if (
-        duration <= 0 ||
-        slot.capacity <= 0 ||
-        !isBookingTimeRangeWithinHours(slot.startTime, duration, operatingHours) ||
-        scheduleHasOverlappingBlock(dateBlocks, slot.startTime, duration)
-      ) {
-        continue;
-      }
-
-      const overlapping = reservations.filter(
-        (reservation) =>
-          reservation.appointmentDate === cursor &&
-          overlapsScheduledRange(slot.startTime, duration, reservation),
-      );
-      const occupiedCrewIds = new Set(
-        overlapping.flatMap((reservation) =>
-          reservation.assignedCrewId ? [reservation.assignedCrewId] : [],
-        ),
-      );
-      const unassignedCount = overlapping.filter(
-        (reservation) => !reservation.assignedCrewId,
-      ).length;
-      const availableCrewIds = [...schedulesByCrew.values()].flatMap((schedule) => {
-        const shiftStart = timeToMinutes(String(schedule.start_time).slice(0, 5));
-        const shiftEnd = timeToMinutes(String(schedule.end_time).slice(0, 5));
-        if (
-          slotStart < shiftStart ||
-          slotStart + duration > shiftEnd ||
-          occupiedCrewIds.has(schedule.crew_id)
-        ) {
-          return [];
-        }
-
-        const unavailable = dateExceptions.some((exception) => {
-          if (exception.crew_id !== schedule.crew_id) return false;
-          if (exception.is_all_day) return true;
-          if (!exception.start_time || !exception.end_time) return false;
-          return intervalsOverlap(
-            slotStart,
-            slotStart + duration,
-            timeToMinutes(String(exception.start_time).slice(0, 5)),
-            timeToMinutes(String(exception.end_time).slice(0, 5)),
-          );
-        });
-        return unavailable ? [] : [schedule.crew_id];
-      });
-
-      if (Math.min(slot.capacity, availableCrewIds.length) <= unassignedCount) continue;
-      const assignedCrewId = availableCrewIds[unassignedCount];
-      if (!assignedCrewId) continue;
-
-      const segment: ContinuationSegment = {
-        segmentNumber: segments.length + 1,
-        appointmentDate: cursor,
-        startTime: slot.startTime,
-        bookingDurationMinutes: duration,
-        assignedCrewId,
-      };
-      segments.push(segment);
-      reservations.push({
-        appointmentDate: segment.appointmentDate,
-        startTime: segment.startTime,
-        bookingDurationMinutes: segment.bookingDurationMinutes,
-        assignedCrewId: segment.assignedCrewId,
-      });
-      remaining -= duration;
-      break;
-    }
-    cursor = addDays(cursor, 1);
+  const segments = planContinuationSegmentsFromAvailability({
+    source: {
+      from,
+      to: lastAvailableDate,
+      operatingHours,
+      slots: buildBookingTimeSlots(slotConfig, operatingHours),
+      blocks: (blocksRes.data ?? []).map((block) => {
+        const { endTime } = decodeBlockReason(block.reason);
+        return {
+          date: block.block_date,
+          startTime: block.start_time ? String(block.start_time).slice(0, 5) : null,
+          endTime,
+          reason: null,
+        };
+      }),
+      assignments,
+      schedules: (schedulesRes.data ?? []).filter((schedule) =>
+        activeCrewIds.has(schedule.crew_id),
+      ),
+      exceptions: exceptionsRes.data ?? [],
+    },
+    firstDate,
+    remainingMinutes,
+  });
+  if (!segments) {
+    return {
+      ok: false,
+      error:
+        "There is not enough mechanic availability in the booking window to complete these services.",
+    };
   }
 
-  return remaining === 0
-    ? { ok: true, segments }
-    : {
-        ok: false,
-        error:
-          "There is not enough mechanic availability in the booking window to complete these services.",
-      };
+  return {
+    ok: true,
+    segments: segments.map((segment, index) => ({
+      segmentNumber: index + 1,
+      appointmentDate: segment.appointmentDate,
+      startTime: segment.startTime,
+      bookingDurationMinutes: segment.durationMinutes,
+      assignedCrewId: segment.crewId,
+    })),
+  };
 }
 
 function availabilityErrorMessage(errors: Array<{ message: string } | null>) {
@@ -683,7 +578,14 @@ export const getAvailability = createServerFn({ method: "GET" })
       .gte("appointment_date", configuredFrom)
       .lte("appointment_date", configuredTo)
       .is("rescheduled_to_appointment_id", null)
-      .not("status", "in", "(cancelled,rejected,no_show)");
+      .in("status", ACTIVE_RESERVATION_STATUSES);
+    const continuationsQuery = supabaseAdmin
+      .from("appointment_continuations")
+      .select(
+        "appointment_id,appointment_date,start_time,assigned_crew_id,booking_duration_minutes",
+      )
+      .gte("appointment_date", configuredFrom)
+      .lte("appointment_date", configuredTo);
     if (data.excludeAppointmentId) {
       appointmentsQuery = appointmentsQuery.neq("id", data.excludeAppointmentId);
     }
@@ -748,13 +650,7 @@ export const getAvailability = createServerFn({ method: "GET" })
         .select("*")
         .gte("end_date", configuredFrom)
         .lte("start_date", configuredTo),
-      supabaseAdmin
-        .from("appointment_continuations")
-        .select(
-          "appointment_id,appointment_date,start_time,assigned_crew_id,booking_duration_minutes",
-        )
-        .gte("appointment_date", configuredFrom)
-        .lte("appointment_date", configuredTo),
+      continuationsQuery,
     ]);
 
     if (
@@ -831,8 +727,7 @@ export const getAvailability = createServerFn({ method: "GET" })
       motorcycle = { ...data.motorcycle };
     }
 
-    // Reserve one 15-minute arrival buffer and one 15-minute post-service
-    // buffer around the complete selected-service duration.
+    // A reservation lasts exactly as long as the selected services.
     const resolvedServices = resolveServicePricing(
       servicesRes.data ?? [],
       overridesRes.data ?? [],
@@ -840,7 +735,7 @@ export const getAvailability = createServerFn({ method: "GET" })
     );
     const totalDuration = resolvedServices.reduce(
       (sum, service) => sum + service.durationMinutes,
-      30,
+      0,
     );
 
     const assignments: {
@@ -853,7 +748,7 @@ export const getAvailability = createServerFn({ method: "GET" })
       assignments.push({
         date: a.appointment_date,
         startTime: String(a.start_time).slice(0, 5),
-        durationMinutes: a.booking_duration_minutes ?? 75,
+        durationMinutes: a.booking_duration_minutes ?? 60,
         crewId: a.assigned_crew_id,
       });
     }
@@ -878,7 +773,7 @@ export const getAvailability = createServerFn({ method: "GET" })
             (appointment) =>
               !appointment.is_archived &&
               !appointment.rescheduled_to_appointment_id &&
-              ["pending", "confirmed", "in_progress", "rescheduled"].includes(appointment.status),
+              isActiveReservationStatus(appointment.status),
           )
           .map((appointment) => appointment.id),
       );
@@ -904,7 +799,7 @@ export const getAvailability = createServerFn({ method: "GET" })
       minimumBookingLeadHours: data.rescheduling
         ? bookingRules.reschedulingNoticeHours
         : bookingRules.minimumBookingLeadHours,
-      totalDurationMinutes: totalDuration || 90,
+      totalDurationMinutes: totalDuration || 60,
       allowMultiDayContinuation: data.allowMultiDayContinuation && !data.rescheduling,
       slots: buildBookingTimeSlots(capacityConfig, bookingRules.operatingHours),
       operatingHours: bookingRules.operatingHours,
@@ -1267,7 +1162,7 @@ export const createBooking = createServerFn({ method: "POST" })
     });
     const totalDuration = resolvedServices.reduce(
       (sum, service) => sum + service.durationMinutes,
-      30,
+      0,
     );
 
     const overflowMinutes = bookingDurationOverflowMinutes(
@@ -1275,8 +1170,7 @@ export const createBooking = createServerFn({ method: "POST" })
       totalDuration,
       bookingRules.operatingHours,
     );
-    const needsContinuation =
-      !rescheduledFrom && data.serviceIds.length > 1 && overflowMinutes > 30;
+    const needsContinuation = !rescheduledFrom && data.serviceIds.length > 1 && overflowMinutes > 0;
     if (overflowMinutes > 0 && !needsContinuation) {
       return {
         ok: false as const,
@@ -1358,12 +1252,8 @@ export const createBooking = createServerFn({ method: "POST" })
     }
 
     const activeCrewIds = new Set((activeCrewRes.data ?? []).map((crew) => crew.id));
-    const effectiveSchedules = Array.from(
-      new Map(
-        (schedulesRes.data ?? [])
-          .filter((schedule) => schedule.is_working && activeCrewIds.has(schedule.crew_id))
-          .map((schedule) => [schedule.crew_id, schedule]),
-      ).values(),
+    const effectiveSchedules = (schedulesRes.data ?? []).filter(
+      (schedule) => schedule.is_working && activeCrewIds.has(schedule.crew_id),
     );
 
     if (!effectiveSchedules.length) {
@@ -1383,8 +1273,7 @@ export const createBooking = createServerFn({ method: "POST" })
       };
     }
 
-    // 4. Check each mechanic for availability
-    const availableMechanics: string[] = [];
+    // 4. Evaluate staffing and capacity with the same rule used by the public availability grid.
     const [existingApptsRes, existingContinuationsRes] = await Promise.all([
       supabaseAdmin
         .from("appointments")
@@ -1392,7 +1281,7 @@ export const createBooking = createServerFn({ method: "POST" })
         .eq("appointment_date", data.date)
         .eq("is_archived", false)
         .is("rescheduled_to_appointment_id", null)
-        .not("status", "in", "(cancelled,rejected,no_show)"),
+        .in("status", ACTIVE_RESERVATION_STATUSES),
       supabaseAdmin
         .from("appointment_continuations")
         .select("appointment_id,assigned_crew_id,start_time,booking_duration_minutes")
@@ -1405,7 +1294,6 @@ export const createBooking = createServerFn({ method: "POST" })
       };
     }
 
-    const slotEndMin = slotStartMin + firstDayDuration;
     const continuationParentIds = Array.from(
       new Set(
         (existingContinuationsRes.data ?? []).map((continuation) => continuation.appointment_id),
@@ -1429,72 +1317,36 @@ export const createBooking = createServerFn({ method: "POST" })
           (appointment) =>
             !appointment.is_archived &&
             !appointment.rescheduled_to_appointment_id &&
-            ["pending", "confirmed", "in_progress", "rescheduled"].includes(appointment.status),
+            isActiveReservationStatus(appointment.status),
         )
         .map((appointment) => appointment.id),
     );
-    const existingReservations = [
-      ...(existingApptsRes.data ?? []),
+    const existingAssignments = [
+      ...(existingApptsRes.data ?? []).map((appointment) => ({
+        date: data.date,
+        startTime: String(appointment.start_time).slice(0, 5),
+        durationMinutes: appointment.booking_duration_minutes ?? 60,
+        crewId: appointment.assigned_crew_id,
+      })),
       ...(existingContinuationsRes.data ?? [])
         .filter((continuation) => activeContinuationParentIds.has(continuation.appointment_id))
         .map((continuation) => ({
-          assigned_crew_id: continuation.assigned_crew_id,
-          start_time: continuation.start_time,
-          booking_duration_minutes: continuation.booking_duration_minutes,
+          date: data.date,
+          startTime: String(continuation.start_time).slice(0, 5),
+          durationMinutes: continuation.booking_duration_minutes,
+          crewId: continuation.assigned_crew_id,
         })),
     ];
-    const overlappingAppointments = existingReservations.filter((appointment) => {
-      const appointmentStartMin = timeToMinutes(String(appointment.start_time).slice(0, 5));
-      return intervalsOverlap(
-        slotStartMin,
-        slotEndMin,
-        appointmentStartMin,
-        appointmentStartMin + (appointment.booking_duration_minutes ?? 75),
-      );
-    });
-    const occupiedCrewIds = new Set(
-      overlappingAppointments.flatMap((appointment) =>
-        appointment.assigned_crew_id ? [appointment.assigned_crew_id] : [],
-      ),
-    );
-    const unassignedAppointments = overlappingAppointments.filter(
-      (appointment) => !appointment.assigned_crew_id,
-    ).length;
-
-    for (const sched of effectiveSchedules) {
-      // Check shift covers the slot
-      const shiftStart = String(sched.start_time).slice(0, 5);
-      const shiftEnd = String(sched.end_time).slice(0, 5);
-      const shiftStartMin =
-        parseInt(shiftStart.slice(0, 2)) * 60 + parseInt(shiftStart.slice(3, 5));
-      const shiftEndMin = parseInt(shiftEnd.slice(0, 2)) * 60 + parseInt(shiftEnd.slice(3, 5));
-
-      if (slotStartMin < shiftStartMin || slotEndMin > shiftEndMin) continue; // Outside shift
-
-      // Check exceptions
-      const hasException = (exceptionsRes.data ?? []).some((e) => {
-        if (e.crew_id !== sched.crew_id) return false;
-        if (e.is_all_day) return true;
-        if (e.start_time && e.end_time) {
-          const excStart = String(e.start_time).slice(0, 5);
-          const excEnd = String(e.end_time).slice(0, 5);
-          const excStartMin = parseInt(excStart.slice(0, 2)) * 60 + parseInt(excStart.slice(3, 5));
-          const excEndMin = parseInt(excEnd.slice(0, 2)) * 60 + parseInt(excEnd.slice(3, 5));
-          // Check if the slot overlaps with the exception window
-          if (slotStartMin < excEndMin && slotEndMin > excStartMin) return true;
-        }
-        return false;
+    const { availableCrewIds, unassignedReservationCount, remainingCapacity } =
+      evaluateCrewAvailability({
+        date: data.date,
+        startTime,
+        durationMinutes: firstDayDuration,
+        capacity: slot.capacity,
+        schedules: effectiveSchedules,
+        exceptions: exceptionsRes.data ?? [],
+        assignments: existingAssignments,
       });
-
-      if (hasException) continue;
-
-      if (occupiedCrewIds.has(sched.crew_id)) continue;
-
-      availableMechanics.push(sched.crew_id);
-    }
-
-    const remainingCapacity =
-      Math.min(slot.capacity, availableMechanics.length) - unassignedAppointments;
     if (remainingCapacity <= 0) {
       return {
         ok: false as const,
@@ -1504,7 +1356,7 @@ export const createBooking = createServerFn({ method: "POST" })
 
     // 5. Auto-assign an available mechanic, reserving capacity for legacy
     //    appointments that have not yet been assigned to a crew member.
-    const assignedMechanicId = availableMechanics[unassignedAppointments] ?? null;
+    const assignedMechanicId = availableCrewIds[unassignedReservationCount] ?? null;
 
     const total = resolvedServices.reduce((sum, service) => sum + service.price, 0);
 

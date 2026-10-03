@@ -57,10 +57,10 @@ function ServicesPage() {
       <SiteHeader />
       <main className="site-container py-12">
         <p className="text-xs tracking-[0.3em] text-accent uppercase">Service menu</p>
-        <h1 className="font-display text-4xl font-bold uppercase md:text-5xl">Services & Prices</h1>
+        <h1 className="font-display text-4xl font-bold uppercase md:text-5xl">Services</h1>
         <p className="mt-2 max-w-2xl text-muted-foreground">
-          Starting rates below. Final quotation depends on parts used and the actual condition of
-          your unit.
+          Browse our provided services. Final details depend on the actual condition of your unit.
+
         </p>
 
         <div className="mt-8">
