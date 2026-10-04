@@ -185,6 +185,7 @@ export type Database = {
           booking_duration_minutes: number;
           completion_notification_snoozed_until: string | null;
           customer_name: string;
+          email: string | null;
           first_name: string | null;
           id: string;
           is_archived: boolean;
@@ -230,6 +231,7 @@ export type Database = {
           booking_duration_minutes?: number;
           completion_notification_snoozed_until?: string | null;
           customer_name: string;
+          email?: string | null;
           first_name?: string | null;
           id?: string;
           is_archived?: boolean;
@@ -275,6 +277,7 @@ export type Database = {
           booking_duration_minutes?: number;
           completion_notification_snoozed_until?: string | null;
           customer_name?: string;
+          email?: string | null;
           first_name?: string | null;
           id?: string;
           is_archived?: boolean;
@@ -316,6 +319,80 @@ export type Database = {
             referencedColumns: ["id"];
           },
         ];
+      };
+      appointment_confirmation_emails: {
+        Row: {
+          appointment_id: string;
+          attempt_count: number;
+          created_at: string;
+          id: string;
+          last_error: string | null;
+          recipient_email: string;
+          sent_at: string | null;
+          status: string;
+          updated_at: string;
+        };
+        Insert: {
+          appointment_id: string;
+          attempt_count?: number;
+          created_at?: string;
+          id?: string;
+          last_error?: string | null;
+          recipient_email: string;
+          sent_at?: string | null;
+          status?: string;
+          updated_at?: string;
+        };
+        Update: {
+          appointment_id?: string;
+          attempt_count?: number;
+          created_at?: string;
+          id?: string;
+          last_error?: string | null;
+          recipient_email?: string;
+          sent_at?: string | null;
+          status?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "appointment_confirmation_emails_appointment_id_fkey";
+            columns: ["appointment_id"];
+            isOneToOne: false;
+            referencedRelation: "appointments";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      appointment_reference_recovery_challenges: {
+        Row: {
+          attempt_count: number;
+          code_hash: string;
+          created_at: string;
+          email: string;
+          expires_at: string;
+          id: string;
+          verified_at: string | null;
+        };
+        Insert: {
+          attempt_count?: number;
+          code_hash: string;
+          created_at?: string;
+          email: string;
+          expires_at: string;
+          id?: string;
+          verified_at?: string | null;
+        };
+        Update: {
+          attempt_count?: number;
+          code_hash?: string;
+          created_at?: string;
+          email?: string;
+          expires_at?: string;
+          id?: string;
+          verified_at?: string | null;
+        };
+        Relationships: [];
       };
       appointment_reschedule_history: {
         Row: {
@@ -982,6 +1059,7 @@ export type Database = {
           p_booking_request_id: string;
           p_continuation_segments: Json;
           p_customer_name: string;
+          p_email: string;
           p_first_name: string;
           p_last_name: string;
           p_middle_name: string;
@@ -1065,6 +1143,13 @@ export type Database = {
           p_window_seconds: number;
         };
         Returns: boolean;
+      };
+      consume_reference_recovery_challenge: {
+        Args: {
+          p_code_hash: string;
+          p_email: string;
+        };
+        Returns: string;
       };
       has_role: {
         Args: {

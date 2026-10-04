@@ -189,12 +189,20 @@ const namePartSchema = z
   .max(40)
   .regex(NAME_PART_PATTERN, NAME_PART_VALIDATION_MESSAGE);
 
+const emailSchema = z
+  .string()
+  .trim()
+  .email("Enter a valid email address.")
+  .max(254)
+  .transform((email) => email.toLocaleLowerCase());
+
 const bookingSchema = z
   .object({
     firstName: namePartSchema.default(""),
     middleName: namePartSchema.default(""),
     lastName: namePartSchema.default(""),
     phone: phoneSchema,
+    email: emailSchema.optional(),
     motoBrand: z.string().trim().min(1).max(50),
     motoModel: z.string().trim().min(1).max(50),
     motoVariant: z.string().trim().max(50).optional().or(z.literal("")),
@@ -220,6 +228,13 @@ const bookingSchema = z
     rescheduleReason: z.string().trim().max(500).optional().or(z.literal("")),
   })
   .superRefine((data, context) => {
+    if (!data.rescheduleReference && !data.email) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["email"],
+        message: "Enter a valid email address.",
+      });
+    }
     if (data.rescheduleReference && !data.rescheduleReason?.trim()) {
       context.addIssue({
         code: z.ZodIssueCode.custom,
@@ -471,8 +486,7 @@ async function hashRateLimitSubject(subject: string) {
 type RateLimitResult = "allowed" | "limited" | "unavailable";
 
 async function checkPublicRequestRateLimit(
-  scope:
-    "availability" | "booking" | "lookup" | "cancellation" | "rescheduling" | "reference_recovery",
+  scope: "availability" | "booking" | "lookup" | "cancellation" | "rescheduling",
   maxRequests: number,
   windowSeconds: number,
   subject?: string,
@@ -996,6 +1010,7 @@ export const createBooking = createServerFn({ method: "POST" })
       data = {
         ...data,
         phone: original.phone,
+        email: original.email ?? data.email,
         motoBrand: original.moto_brand,
         motoModel: original.moto_model,
         motoVariant: original.moto_variant ?? "",
@@ -1445,6 +1460,7 @@ export const createBooking = createServerFn({ method: "POST" })
       p_booking_request_id: data.idempotencyKey,
       p_customer_name: customerName,
       p_phone: data.phone,
+      p_email: data.email ?? "",
       p_moto_brand: data.motoBrand,
       p_moto_model: data.motoModel,
       p_moto_variant: data.motoVariant || null,
@@ -1561,113 +1577,24 @@ export const createBooking = createServerFn({ method: "POST" })
     };
   });
 
-const lookupSchema = z.object({
+const appointmentReferenceSchema = z.object({
   reference: z
     .string()
     .trim()
     .regex(REFERENCE_CODE_PATTERN, "Enter a valid reference code in the format FRM-XXXXXX.")
     .transform(normalizeReferenceCode),
+});
+
+const appointmentIdentitySchema = appointmentReferenceSchema.extend({
   phone: phoneSchema,
 });
 
-const referenceRecoverySchema = z.object({
-  lastName: namePartSchema.min(1, "Enter your last name."),
-  firstName: namePartSchema.min(1, "Enter your first name."),
-  phone: phoneSchema,
-});
-
-function normalizedName(value: string | null | undefined) {
-  return value?.trim().replace(/\s+/g, " ").toLocaleLowerCase() ?? "";
-}
-
-function appointmentMatchesRecoveryName(
-  appointment: { first_name: string | null; last_name: string | null; customer_name: string },
-  firstName: string,
-  lastName: string,
-) {
-  const normalizedFirstName = normalizedName(firstName);
-  const normalizedLastName = normalizedName(lastName);
-  const storedFirstName = normalizedName(appointment.first_name);
-  const storedLastName = normalizedName(appointment.last_name);
-  if (storedFirstName && storedLastName) {
-    return storedFirstName === normalizedFirstName && storedLastName === normalizedLastName;
-  }
-
-  // Appointments created before separate name fields existed retain a full
-  // customer name. Accept a matching first/last pair while allowing its middle
-  // name to remain optional in the recovery form.
-  const customerName = normalizedName(appointment.customer_name);
-  return (
-    customerName === `${normalizedFirstName} ${normalizedLastName}` ||
-    (customerName.startsWith(`${normalizedFirstName} `) &&
-      customerName.endsWith(` ${normalizedLastName}`))
-  );
-}
-
-/** Recover only reference codes after a rate-limited ownership verification. */
-export const recoverAppointmentReferences = createServerFn({ method: "POST" })
-  .validator((input: unknown) => referenceRecoverySchema.parse(input))
-  .handler(async ({ data }) => {
-    const rateLimit = await checkPublicRequestRateLimit(
-      "reference_recovery",
-      5,
-      15 * 60,
-      data.phone,
-    );
-    if (rateLimit !== "allowed") {
-      return {
-        ok: false as const,
-        error:
-          rateLimit === "limited"
-            ? "Too many recovery attempts. Please wait a few minutes before trying again."
-            : "Reference recovery is temporarily unavailable. Please try again shortly.",
-      };
-    }
-
-    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const { data: appointments, error } = await supabaseAdmin
-      .from("appointments")
-      .select("reference_code,first_name,last_name,customer_name")
-      .eq("phone", data.phone)
-      .eq("is_archived", false)
-      .order("created_at", { ascending: false })
-      .limit(20);
-    if (error) {
-      console.error("[Reference recovery] lookup failed", {
-        code: error.code,
-        message: error.message,
-      });
-      return {
-        ok: false as const,
-        error: "Reference recovery is temporarily unavailable. Please try again shortly.",
-      };
-    }
-
-    const references = Array.from(
-      new Set(
-        (appointments ?? [])
-          .filter((appointment) =>
-            appointmentMatchesRecoveryName(appointment, data.firstName, data.lastName),
-          )
-          .map((appointment) => appointment.reference_code),
-      ),
-    );
-    if (references.length === 0) {
-      return {
-        ok: false as const,
-        error: "No appointment was found for that name and mobile number.",
-      };
-    }
-
-    return { ok: true as const, references };
-  });
-
-async function findAppointment(reference: string, phone: string) {
+async function findAppointmentByReference(reference: string) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const primaryLookup = await supabaseAdmin
     .from("appointments")
     .select(
-      "id,reference_code,customer_name,first_name,middle_name,last_name,phone,moto_brand,moto_model,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reason,pending_reschedule_reference_code,appointment_services(service_id,service_name,price)",
+      "id,reference_code,customer_name,first_name,middle_name,last_name,phone,email,moto_brand,moto_model,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reason,pending_reschedule_reference_code,appointment_services(service_id,service_name,price)",
     )
     // Legacy records may have been written with lower-case reference codes.
     // Input is validated before this query, so it cannot introduce LIKE wildcards.
@@ -1685,7 +1612,7 @@ async function findAppointment(reference: string, phone: string) {
     ? await supabaseAdmin
         .from("appointments")
         .select(
-          "id,reference_code,customer_name,first_name,middle_name,last_name,phone,moto_brand,moto_model,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reason,appointment_services(service_id,service_name,price)",
+          "id,reference_code,customer_name,first_name,middle_name,last_name,phone,email,moto_brand,moto_model,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reason,appointment_services(service_id,service_name,price)",
         )
         .ilike("reference_code", normalizeReferenceCode(reference))
         .maybeSingle()
@@ -1695,17 +1622,22 @@ async function findAppointment(reference: string, phone: string) {
     : primaryLookup.data;
   if (!appointment) return null;
 
-  // Public input is normalized to local 09XXXXXXXXX by `lookupSchema`.
-  // Normalize the stored value too, so appointments created before the format
-  // change remain available to their owner.
-  const storedPhone = normalizePhilippineMobile(appointment.phone);
-  if (storedPhone !== phone) return null;
+  // Normalize legacy phone records when possible so downstream rescheduling
+  // continues to use the canonical local mobile format.
+  return {
+    ...appointment,
+    phone: normalizePhilippineMobile(appointment.phone) ?? appointment.phone,
+  };
+}
 
-  return { ...appointment, phone: storedPhone };
+async function findAppointment(reference: string, phone: string) {
+  const appointment = await findAppointmentByReference(reference);
+  if (!appointment || normalizePhilippineMobile(appointment.phone) !== phone) return null;
+  return appointment;
 }
 
 export const getRescheduleDetails = createServerFn({ method: "POST" })
-  .validator((input: unknown) => lookupSchema.parse(input))
+  .validator((input: unknown) => appointmentIdentitySchema.parse(input))
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const rateLimit = await checkPublicRequestRateLimit("rescheduling", 5, 15 * 60, data.phone);
@@ -1813,6 +1745,7 @@ export const getRescheduleDetails = createServerFn({ method: "POST" })
         middleName: appt.middle_name ?? "",
         lastName: appt.last_name ?? "",
         phone: appt.phone,
+        email: appt.email ?? "",
         motoBrand: appt.moto_brand,
         motoModel: appt.moto_model,
         motoVariant: appt.moto_variant ?? "",
@@ -1825,9 +1758,14 @@ export const getRescheduleDetails = createServerFn({ method: "POST" })
   });
 
 export const lookupAppointment = createServerFn({ method: "POST" })
-  .validator((input: unknown) => lookupSchema.parse(input))
+  .validator((input: unknown) => appointmentReferenceSchema.parse(input))
   .handler(async ({ data }) => {
-    const lookupRateLimit = await checkPublicRequestRateLimit("lookup", 12, 10 * 60, data.phone);
+    const lookupRateLimit = await checkPublicRequestRateLimit(
+      "lookup",
+      12,
+      10 * 60,
+      data.reference,
+    );
     if (lookupRateLimit !== "allowed") {
       return {
         ok: false as const,
@@ -1839,11 +1777,11 @@ export const lookupAppointment = createServerFn({ method: "POST" })
     }
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const appt = await findAppointment(data.reference, data.phone);
+    const appt = await findAppointmentByReference(data.reference);
     if (!appt)
       return {
         ok: false as const,
-        error: "No appointment found for that reference code and mobile number.",
+        error: "No appointment found for that reference code.",
       };
     const linkedIds = [
       appt.rescheduled_from_appointment_id,
@@ -1904,13 +1842,13 @@ export const lookupAppointment = createServerFn({ method: "POST" })
   });
 
 export const cancelAppointment = createServerFn({ method: "POST" })
-  .validator((input: unknown) => lookupSchema.parse(input))
+  .validator((input: unknown) => appointmentReferenceSchema.parse(input))
   .handler(async ({ data }) => {
     const cancellationRateLimit = await checkPublicRequestRateLimit(
       "cancellation",
       3,
       15 * 60,
-      data.phone,
+      data.reference,
     );
     if (cancellationRateLimit !== "allowed") {
       return {
@@ -1922,11 +1860,11 @@ export const cancelAppointment = createServerFn({ method: "POST" })
       };
     }
 
-    const appt = await findAppointment(data.reference, data.phone);
+    const appt = await findAppointmentByReference(data.reference);
     if (!appt)
       return {
         ok: false as const,
-        error: "No appointment found for that reference code and mobile number.",
+        error: "No appointment found for that reference code.",
       };
     if (appt.rescheduled_to_appointment_id) {
       return {

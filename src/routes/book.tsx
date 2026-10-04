@@ -123,6 +123,7 @@ type Errors = Partial<{
   middleName: string;
   lastName: string;
   phone: string;
+  email: string;
   motoBrand: string;
   motoModel: string;
   plateNumber: string;
@@ -139,6 +140,7 @@ const validationFieldOrder: (keyof Errors)[] = [
   "firstName",
   "middleName",
   "phone",
+  "email",
   "motoBrand",
   "motoModel",
   "plateNumber",
@@ -155,6 +157,7 @@ const validationFocusTargets: Partial<Record<keyof Errors, string>> = {
   middleName: "#booking-middle-name",
   lastName: "#booking-last-name",
   phone: "#booking-phone",
+  email: "#booking-email",
   motoBrand: "#booking-moto-brand",
   motoModel: "#booking-moto-model",
   plateNumber: "#booking-plate-number",
@@ -181,6 +184,7 @@ function BookPage() {
     middleName: "",
     lastName: "",
     phone: "",
+    email: "",
     motoBrand: "",
     motoModel: "",
     motoVariant: "",
@@ -277,6 +281,7 @@ function BookPage() {
       middleName: appointment.middleName,
       lastName: appointment.lastName,
       phone: appointment.phone,
+      email: appointment.email,
       motoBrand: appointment.motoBrand,
       motoModel: appointment.motoModel,
       motoVariant: appointment.motoVariant,
@@ -499,6 +504,7 @@ function BookPage() {
           middleName: form.middleName.trim(),
           lastName: form.lastName.trim(),
           phone: normalizePhilippineMobile(form.phone)!,
+          email: form.email.trim().toLowerCase(),
           motoBrand: form.motoBrand.trim(),
           motoModel: form.motoModel.trim(),
           motoVariant: form.motoVariant.trim(),
@@ -589,6 +595,9 @@ function BookPage() {
       if (form.lastName.trim().length < 2) e.lastName = "Enter your last name.";
       if (form.firstName.trim().length < 2) e.firstName = "Enter your first name.";
       if (!normalizePhilippineMobile(form.phone)) e.phone = PHONE_VALIDATION_MESSAGE;
+      if (!isReschedule && !/^\S+@\S+\.\S+$/.test(form.email.trim())) {
+        e.email = "Enter a valid email address.";
+      }
     }
     if (steps.includes(2)) {
       if (!form.motoBrand.trim()) e.motoBrand = "Required";
@@ -704,7 +713,7 @@ function BookPage() {
               <p className="mt-2 text-muted-foreground">
                 {isReschedule
                   ? "Your original appointment remains reserved while the shop reviews your requested new date and time."
-                  : "Save your reference code. You will need it, together with your mobile number, to view or cancel your booking."}
+                  : "Save your reference code. Your request remains pending until the shop approves it, then we will email your confirmed appointment details."}
               </p>
               <div className="mt-6 rounded-xl border border-dashed border-primary/50 bg-primary/5 p-6">
                 <p className="text-xs tracking-[0.3em] text-muted-foreground uppercase">
@@ -949,6 +958,20 @@ function BookPage() {
                       setForm({ ...form, phone: sanitizePhilippineMobileInput(e.target.value) });
                     }}
                     placeholder="09171234567"
+                  />
+                </Field>
+                <Field label="Email Address" error={errors.email}>
+                  <Input
+                    id="booking-email"
+                    type="email"
+                    value={form.email}
+                    maxLength={254}
+                    autoComplete="email"
+                    disabled={isReschedule}
+                    onChange={(e) => {
+                      setForm({ ...form, email: e.target.value.toLowerCase() });
+                    }}
+                    placeholder="juan@example.com"
                   />
                 </Field>
               </div>
@@ -1305,6 +1328,7 @@ function BookPage() {
                 <div className="grid gap-3 sm:grid-cols-2">
                   <ReviewItem label="Customer" value={customerFullName} />
                   <ReviewItem label="Mobile number" value={form.phone} />
+                  <ReviewItem label="Email address" value={form.email} />
                 </div>
               </div>
               <div className="space-y-3">

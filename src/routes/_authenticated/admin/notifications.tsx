@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { useServerFn } from "@tanstack/react-start";
 import { BellRing, CheckCheck, CheckCircle2, CircleX, Clock3, Play, Trash2 } from "lucide-react";
 import { useState } from "react";
 
@@ -18,6 +19,10 @@ import {
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  reviewPendingAppointmentWithConfirmation,
+  reviewRescheduleRequestWithConfirmation,
+} from "@/lib/appointment-confirmation.functions";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/admin/notifications")({
@@ -37,6 +42,8 @@ function NotificationsPage() {
     appointmentId: string;
     referenceCode: string;
   } | null>(null);
+  const reviewPendingWithConfirmation = useServerFn(reviewPendingAppointmentWithConfirmation);
+  const reviewRescheduleWithConfirmation = useServerFn(reviewRescheduleRequestWithConfirmation);
 
   const list = useQuery({
     queryKey: ["notifications"],
@@ -146,14 +153,14 @@ function NotificationsPage() {
       appointmentId: string;
       decision: "confirmed" | "rejected";
     }) => {
-      const { error } = await supabase.rpc("review_pending_appointment", {
-        p_appointment_id: appointmentId,
-        p_decision: decision,
+      const result = await reviewPendingWithConfirmation({
+        data: { appointmentId, decision },
       });
-      if (error) throw error;
+      if (!result.ok) throw new Error(result.error);
+      return result;
     },
-    onSuccess: (_, { decision }) => {
-      setActionError(null);
+    onSuccess: (result) => {
+      setActionError("emailError" in result ? result.emailError : null);
       refresh();
       queryClient.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
@@ -174,14 +181,14 @@ function NotificationsPage() {
       appointmentId: string;
       decision: "confirmed" | "rejected";
     }) => {
-      const { error } = await supabase.rpc("review_reschedule_request", {
-        p_appointment_id: appointmentId,
-        p_decision: decision,
+      const result = await reviewRescheduleWithConfirmation({
+        data: { appointmentId, decision },
       });
-      if (error) throw error;
+      if (!result.ok) throw new Error(result.error);
+      return result;
     },
-    onSuccess: (_, { decision }) => {
-      setActionError(null);
+    onSuccess: (result) => {
+      setActionError("emailError" in result ? result.emailError : null);
       refresh();
       queryClient.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });

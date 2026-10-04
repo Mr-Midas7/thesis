@@ -65,6 +65,7 @@ import {
   evaluateCrewAvailability,
   isActiveReservationStatus,
 } from "@/lib/availability";
+import { updateAppointmentWithConfirmation } from "@/lib/appointment-confirmation.functions";
 import { getAvailability } from "@/lib/booking.functions";
 import {
   APPOINTMENT_STATUSES,
@@ -253,11 +254,13 @@ function AppointmentsPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const availabilityFn = useServerFn(getAvailability);
+  const updateWithConfirmation = useServerFn(updateAppointmentWithConfirmation);
   const search = Route.useSearch();
   const [status, setStatus] = useState("all");
   const [term, setTerm] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [confirmationEmailWarning, setConfirmationEmailWarning] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<AppointmentEditForm | null>(null);
   const [editErrors, setEditErrors] = useState<AppointmentEditErrors>({});
   const [pendingSaveForm, setPendingSaveForm] = useState<AppointmentEditForm | null>(null);
@@ -505,26 +508,30 @@ function AppointmentsPage() {
 
   const saveAppointment = useMutation({
     mutationFn: async ({ id, form }: { id: string; form: AppointmentEditForm }) => {
-      const { error } = await supabase.rpc("update_appointment_details_atomic", {
-        p_appointment_id: id,
-        p_service_ids: form.serviceIds,
-        p_appointment_date: form.appointmentDate,
-        p_start_time: form.startTime,
-        p_assigned_crew_id: form.assignedCrewId === "none" ? null : form.assignedCrewId,
-        p_crew_assignment_manual: form.crewAssignmentManual,
-        p_status: form.status,
-        p_admin_notes: form.adminNotes.trim() || null,
-        p_first_name: form.firstName.trim(),
-        p_middle_name: form.middleName.trim(),
-        p_last_name: form.lastName.trim(),
-        p_phone: normalizePhilippineMobile(form.phone)!,
+      const result = await updateWithConfirmation({
+        data: {
+          appointmentId: id,
+          serviceIds: form.serviceIds,
+          appointmentDate: form.appointmentDate,
+          startTime: form.startTime,
+          assignedCrewId: form.assignedCrewId === "none" ? null : form.assignedCrewId,
+          crewAssignmentManual: form.crewAssignmentManual,
+          status: form.status,
+          adminNotes: form.adminNotes.trim() || null,
+          firstName: form.firstName.trim(),
+          middleName: form.middleName.trim(),
+          lastName: form.lastName.trim(),
+          phone: normalizePhilippineMobile(form.phone)!,
+        },
       });
-      if (error) throw error;
+      if (!result.ok) throw new Error(result.error);
+      return result;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
       setIsEditing(false);
       setEditErrors({});
       setPendingSaveForm(null);
+      setConfirmationEmailWarning("emailError" in result ? result.emailError : null);
       qc.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
       qc.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
       qc.invalidateQueries({ queryKey: ["archived-appointments"], exact: false });
@@ -631,6 +638,7 @@ function AppointmentsPage() {
   }
 
   function startEditing(appointment: AppointmentDetails) {
+    setConfirmationEmailWarning(null);
     setEditForm({
       firstName: appointment.first_name ?? "",
       middleName: appointment.middle_name ?? "",
@@ -835,6 +843,11 @@ function AppointmentsPage() {
       {archiveError && (
         <p role="alert" className="mt-4 text-sm text-destructive">
           {archiveError}
+        </p>
+      )}
+      {confirmationEmailWarning && (
+        <p role="alert" className="mt-4 text-sm text-destructive">
+          {confirmationEmailWarning}
         </p>
       )}
 

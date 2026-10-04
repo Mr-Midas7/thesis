@@ -45,8 +45,11 @@ import {
   getAvailability,
   lookupAppointment,
   cancelAppointment,
-  recoverAppointmentReferences,
 } from "@/lib/booking.functions";
+import {
+  requestReferenceRecoveryCode,
+  verifyReferenceRecoveryCode,
+} from "@/lib/appointment-reference-recovery.functions";
 import {
   type Availability,
   computeAvailableDates,
@@ -55,16 +58,12 @@ import {
 } from "@/lib/availability";
 import {
   DEFAULT_BOOKING_TERMS,
-  PHONE_VALIDATION_MESSAGE,
   formatDateLong,
   formatPHP,
   formatTime,
-  formatNamePartInput,
-  NAME_PART_PATTERN,
   isReferenceCode,
   normalizePhilippineMobile,
   normalizeReferenceCode,
-  sanitizePhilippineMobileInput,
   statusLabel,
   statusTone,
 } from "@/lib/shop";
@@ -77,7 +76,7 @@ export const Route = createFileRoute("/my-appointment")({
       {
         name: "description",
         content:
-          "Enter your reference code and mobile number to view your motorcycle service appointment or cancel it online.",
+          "Enter your reference code to view your motorcycle service appointment or cancel it online.",
       },
       { property: "og:title", content: "Track your appointment | Fake Rider Motorparts" },
       {
@@ -89,29 +88,24 @@ export const Route = createFileRoute("/my-appointment")({
   component: MyAppointment,
 });
 
-type Appt =
-  Awaited<ReturnType<typeof lookupAppointment>> extends { appointment: infer A } ? A : never;
-
 const turnstileEnabled = Boolean(import.meta.env["VITE_TURNSTILE_SITE_KEY"]);
 
 function MyAppointment() {
   const lookup = useServerFn(lookupAppointment);
   const cancel = useServerFn(cancelAppointment);
-  const recoverReferences = useServerFn(recoverAppointmentReferences);
+  const requestRecoveryCode = useServerFn(requestReferenceRecoveryCode);
+  const verifyRecoveryCode = useServerFn(verifyReferenceRecoveryCode);
   const createRescheduleRequest = useServerFn(createBooking);
   const availabilityFn = useServerFn(getAvailability);
   const [reference, setReference] = useState("");
-  const [phone, setPhone] = useState("");
-  const [errors, setErrors] = useState<{ reference?: string; phone?: string }>({});
+  const [errors, setErrors] = useState<{ reference?: string }>({});
   const [referenceRecoveryOpen, setReferenceRecoveryOpen] = useState(false);
-  const [recoveryForm, setRecoveryForm] = useState({ lastName: "", firstName: "", phone: "" });
-  const [recoveryErrors, setRecoveryErrors] = useState<{
-    lastName?: string;
-    firstName?: string;
-    phone?: string;
-  }>({});
+  const [recoveryStep, setRecoveryStep] = useState<"email" | "code">("email");
+  const [recoveryEmail, setRecoveryEmail] = useState("");
+  const [recoveryCode, setRecoveryCode] = useState("");
+  const [recoveryErrors, setRecoveryErrors] = useState<{ email?: string; code?: string }>({});
   const [recoveryError, setRecoveryError] = useState<string | null>(null);
-  const [recoveredReferences, setRecoveredReferences] = useState<string[]>([]);
+  const [recoveryMessage, setRecoveryMessage] = useState<string | null>(null);
   const [appointmentPreviewError, setAppointmentPreviewError] = useState<string | null>(null);
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [newDate, setNewDate] = useState("");
@@ -140,14 +134,6 @@ function MyAppointment() {
   const [appt, setAppt] = useState<
     null | Extract<Awaited<ReturnType<typeof lookupAppointment>>, { ok: true }>["appointment"]
   >(null);
-
-  function clearRecoveryError(field: keyof typeof recoveryErrors) {
-    setRecoveryErrors((current) => {
-      const next = { ...current };
-      delete next[field];
-      return next;
-    });
-  }
 
   useEffect(() => {
     setSupportsSlideTransition(
@@ -212,11 +198,10 @@ function MyAppointment() {
   );
 
   const search = useMutation({
-    mutationFn: () =>
+    mutationFn: (referenceCode: string) =>
       lookup({
         data: {
-          reference: normalizeReferenceCode(reference),
-          phone: normalizePhilippineMobile(phone)!,
+          reference: normalizeReferenceCode(referenceCode),
         },
       }),
     onSuccess: (res) => {
@@ -236,40 +221,56 @@ function MyAppointment() {
     },
   });
 
-  const referenceRecovery = useMutation({
-    mutationFn: () =>
-      recoverReferences({
-        data: { ...recoveryForm, phone: normalizePhilippineMobile(recoveryForm.phone)! },
-      }),
+  const requestRecoveryCodeMutation = useMutation({
+    mutationFn: () => requestRecoveryCode({ data: { email: recoveryEmail.trim() } }),
     onSuccess: (result) => {
       if (!result.ok) {
-        setRecoveredReferences([]);
         setRecoveryError(result.error);
         return;
       }
       setRecoveryError(null);
-      setRecoveredReferences(result.references);
+      setRecoveryErrors({});
+      setRecoveryCode("");
+      setRecoveryMessage(result.message);
+      setRecoveryStep("code");
     },
     onError: () => {
-      setRecoveredReferences([]);
+      setRecoveryError("Reference recovery is temporarily unavailable. Please try again shortly.");
+    },
+  });
+
+  const verifyRecoveryCodeMutation = useMutation({
+    mutationFn: () =>
+      verifyRecoveryCode({ data: { email: recoveryEmail.trim(), code: recoveryCode.trim() } }),
+    onSuccess: (result) => {
+      if (!result.ok) {
+        setRecoveryError(result.error);
+        return;
+      }
+      setRecoveryError(null);
+      setRecoveryErrors({});
+      setRecoveryCode("");
+      setRecoveryMessage(result.message);
+      setRecoveryStep("email");
+    },
+    onError: () => {
       setRecoveryError("Reference recovery is temporarily unavailable. Please try again shortly.");
     },
   });
 
   const cancelMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (referenceCode: string) =>
       cancel({
         data: {
-          reference: normalizeReferenceCode(reference),
-          phone: normalizePhilippineMobile(phone)!,
+          reference: normalizeReferenceCode(referenceCode),
         },
       }),
-    onSuccess: (res) => {
+    onSuccess: (res, referenceCode) => {
       if (!res.ok) {
         setAppointmentPreviewError(res.error);
         return;
       }
-      search.mutate();
+      search.mutate(referenceCode);
     },
     onError: () =>
       setAppointmentPreviewError(
@@ -321,7 +322,7 @@ function MyAppointment() {
       });
       setIsRescheduling(false);
       setRescheduleReviewOpen(false);
-      search.mutate();
+      if (appt) search.mutate(appt.reference);
     },
     onError: () => {
       setRescheduleErrors((current) => ({
@@ -395,51 +396,48 @@ function MyAppointment() {
     setRescheduleErrors({});
     setAppointmentPreviewError(null);
     setReference("");
-    setPhone("");
     setErrors({});
   }
 
   function validate() {
-    const nextErrors: { reference?: string; phone?: string } = {};
+    const nextErrors: { reference?: string } = {};
     if (!isReferenceCode(reference)) {
       nextErrors.reference = "Enter a valid reference code.";
     }
-    if (!normalizePhilippineMobile(phone)) nextErrors.phone = PHONE_VALIDATION_MESSAGE;
     setErrors(nextErrors);
     setAppointmentPreviewError(null);
     return Object.keys(nextErrors).length === 0;
   }
 
   function resetReferenceRecovery() {
-    setRecoveryForm({ lastName: "", firstName: "", phone: "" });
+    setRecoveryStep("email");
+    setRecoveryEmail("");
+    setRecoveryCode("");
     setRecoveryErrors({});
     setRecoveryError(null);
-    setRecoveredReferences([]);
+    setRecoveryMessage(null);
   }
 
-  function validateReferenceRecovery() {
+  function validateRecoveryEmail() {
     const nextErrors: typeof recoveryErrors = {};
-    const validName = (value: string) => NAME_PART_PATTERN.test(value.trim());
-    if (!validName(recoveryForm.lastName)) {
-      nextErrors.lastName = "Enter the last name used for the booking.";
+    if (!/^\S+@\S+\.\S+$/.test(recoveryEmail.trim())) {
+      nextErrors.email = "Enter a valid email address.";
     }
-    if (!validName(recoveryForm.firstName)) {
-      nextErrors.firstName = "Enter the first name used for the booking.";
-    }
-    if (!normalizePhilippineMobile(recoveryForm.phone)) nextErrors.phone = PHONE_VALIDATION_MESSAGE;
     setRecoveryErrors(nextErrors);
     setRecoveryError(null);
-    setRecoveredReferences([]);
+    setRecoveryMessage(null);
     return Object.keys(nextErrors).length === 0;
   }
 
-  function selectRecoveredReference(recoveredReference: string) {
-    setReference(recoveredReference);
-    setPhone(sanitizePhilippineMobileInput(recoveryForm.phone));
-    setErrors({});
-    setAppointmentPreviewError(null);
-    setReferenceRecoveryOpen(false);
-    resetReferenceRecovery();
+  function validateRecoveryCode() {
+    const nextErrors: typeof recoveryErrors = {};
+    if (!/^\d{6}$/.test(recoveryCode.trim())) {
+      nextErrors.code = "Enter the 6-digit verification code.";
+    }
+    setRecoveryErrors(nextErrors);
+    setRecoveryError(null);
+    setRecoveryMessage(null);
+    return Object.keys(nextErrors).length === 0;
   }
 
   return (
@@ -449,17 +447,16 @@ function MyAppointment() {
         <p className="text-xs tracking-[0.3em] text-accent uppercase">Appointment tracker</p>
         <h1 className="font-display text-4xl font-bold uppercase md:text-5xl">My appointment</h1>
         <p className="mt-2 text-muted-foreground">
-          Enter the reference code you received when booking, together with the mobile number you
-          used.
+          Enter the reference code you received when booking.
         </p>
 
         <form
-          className="mt-8 grid gap-4 rounded-xl border border-border/70 bg-card/50 p-6 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-start"
+          className="mt-8 grid gap-4 rounded-xl border border-border/70 bg-card/50 p-6 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start"
           onSubmit={(e) => {
             e.preventDefault();
             if (validate()) {
               setRescheduleConfirmation(null);
-              search.mutate();
+              search.mutate(reference);
             }
           }}
         >
@@ -490,17 +487,7 @@ function MyAppointment() {
                 }}
               >
                 <DialogTrigger asChild>
-                  <Button
-                    type="button"
-                    variant="link"
-                    className="h-auto px-0 text-xs"
-                    onClick={() =>
-                      setRecoveryForm((current) => ({
-                        ...current,
-                        phone: current.phone || phone,
-                      }))
-                    }
-                  >
+                  <Button type="button" variant="link" className="h-auto px-0 text-xs">
                     <CircleHelp className="size-3" aria-hidden="true" /> Forgot Reference Code?
                   </Button>
                 </DialogTrigger>
@@ -508,75 +495,74 @@ function MyAppointment() {
                   <DialogHeader>
                     <DialogTitle>Recover your reference code</DialogTitle>
                     <DialogDescription>
-                      Enter the last name, first name, and mobile number used for your booking.
+                      {recoveryStep === "email"
+                        ? "Enter the email address used for your booking. We will send a verification code before emailing your reference code."
+                        : "Enter the verification code we sent to your booking email address."}
                     </DialogDescription>
                   </DialogHeader>
                   <form
                     className="space-y-4"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      if (validateReferenceRecovery()) referenceRecovery.mutate();
+                      if (recoveryStep === "email") {
+                        if (validateRecoveryEmail()) requestRecoveryCodeMutation.mutate();
+                        return;
+                      }
+                      if (validateRecoveryCode()) verifyRecoveryCodeMutation.mutate();
                     }}
                   >
-                    <div className="grid gap-4 sm:grid-cols-2">
+                    {recoveryStep === "email" ? (
                       <div className="space-y-1.5">
-                        <Label htmlFor="recovery-last-name">Last name</Label>
+                        <Label htmlFor="recovery-email">Email address</Label>
                         <Input
-                          id="recovery-last-name"
-                          value={recoveryForm.lastName}
-                          maxLength={40}
-                          autoComplete="family-name"
+                          id="recovery-email"
+                          type="email"
+                          value={recoveryEmail}
+                          maxLength={254}
+                          autoComplete="email"
                           onChange={(event) => {
-                            setRecoveryForm((current) => ({
-                              ...current,
-                              lastName: formatNamePartInput(event.target.value),
-                            }));
-                            clearRecoveryError("lastName");
+                            setRecoveryEmail(event.target.value);
+                            setRecoveryErrors(({ email: _, ...current }) => current);
+                            setRecoveryError(null);
                           }}
-                          aria-invalid={Boolean(recoveryErrors.lastName)}
+                          placeholder="you@example.com"
+                          aria-invalid={Boolean(recoveryErrors.email)}
                         />
-                        <FieldError message={recoveryErrors.lastName} />
+                        <FieldError message={recoveryErrors.email} />
                       </div>
+                    ) : (
                       <div className="space-y-1.5">
-                        <Label htmlFor="recovery-first-name">First name</Label>
+                        <Label htmlFor="recovery-code">Verification code</Label>
                         <Input
-                          id="recovery-first-name"
-                          value={recoveryForm.firstName}
-                          maxLength={40}
-                          autoComplete="given-name"
+                          id="recovery-code"
+                          type="text"
+                          value={recoveryCode}
+                          maxLength={6}
+                          inputMode="numeric"
+                          autoComplete="one-time-code"
                           onChange={(event) => {
-                            setRecoveryForm((current) => ({
-                              ...current,
-                              firstName: formatNamePartInput(event.target.value),
-                            }));
-                            clearRecoveryError("firstName");
+                            setRecoveryCode(event.target.value.replace(/\D/g, ""));
+                            setRecoveryErrors(({ code: _, ...current }) => current);
+                            setRecoveryError(null);
                           }}
-                          aria-invalid={Boolean(recoveryErrors.firstName)}
+                          placeholder="123456"
+                          aria-invalid={Boolean(recoveryErrors.code)}
                         />
-                        <FieldError message={recoveryErrors.firstName} />
+                        <FieldError message={recoveryErrors.code} />
+                        <Button
+                          type="button"
+                          variant="link"
+                          className="h-auto px-0 text-xs"
+                          disabled={requestRecoveryCodeMutation.isPending}
+                          onClick={() => requestRecoveryCodeMutation.mutate()}
+                        >
+                          {requestRecoveryCodeMutation.isPending && (
+                            <Loader2 className="animate-spin" />
+                          )}
+                          Send a new code
+                        </Button>
                       </div>
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label htmlFor="recovery-phone">Mobile number</Label>
-                      <Input
-                        id="recovery-phone"
-                        type="tel"
-                        value={recoveryForm.phone}
-                        maxLength={11}
-                        inputMode="numeric"
-                        autoComplete="tel"
-                        onChange={(event) => {
-                          setRecoveryForm((current) => ({
-                            ...current,
-                            phone: sanitizePhilippineMobileInput(event.target.value),
-                          }));
-                          clearRecoveryError("phone");
-                        }}
-                        placeholder="09171234567"
-                        aria-invalid={Boolean(recoveryErrors.phone)}
-                      />
-                      <FieldError message={recoveryErrors.phone} />
-                    </div>
+                    )}
                     {recoveryError && (
                       <Alert
                         variant="destructive"
@@ -586,34 +572,12 @@ function MyAppointment() {
                         <AlertDescription>{recoveryError}</AlertDescription>
                       </Alert>
                     )}
-                    {recoveredReferences.length > 0 && (
+                    {recoveryMessage && (
                       <div
                         role="status"
                         className="rounded-lg border border-primary/30 bg-primary/5 p-4"
                       >
-                        <p className="text-sm font-medium">
-                          Reference code{recoveredReferences.length > 1 ? "s" : ""} found
-                        </p>
-                        <div className="mt-3 space-y-2">
-                          {recoveredReferences.map((recoveredReference) => (
-                            <div
-                              key={recoveredReference}
-                              className="flex items-center justify-between gap-3 rounded-md border border-border/70 bg-card/60 px-3 py-2"
-                            >
-                              <span className="font-display tracking-widest text-primary">
-                                {recoveredReference}
-                              </span>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                onClick={() => selectRecoveredReference(recoveredReference)}
-                              >
-                                Use code
-                              </Button>
-                            </div>
-                          ))}
-                        </div>
+                        <p className="text-sm font-medium">{recoveryMessage}</p>
                       </div>
                     )}
                     <DialogFooter>
@@ -622,37 +586,40 @@ function MyAppointment() {
                           Close
                         </Button>
                       </DialogClose>
-                      <Button type="submit" disabled={referenceRecovery.isPending}>
-                        {referenceRecovery.isPending && <Loader2 className="animate-spin" />}{" "}
-                        Recover code
+                      {recoveryStep === "code" && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          onClick={() => {
+                            setRecoveryStep("email");
+                            setRecoveryCode("");
+                            setRecoveryErrors({});
+                            setRecoveryError(null);
+                            setRecoveryMessage(null);
+                          }}
+                        >
+                          Change email
+                        </Button>
+                      )}
+                      <Button
+                        type="submit"
+                        disabled={
+                          requestRecoveryCodeMutation.isPending ||
+                          verifyRecoveryCodeMutation.isPending
+                        }
+                      >
+                        {(requestRecoveryCodeMutation.isPending ||
+                          verifyRecoveryCodeMutation.isPending) && (
+                          <Loader2 className="animate-spin" />
+                        )}
+                        {recoveryStep === "email"
+                          ? "Send verification code"
+                          : "Email my reference code"}
                       </Button>
                     </DialogFooter>
                   </form>
                 </DialogContent>
               </Dialog>
-            </div>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Mobile number</Label>
-            <Input
-              type="tel"
-              value={phone}
-              maxLength={11}
-              inputMode="numeric"
-              autoComplete="tel"
-              onChange={(e) => {
-                setPhone(sanitizePhilippineMobileInput(e.target.value));
-                setAppointmentPreviewError(null);
-                setErrors((current) => {
-                  const { phone: _, ...rest } = current;
-                  return rest;
-                });
-              }}
-              placeholder="09171234567"
-              aria-invalid={!!errors.phone}
-            />
-            <div className="pt-0.5 sm:min-h-7">
-              <FieldError message={errors.phone} />
             </div>
           </div>
           <div className="sm:pt-[1.625rem]">
@@ -1143,7 +1110,9 @@ function MyAppointment() {
                                 </AlertDialogHeader>
                                 <AlertDialogFooter>
                                   <AlertDialogCancel>Keep it</AlertDialogCancel>
-                                  <AlertDialogAction onClick={() => cancelMutation.mutate()}>
+                                  <AlertDialogAction
+                                    onClick={() => cancelMutation.mutate(appt.reference)}
+                                  >
                                     Yes, cancel
                                   </AlertDialogAction>
                                 </AlertDialogFooter>
