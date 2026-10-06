@@ -64,6 +64,11 @@ FROM final_continuations
 WHERE continuation.id = final_continuations.id
   AND final_continuations.booking_duration_minutes > 30;
 
+-- The normalization updates can queue deferred appointment triggers. Flush
+-- them before changing trigger state; PostgreSQL otherwise rejects ALTER TABLE
+-- with pending trigger events in this migration transaction.
+SET CONSTRAINTS ALL IMMEDIATE;
+
 ALTER TABLE public.appointment_continuations
   ENABLE TRIGGER appointment_continuations_enforce_active_capacity;
 ALTER TABLE public.appointments ENABLE TRIGGER appointments_enforce_active_capacity;

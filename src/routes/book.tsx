@@ -415,7 +415,7 @@ function BookPage() {
       name: service.name,
       price: Number(service.price),
       durationMinutes: service.duration_minutes ?? 60,
-      pricingSource: "default" as const,
+      pricingSource: "small_bike" as const,
     }));
   const estimatedServices = serviceIds
     .map((serviceId) => serviceEstimates.find((service) => service.id === serviceId))
@@ -629,6 +629,12 @@ function BookPage() {
     }
     if (steps.includes(4) && !date) e.date = "Select your preferred date.";
     if (steps.includes(4) && date && !startTime) e.startTime = "Select your preferred time.";
+    if (steps.includes(4) && availability.isLoading) {
+      e.schedule = "Availability is still loading. Please wait a moment.";
+    }
+    if (steps.includes(4) && (availability.isError || availabilityError)) {
+      e.schedule = availabilityError ?? "We could not verify availability. Please try again.";
+    }
     if (steps.includes(4) && isReschedule && !rescheduleReason.trim()) {
       e.rescheduleReason = "Tell us why you need to reschedule.";
     }
@@ -1549,9 +1555,9 @@ function ReviewItem({ label, value }: { label: string; value: string }) {
   );
 }
 
-function servicePricingLabel(source: "default" | "model_override") {
-  if (source === "model_override") return "model override";
-  return "standard service rate";
+function servicePricingLabel(source: "small_bike" | "large_bike") {
+  if (source === "large_bike") return "Large Bike rate";
+  return "Small Bike rate";
 }
 
 function Section({

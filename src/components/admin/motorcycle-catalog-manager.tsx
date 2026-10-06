@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, Pencil, RotateCcw } from "lucide-react";
+import { Archive, Eye, Pencil, RotateCcw } from "lucide-react";
 import { forwardRef, useImperativeHandle, useMemo, useState } from "react";
 
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
@@ -46,7 +46,9 @@ import { supabase } from "@/integrations/supabase/client";
 type MotorcycleCatalogItem = {
   id: string;
   brand: string | null;
+  cc_category: string | null;
   model: string;
+  engine_cc: number | null;
   is_active: boolean;
   is_archived: boolean;
   created_at: string;
@@ -55,6 +57,7 @@ type MotorcycleCatalogItem = {
 const blank = {
   brand: "",
   model: "",
+  engineCc: "",
   is_active: true,
 };
 
@@ -68,9 +71,12 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
   function MotorcycleCatalogManager(_, ref) {
     const queryClient = useQueryClient();
     const [editing, setEditing] = useState<MotorcycleCatalogItem | null>(null);
+    const [viewing, setViewing] = useState<MotorcycleCatalogItem | null>(null);
     const [open, setOpen] = useState(false);
     const [form, setForm] = useState({ ...blank });
-    const [formErrors, setFormErrors] = useState<Partial<Record<"brand" | "model", string>>>({});
+    const [formErrors, setFormErrors] = useState<
+      Partial<Record<"brand" | "model" | "engineCc", string>>
+    >({});
     const [filterBrand, setFilterBrand] = useState(ALL_BRANDS);
     const [modelSearch, setModelSearch] = useState("");
     const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
@@ -106,21 +112,26 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
       [modelSearch],
     );
 
-    const filteredItems = useMemo(
-      () =>
-        (catalog.data ?? []).filter(
-          (item) =>
-            (filterBrand === ALL_BRANDS || item.brand === filterBrand) &&
-            modelSearchTerms.every((term) => item.model.toLocaleLowerCase().includes(term)),
-        ),
-      [catalog.data, filterBrand, modelSearchTerms],
-    );
+    const filteredItems = useMemo(() => {
+      const filtered = (catalog.data ?? []).filter(
+        (item) =>
+          (filterBrand === ALL_BRANDS || item.brand === filterBrand) &&
+          modelSearchTerms.every((term) => item.model.toLocaleLowerCase().includes(term)),
+      );
+      return filtered.sort(
+        (left, right) =>
+          (left.brand ?? "").localeCompare(right.brand ?? "", undefined, {
+            sensitivity: "base",
+          }) || left.model.localeCompare(right.model, undefined, { sensitivity: "base" }),
+      );
+    }, [catalog.data, filterBrand, modelSearchTerms]);
 
     const save = useMutation({
       mutationFn: async (): Promise<MotorcycleCatalogItem> => {
         const payload = {
           brand: form.brand.trim(),
           model: form.model.trim(),
+          engine_cc: form.engineCc.trim() ? Number(form.engineCc) : null,
           is_active: form.is_active,
         };
         const result = editing
@@ -190,6 +201,7 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
       setForm({
         brand: item.brand ?? "",
         model: item.model,
+        engineCc: item.engine_cc === null ? "" : String(item.engine_cc),
         is_active: item.is_active,
       });
       setFormErrors({});
@@ -200,9 +212,20 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
       const errors: typeof formErrors = {};
       const brand = form.brand.trim();
       const model = form.model.trim();
+      const hasEngineCc = Boolean(form.engineCc.trim());
+      const engineCc = Number(form.engineCc);
 
       if (!brand) errors.brand = "Enter the motorcycle brand.";
       if (model.length < 2) errors.model = "Enter a model name with at least 2 characters.";
+      if (hasEngineCc && (!Number.isFinite(engineCc) || engineCc <= 0 || engineCc > 99999.9)) {
+        errors.engineCc = "Enter a valid engine displacement in CC.";
+      }
+      if (!hasEngineCc && !editing) {
+        errors.engineCc = "Enter the motorcycle engine displacement in CC.";
+      }
+      if (!hasEngineCc && form.is_active) {
+        errors.engineCc = "A motorcycle without a combustion CC must remain inactive.";
+      }
       if (
         brand &&
         model &&
@@ -331,6 +354,38 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
                 <FieldError message={formErrors.model} />
               </div>
               <div className="space-y-1.5">
+                <Label htmlFor="motorcycle-engine-cc">Engine displacement (CC)</Label>
+                <Input
+                  id="motorcycle-engine-cc"
+                  type="number"
+                  min="0.1"
+                  max="99999.9"
+                  step="0.1"
+                  inputMode="decimal"
+                  value={form.engineCc}
+                  onChange={(event) => {
+                    setForm({ ...form, engineCc: event.target.value });
+                    clearFormError("engineCc");
+                  }}
+                  placeholder="e.g. 125"
+                  aria-invalid={Boolean(formErrors.engineCc)}
+                />
+                <p className="text-xs text-muted-foreground">
+                  125CC and below are Small Bike; 126CC and above are Large Bike.
+                </p>
+                {form.engineCc.trim() && (
+                  <p className="text-xs text-muted-foreground">
+                    Category: {ccCategoryLabelFromEngineCc(Number(form.engineCc))}
+                  </p>
+                )}
+                {!form.engineCc.trim() && editing && (
+                  <p className="text-xs text-muted-foreground">
+                    This record has no combustion CC and must stay inactive.
+                  </p>
+                )}
+                <FieldError message={formErrors.engineCc} />
+              </div>
+              <div className="space-y-1.5">
                 <Label>Status</Label>
                 <label className="flex items-center gap-2 text-sm">
                   <Switch
@@ -365,16 +420,36 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
           </DialogContent>
         </Dialog>
 
+        <Dialog open={Boolean(viewing)} onOpenChange={(nextOpen) => !nextOpen && setViewing(null)}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle className="font-display uppercase">Motorcycle details</DialogTitle>
+            </DialogHeader>
+            {viewing && (
+              <dl className="grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 text-sm">
+                <dt className="text-muted-foreground">Brand</dt>
+                <dd>{viewing.brand ?? "-"}</dd>
+                <dt className="text-muted-foreground">Model</dt>
+                <dd>{modelLabel(viewing.brand, viewing.model)}</dd>
+                <dt className="text-muted-foreground">Engine displacement</dt>
+                <dd>{viewing.engine_cc === null ? "Not applicable" : `${viewing.engine_cc}cc`}</dd>
+                <dt className="text-muted-foreground">Category</dt>
+                <dd>{ccCategoryLabel(viewing.cc_category)}</dd>
+                <dt className="text-muted-foreground">Status</dt>
+                <dd>{viewing.is_active ? "Active" : "Inactive"}</dd>
+              </dl>
+            )}
+            <DialogFooter>
+              <Button type="button" onClick={() => setViewing(null)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         <Card className="max-w-7xl border-border/70 bg-card/60">
           <CardContent className="overflow-x-auto p-0">
             <Table className="admin-data-table admin-balanced-table">
-              <colgroup>
-                <col style={{ width: "20%" }} />
-                <col style={{ width: "20%" }} />
-                <col style={{ width: "20%" }} />
-                <col style={{ width: "20%" }} />
-                <col style={{ width: "20%" }} />
-              </colgroup>
               <TableHeader>
                 <TableRow>
                   <TableHead>Date Created</TableHead>
@@ -414,6 +489,14 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
                       data-label="Actions"
                       className="space-x-1 whitespace-nowrap text-center"
                     >
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        aria-label={`View ${item.brand ?? ""} ${item.model}`.trim()}
+                        onClick={() => setViewing(item)}
+                      >
+                        <Eye className="size-4" />
+                      </Button>
                       <Button
                         size="sm"
                         variant="ghost"
@@ -495,4 +578,15 @@ function formatCreatedOn(createdAt: string) {
 function modelLabel(brand: string | null, model: string) {
   const prefix = brand ? `${brand} ` : "";
   return model.startsWith(prefix) ? model.slice(prefix.length) : model;
+}
+
+function ccCategoryLabel(category: string | null) {
+  if (category === "small_bike") return "Small Bike";
+  if (category === "big_bike") return "Large Bike";
+  return "Needs CC";
+}
+
+function ccCategoryLabelFromEngineCc(engineCc: number) {
+  if (!Number.isFinite(engineCc) || engineCc <= 0) return "Needs CC";
+  return engineCc <= 125 ? "Small Bike" : "Large Bike";
 }

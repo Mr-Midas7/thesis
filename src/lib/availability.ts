@@ -234,7 +234,7 @@ export type Availability = {
     name: string;
     price: number;
     durationMinutes: number;
-    pricingSource: "default" | "model_override";
+    pricingSource: "small_bike" | "large_bike";
   }>;
 };
 

@@ -108,47 +108,52 @@ type ResolvedService = {
   name: string;
   price: number;
   durationMinutes: number;
-  pricingSource: "default" | "model_override";
+  pricingSource: "small_bike" | "large_bike";
 };
 
+type MotorcycleCcCategory = "small_bike" | "big_bike";
+
 function resolveServicePricing(
-  services: Array<{ id: string; name: string; price: number; duration_minutes: number | null }>,
-  overrides: Array<{
-    service_id: string;
-    brand: string;
-    model: string;
-    duration_minutes: number;
+  services: Array<{
+    id: string;
+    name: string;
     price: number;
+    duration_minutes: number | null;
+    large_bike_price: number | null;
+    large_bike_duration_minutes: number | null;
   }>,
-  motorcycle?: { brand: string; model: string },
-): ResolvedService[] {
-  return services.map((service) => {
-    const override = motorcycle
-      ? overrides.find(
-          (item) =>
-            item.service_id === service.id &&
-            item.brand.trim().toLocaleLowerCase() === motorcycle.brand.trim().toLocaleLowerCase() &&
-            item.model.trim().toLocaleLowerCase() === motorcycle.model.trim().toLocaleLowerCase(),
-        )
-      : undefined;
-    if (override) {
+  motorcycleCategory?: MotorcycleCcCategory,
+): { services: ResolvedService[] } | { error: string } {
+  if (motorcycleCategory === "big_bike") {
+    const missingConfiguration = services.find(
+      (service) =>
+        service.large_bike_price === null || service.large_bike_duration_minutes === null,
+    );
+    if (missingConfiguration) {
       return {
-        id: service.id,
-        name: service.name,
-        price: Number(override.price),
-        durationMinutes: override.duration_minutes,
-        pricingSource: "model_override",
+        error: `${missingConfiguration.name} does not have a Large Bike price and duration configured yet.`,
       };
     }
-
     return {
+      services: services.map((service) => ({
+        id: service.id,
+        name: service.name,
+        price: Number(service.large_bike_price),
+        durationMinutes: service.large_bike_duration_minutes ?? 60,
+        pricingSource: "large_bike",
+      })),
+    };
+  }
+
+  return {
+    services: services.map((service) => ({
       id: service.id,
       name: service.name,
       price: Number(service.price),
       durationMinutes: service.duration_minutes ?? 60,
-      pricingSource: "default",
-    };
-  });
+      pricingSource: "small_bike",
+    })),
+  };
 }
 
 const availabilitySchema = z
@@ -163,6 +168,9 @@ const availabilitySchema = z
     // available while still applying the exact same booking rules to every
     // other appointment.
     excludeAppointmentId: z.string().uuid().optional(),
+    // Admin edits may refer to a motorcycle that has since been deactivated.
+    // Its catalog classification still determines the saved service snapshot.
+    allowInactiveMotorcycle: z.boolean().default(false),
     allowMultiDayContinuation: z.boolean().default(false),
     rescheduling: z.boolean().default(false),
     motorcycle: motorcycleSelectionSchema.optional(),
@@ -609,7 +617,6 @@ export const getAvailability = createServerFn({ method: "GET" })
       blocksRes,
       apptsRes,
       servicesRes,
-      overridesRes,
       schedulesRes,
       activeCrewRes,
       exceptionsRes,
@@ -630,7 +637,7 @@ export const getAvailability = createServerFn({ method: "GET" })
       data.serviceIds.length > 0
         ? supabaseAdmin
             .from("services")
-            .select("id,name,price,duration_minutes")
+            .select("id,name,price,duration_minutes,large_bike_price,large_bike_duration_minutes")
             .in("id", data.serviceIds)
             .eq("is_active", true)
             .eq("is_archived", false)
@@ -640,15 +647,11 @@ export const getAvailability = createServerFn({ method: "GET" })
               name: string;
               price: number;
               duration_minutes: number | null;
+              large_bike_price: number | null;
+              large_bike_duration_minutes: number | null;
             }[],
             error: null,
           },
-      data.serviceIds.length > 0
-        ? supabaseAdmin
-            .from("service_model_overrides")
-            .select("service_id,brand,model,duration_minutes,price")
-            .in("service_id", data.serviceIds)
-        : { data: [], error: null },
       supabaseAdmin
         .from("crew_schedules")
         .select("*")
@@ -672,7 +675,6 @@ export const getAvailability = createServerFn({ method: "GET" })
       blocksRes.error ||
       apptsRes.error ||
       servicesRes.error ||
-      overridesRes.error ||
       schedulesRes.error ||
       activeCrewRes.error ||
       exceptionsRes.error ||
@@ -683,7 +685,6 @@ export const getAvailability = createServerFn({ method: "GET" })
         blocksRes.error,
         apptsRes.error,
         servicesRes.error,
-        overridesRes.error,
         schedulesRes.error,
         activeCrewRes.error,
         exceptionsRes.error,
@@ -723,30 +724,48 @@ export const getAvailability = createServerFn({ method: "GET" })
     }
 
     if (!motorcycle && data.motorcycle) {
-      const motorcycleRecord = await supabaseAdmin
+      motorcycle = { ...data.motorcycle };
+    }
+
+    let motorcycleCategory: MotorcycleCcCategory | undefined;
+    if (motorcycle) {
+      let motorcycleQuery = supabaseAdmin
         .from("motorcycle_catalog")
-        .select("brand,model")
-        .eq("brand", data.motorcycle.brand)
-        .eq("model", data.motorcycle.model)
-        .eq("is_active", true)
-        .eq("is_archived", false)
-        .maybeSingle();
-      if (motorcycleRecord.error || !motorcycleRecord.data) {
+        .select("cc_category")
+        .eq("brand", motorcycle.brand)
+        .eq("model", motorcycle.model)
+        .eq("is_archived", false);
+      if (!data.rescheduleReference && !data.allowInactiveMotorcycle) {
+        motorcycleQuery = motorcycleQuery.eq("is_active", true);
+      }
+      const { data: motorcycleRecord, error: motorcycleError } =
+        await motorcycleQuery.maybeSingle();
+      if (motorcycleError || !motorcycleRecord) {
         return unavailableAvailability(
           configuredFrom,
           configuredTo,
           "Select a valid motorcycle model from the Motorcycle Catalog.",
         );
       }
-      motorcycle = { ...data.motorcycle };
+      if (
+        motorcycleRecord.cc_category !== "small_bike" &&
+        motorcycleRecord.cc_category !== "big_bike"
+      ) {
+        return unavailableAvailability(
+          configuredFrom,
+          configuredTo,
+          "The selected motorcycle needs an engine CC classification before its service estimate can be calculated.",
+        );
+      }
+      motorcycleCategory = motorcycleRecord.cc_category;
     }
 
     // A reservation lasts exactly as long as the selected services.
-    const resolvedServices = resolveServicePricing(
-      servicesRes.data ?? [],
-      overridesRes.data ?? [],
-      motorcycle,
-    );
+    const pricing = resolveServicePricing(servicesRes.data ?? [], motorcycleCategory);
+    if ("error" in pricing) {
+      return unavailableAvailability(configuredFrom, configuredTo, pricing.error);
+    }
+    const resolvedServices = pricing.services;
     const totalDuration = resolvedServices.reduce(
       (sum, service) => sum + service.durationMinutes,
       0,
@@ -1119,11 +1138,11 @@ export const createBooking = createServerFn({ method: "POST" })
     if (!slot || slot.capacity <= 0)
       return { ok: false as const, error: "That time slot is not available." };
 
-    // Resolve every selected service using its most-specific rule: exact model
-    // override, then the service's default price and duration.
+    // Service defaults are for Small Bikes. Large Bikes use the optional
+    // category-level price and duration configured on each service.
     const services = await supabaseAdmin
       .from("services")
-      .select("id,name,price,duration_minutes")
+      .select("id,name,price,duration_minutes,large_bike_price,large_bike_duration_minutes")
       .in("id", data.serviceIds)
       .eq("is_active", true)
       .eq("is_archived", false);
@@ -1135,46 +1154,41 @@ export const createBooking = createServerFn({ method: "POST" })
       return { ok: false as const, error: "Please select available services and try again." };
     }
 
-    // The catalog is the source of truth for customer-selectable motorcycles.
-    // Validate again here so a stale page or altered request cannot book an
-    // inactive or archived model after the customer has reached checkout.
-    if (!rescheduledFrom) {
-      const motorcycleRecord = await supabaseAdmin
-        .from("motorcycle_catalog")
-        .select("id")
-        .eq("brand", data.motoBrand)
-        .eq("model", data.motoModel)
-        .eq("is_active", true)
-        .eq("is_archived", false)
-        .maybeSingle();
-      if (motorcycleRecord.error || !motorcycleRecord.data) {
-        return {
-          ok: false as const,
-          error: "Please select an available motorcycle from the Motorcycle Catalog.",
-        };
-      }
-    }
-
-    const overrides = await supabaseAdmin
-      .from("service_model_overrides")
-      .select("service_id,brand,model,duration_minutes,price")
-      .in("service_id", data.serviceIds);
-    if (overrides.error) {
-      console.error("[Booking] model override lookup failed", {
-        overrides: overrides.error.message,
-      });
+    // The catalog's CC category is the server-side source of truth. A
+    // reschedule may retain an inactive model, but it must still resolve to a
+    // non-archived catalog record so that its pricing is never guessed.
+    const motorcycleRecord = await supabaseAdmin
+      .from("motorcycle_catalog")
+      .select("cc_category,is_active")
+      .eq("brand", data.motoBrand)
+      .eq("model", data.motoModel)
+      .eq("is_archived", false)
+      .maybeSingle();
+    if (motorcycleRecord.error || !motorcycleRecord.data) {
       return {
         ok: false as const,
-        error: "We could not calculate the selected service details. Please try again.",
+        error: "Please select an available motorcycle from the Motorcycle Catalog.",
+      };
+    }
+    if (!rescheduledFrom && !motorcycleRecord.data.is_active) {
+      return {
+        ok: false as const,
+        error: "Please select an available motorcycle from the Motorcycle Catalog.",
+      };
+    }
+    if (
+      motorcycleRecord.data.cc_category !== "small_bike" &&
+      motorcycleRecord.data.cc_category !== "big_bike"
+    ) {
+      return {
+        ok: false as const,
+        error: "The selected motorcycle needs an engine CC classification before it can be booked.",
       };
     }
 
-    // Each selected service uses the matching brand-and-model override when it
-    // exists; otherwise its service-level default price and duration apply.
-    const resolvedServices = resolveServicePricing(services.data, overrides.data ?? [], {
-      brand: data.motoBrand,
-      model: data.motoModel,
-    });
+    const pricing = resolveServicePricing(services.data, motorcycleRecord.data.cc_category);
+    if ("error" in pricing) return { ok: false as const, error: pricing.error };
+    const resolvedServices = pricing.services;
     const totalDuration = resolvedServices.reduce(
       (sum, service) => sum + service.durationMinutes,
       0,

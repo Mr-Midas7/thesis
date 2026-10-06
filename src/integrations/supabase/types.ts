@@ -758,7 +758,9 @@ export type Database = {
         Row: {
           archived_at: string | null;
           brand: string | null;
+          cc_category: string | null;
           created_at: string;
+          engine_cc: number | null;
           id: string;
           is_active: boolean;
           is_archived: boolean;
@@ -770,6 +772,7 @@ export type Database = {
           archived_at?: string | null;
           brand?: string | null;
           created_at?: string;
+          engine_cc?: number | null;
           id?: string;
           is_active?: boolean;
           is_archived?: boolean;
@@ -781,6 +784,7 @@ export type Database = {
           archived_at?: string | null;
           brand?: string | null;
           created_at?: string;
+          engine_cc?: number | null;
           id?: string;
           is_active?: boolean;
           is_archived?: boolean;
@@ -892,47 +896,6 @@ export type Database = {
         };
         Relationships: [];
       };
-      service_model_overrides: {
-        Row: {
-          brand: string;
-          created_at: string;
-          duration_minutes: number;
-          id: string;
-          model: string;
-          price: number;
-          service_id: string;
-          updated_at: string;
-        };
-        Insert: {
-          brand: string;
-          created_at?: string;
-          duration_minutes: number;
-          id?: string;
-          model: string;
-          price: number;
-          service_id: string;
-          updated_at?: string;
-        };
-        Update: {
-          brand?: string;
-          created_at?: string;
-          duration_minutes?: number;
-          id?: string;
-          model?: string;
-          price?: number;
-          service_id?: string;
-          updated_at?: string;
-        };
-        Relationships: [
-          {
-            foreignKeyName: "service_model_overrides_service_id_fkey";
-            columns: ["service_id"];
-            isOneToOne: false;
-            referencedRelation: "services";
-            referencedColumns: ["id"];
-          },
-        ];
-      };
       services: {
         Row: {
           archived_at: string | null;
@@ -944,6 +907,8 @@ export type Database = {
           image_url: string | null;
           is_active: boolean;
           is_archived: boolean;
+          large_bike_duration_minutes: number | null;
+          large_bike_price: number | null;
           name: string;
           price: number;
           sort_order: number;
@@ -959,6 +924,8 @@ export type Database = {
           image_url?: string | null;
           is_active?: boolean;
           is_archived?: boolean;
+          large_bike_duration_minutes?: number | null;
+          large_bike_price?: number | null;
           name: string;
           price?: number;
           sort_order?: number;
@@ -974,6 +941,8 @@ export type Database = {
           image_url?: string | null;
           is_active?: boolean;
           is_archived?: boolean;
+          large_bike_duration_minutes?: number | null;
+          large_bike_price?: number | null;
           name?: string;
           price?: number;
           sort_order?: number;

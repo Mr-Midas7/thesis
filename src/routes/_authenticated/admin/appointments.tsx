@@ -320,6 +320,11 @@ function AppointmentsPage() {
     },
   });
 
+  const selectedAppointment =
+    ((appointments.data?.rows ?? []) as AppointmentDetails[]).find(
+      (appointment) => appointment.id === openId,
+    ) ?? null;
+
   const crew = useQuery({
     queryKey: ["crew"],
     queryFn: async () => {
@@ -351,7 +356,13 @@ function AppointmentsPage() {
   const appointmentAvailability = useQuery<Availability>({
     queryKey: [
       "admin-appointment-availability",
-      { appointmentId: openId, serviceIds: editServiceIds },
+      {
+        appointmentId: openId,
+        serviceIds: editServiceIds,
+        motorcycle: selectedAppointment
+          ? `${selectedAppointment.moto_brand}:${selectedAppointment.moto_model}`
+          : null,
+      },
     ],
     queryFn: () =>
       availabilityFn({
@@ -359,6 +370,10 @@ function AppointmentsPage() {
           days: 45,
           serviceIds: editServiceIds,
           excludeAppointmentId: openId ?? undefined,
+          allowInactiveMotorcycle: true,
+          motorcycle: selectedAppointment
+            ? { brand: selectedAppointment.moto_brand, model: selectedAppointment.moto_model }
+            : undefined,
         },
       }),
     enabled: isEditing && Boolean(openId) && editServiceIds.length > 0,
@@ -388,15 +403,16 @@ function AppointmentsPage() {
   );
   const editableAppointmentDuration = useMemo(
     () =>
-      editServiceIds.length > 0
+      appointmentAvailability.data?.totalDurationMinutes ??
+      (editServiceIds.length > 0
         ? editServiceIds.reduce(
             (total, serviceId) =>
               total +
               (services.data?.find((service) => service.id === serviceId)?.duration_minutes ?? 60),
             0,
           )
-        : 0,
-    [editServiceIds, services.data],
+        : 0),
+    [appointmentAvailability.data?.totalDurationMinutes, editServiceIds, services.data],
   );
   const assignableCrew = useQuery({
     queryKey: [
@@ -577,7 +593,6 @@ function AppointmentsPage() {
 
   const rows = appointments.data?.rows ?? [];
   const typedRows = rows as AppointmentDetails[];
-  const selectedAppointment = typedRows.find((appointment) => appointment.id === openId) ?? null;
 
   const rescheduleHistory = useQuery({
     queryKey: ["appointment-reschedule-history", openId],
