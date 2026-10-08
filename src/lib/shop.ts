@@ -238,14 +238,19 @@ export function bookingDurationForFirstDay(
 
 /** True for a valid Monday-Saturday Manila calendar date. */
 export function isShopOpenDate(dateIso: string) {
+  if (!isValidCalendarDate(dateIso)) return false;
+  const [year = Number.NaN, month = Number.NaN, day = Number.NaN] = dateIso.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCDay() !== 0;
+}
+
+/** True only for a real Gregorian calendar date in the YYYY-MM-DD form. */
+export function isValidCalendarDate(dateIso: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(dateIso)) return false;
   const [year = Number.NaN, month = Number.NaN, day = Number.NaN] = dateIso.split("-").map(Number);
   const date = new Date(Date.UTC(year, month - 1, day));
   return (
-    date.getUTCFullYear() === year &&
-    date.getUTCMonth() === month - 1 &&
-    date.getUTCDate() === day &&
-    date.getUTCDay() !== 0
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
   );
 }
 

@@ -46,7 +46,15 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
-import { formatDateLong, shopTimeOptions } from "@/lib/shop";
+import {
+  calendarDateToIso,
+  calendarRangeToIso,
+  isoDateToCalendarDate,
+  manilaMonthDateRange,
+  manilaWeekDateRange,
+  normalizeIsoDateRange,
+} from "@/lib/admin-date-range";
+import { formatDateLong, manilaNow, shopTimeOptions } from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/admin/availability")({
@@ -101,35 +109,20 @@ type CrewMember = {
 };
 
 function dateToKey(date: Date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
+  return calendarDateToIso(date);
 }
 
 function dateFromKey(value: string) {
-  return new Date(`${value}T12:00:00`);
+  return isoDateToCalendarDate(value);
 }
 
 function assignmentPeriodBounds(filter: AssignmentFilter) {
   if (filter.period === "custom") {
-    return { from: filter.customStart, to: filter.customEnd };
+    return normalizeIsoDateRange(filter.customStart, filter.customEnd);
   }
 
-  const today = new Date();
-  if (filter.period === "monthly") {
-    return {
-      from: dateToKey(new Date(today.getFullYear(), today.getMonth(), 1)),
-      to: dateToKey(new Date(today.getFullYear(), today.getMonth() + 1, 0)),
-    };
-  }
-
-  const mondayOffset = (today.getDay() + 6) % 7;
-  const monday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - mondayOffset);
-  return {
-    from: dateToKey(monday),
-    to: dateToKey(new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6)),
-  };
+  const today = manilaNow().date;
+  return filter.period === "monthly" ? manilaMonthDateRange(today) : manilaWeekDateRange(today);
 }
 
 function AvailabilityDateRangeFilter({
@@ -166,7 +159,9 @@ function AvailabilityDateRangeFilter({
 
   const applyCustomRange = () => {
     if (!draftRange?.from || !draftRange.to) return;
-    onCustomDateRangeChange(dateToKey(draftRange.from), dateToKey(draftRange.to));
+    const range = calendarRangeToIso(draftRange);
+    if (!range) return;
+    onCustomDateRangeChange(range.from, range.to);
     onPeriodChange("custom");
     setIsPickingCustomRange(false);
     setOpen(false);

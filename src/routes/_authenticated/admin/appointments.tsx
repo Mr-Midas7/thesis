@@ -57,6 +57,14 @@ import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
 import {
+  calendarDateToIso,
+  calendarRangeToIso,
+  isoDateToCalendarDate,
+  manilaMonthDateRange,
+  manilaYearDateRange,
+  type IsoDateRange,
+} from "@/lib/admin-date-range";
+import {
   ACTIVE_RESERVATION_STATUSES,
   type Availability,
   computeAvailableDates,
@@ -92,11 +100,14 @@ export const Route = createFileRoute("/_authenticated/admin/appointments")({
 });
 
 type AppointmentDatePeriod = "all" | "today" | "7d" | "month" | "year" | "custom";
-type IsoDateRange = { from: string; to: string };
 const EMPTY_SERVICE_IDS: string[] = [];
 type AppointmentService = Pick<
   Database["public"]["Tables"]["appointment_services"]["Row"],
   "service_id" | "service_name" | "price" | "duration_minutes"
+>;
+type AppointmentProduct = Pick<
+  Database["public"]["Tables"]["appointment_products"]["Row"],
+  "id" | "product_id" | "product_name" | "quantity" | "unit_price"
 >;
 type RescheduleHistoryEntry = {
   id: string;
@@ -113,12 +124,22 @@ type RescheduleHistoryEntry = {
 };
 type AppointmentDetails = Database["public"]["Tables"]["appointments"]["Row"] & {
   appointment_services: AppointmentService[];
+  appointment_products: AppointmentProduct[];
   crew_members: { name: string } | null;
 };
 type EditableService = Pick<
   Database["public"]["Tables"]["services"]["Row"],
   "id" | "name" | "price" | "duration_minutes"
 >;
+type EditableProduct = Pick<
+  Database["public"]["Tables"]["products"]["Row"],
+  "id" | "name" | "brand" | "price" | "stock_quantity" | "is_active" | "in_stock"
+>;
+type AppointmentProductInput = {
+  productId: string;
+  quantity: number;
+  unitPrice: number;
+};
 type AppointmentEditForm = {
   firstName: string;
   middleName: string;
@@ -131,6 +152,7 @@ type AppointmentEditForm = {
   crewAssignmentManual: boolean;
   status: string;
   adminNotes: string;
+  products: AppointmentProductInput[];
 };
 type AppointmentEditErrors = Partial<
   Record<
@@ -139,6 +161,7 @@ type AppointmentEditErrors = Partial<
     | "lastName"
     | "phone"
     | "services"
+    | "products"
     | "appointmentDate"
     | "startTime"
     | "schedule"
@@ -224,6 +247,18 @@ function appointmentEditHasChanges(
   const originalServiceIds = appointment.appointment_services
     .map((service) => service.service_id)
     .filter((serviceId): serviceId is string => Boolean(serviceId));
+  const productSignature = (products: AppointmentProductInput[]) =>
+    products
+      .map((product) => `${product.productId}:${product.quantity}:${product.unitPrice.toFixed(2)}`)
+      .sort()
+      .join(",");
+  const originalProducts: AppointmentProductInput[] = appointment.appointment_products.map(
+    (product) => ({
+      productId: product.product_id,
+      quantity: product.quantity,
+      unitPrice: Number(product.unit_price),
+    }),
+  );
 
   return (
     form.firstName.trim() !== (appointment.first_name ?? "").trim() ||
@@ -235,7 +270,8 @@ function appointmentEditHasChanges(
     form.startTime !== String(appointment.start_time).slice(0, 5) ||
     form.assignedCrewId !== (appointment.assigned_crew_id ?? "none") ||
     form.status !== appointment.status ||
-    form.adminNotes.trim() !== (appointment.admin_notes ?? "").trim()
+    form.adminNotes.trim() !== (appointment.admin_notes ?? "").trim() ||
+    productSignature(form.products) !== productSignature(originalProducts)
   );
 }
 
@@ -260,7 +296,7 @@ function AppointmentsPage() {
   const [term, setTerm] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [confirmationEmailWarning, setConfirmationEmailWarning] = useState<string | null>(null);
+  const [confirmationNotificationWarning, setConfirmationNotificationWarning] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<AppointmentEditForm | null>(null);
   const [editErrors, setEditErrors] = useState<AppointmentEditErrors>({});
   const [pendingSaveForm, setPendingSaveForm] = useState<AppointmentEditForm | null>(null);
@@ -286,7 +322,7 @@ function AppointmentsPage() {
       let query = supabase
         .from("appointments")
         .select(
-          "*, appointment_services(service_id, service_name, price, duration_minutes), crew_members(name)",
+          "*, appointment_services(service_id, service_name, price, duration_minutes), appointment_products(id, product_id, product_name, quantity, unit_price), crew_members(name)",
           {
             count: "exact",
           },
@@ -350,6 +386,20 @@ function AppointmentsPage() {
       if (error) throw error;
       return data;
     },
+  });
+
+  const products = useQuery({
+    queryKey: ["admin-appointment-products"],
+    queryFn: async (): Promise<EditableProduct[]> => {
+      const { data, error } = await supabase
+        .from("products")
+        .select("id,name,brand,price,stock_quantity,is_active,in_stock")
+        .eq("is_archived", false)
+        .order("name");
+      if (error) throw error;
+      return data;
+    },
+    enabled: isEditing,
   });
 
   const editServiceIds = editForm?.serviceIds ?? EMPTY_SERVICE_IDS;
@@ -538,6 +588,11 @@ function AppointmentsPage() {
           middleName: form.middleName.trim(),
           lastName: form.lastName.trim(),
           phone: normalizePhilippineMobile(form.phone)!,
+          products: form.products.map((product) => ({
+            productId: product.productId,
+            quantity: product.quantity,
+            unitPrice: product.unitPrice,
+          })),
         },
       });
       if (!result.ok) throw new Error(result.error);
@@ -547,7 +602,11 @@ function AppointmentsPage() {
       setIsEditing(false);
       setEditErrors({});
       setPendingSaveForm(null);
-      setConfirmationEmailWarning("emailError" in result ? result.emailError : null);
+      const warnings = [
+        "emailError" in result ? result.emailError : null,
+        "smsError" in result ? result.smsError : null,
+      ].filter((warning): warning is string => Boolean(warning));
+      setConfirmationNotificationWarning(warnings.join(" ") || null);
       qc.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
       qc.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
       qc.invalidateQueries({ queryKey: ["archived-appointments"], exact: false });
@@ -653,7 +712,7 @@ function AppointmentsPage() {
   }
 
   function startEditing(appointment: AppointmentDetails) {
-    setConfirmationEmailWarning(null);
+    setConfirmationNotificationWarning(null);
     setEditForm({
       firstName: appointment.first_name ?? "",
       middleName: appointment.middle_name ?? "",
@@ -668,6 +727,11 @@ function AppointmentsPage() {
       crewAssignmentManual: false,
       status: appointment.status,
       adminNotes: appointment.admin_notes ?? "",
+      products: appointment.appointment_products.map((product) => ({
+        productId: product.product_id,
+        quantity: product.quantity,
+        unitPrice: Number(product.unit_price),
+      })),
     });
     setEditErrors({});
     setPendingSaveForm(null);
@@ -688,6 +752,44 @@ function AppointmentsPage() {
         : current,
     );
     clearAppointmentEditErrors("services", "schedule", "form");
+  }
+
+  function addProduct() {
+    setEditForm((current) =>
+      current && current.products.length < 50
+        ? {
+            ...current,
+            products: [...current.products, { productId: "", quantity: 1, unitPrice: 0 }],
+          }
+        : current,
+    );
+    clearAppointmentEditErrors("products", "form");
+  }
+
+  function updateProduct(index: number, patch: Partial<AppointmentProductInput>) {
+    setEditForm((current) =>
+      current
+        ? {
+            ...current,
+            products: current.products.map((product, productIndex) =>
+              productIndex === index ? { ...product, ...patch } : product,
+            ),
+          }
+        : current,
+    );
+    clearAppointmentEditErrors("products", "form");
+  }
+
+  function removeProduct(index: number) {
+    setEditForm((current) =>
+      current
+        ? {
+            ...current,
+            products: current.products.filter((_, productIndex) => productIndex !== index),
+          }
+        : current,
+    );
+    clearAppointmentEditErrors("products", "form");
   }
 
   function clearAppointmentEditErrors(...keys: Array<keyof AppointmentEditErrors>) {
@@ -718,6 +820,34 @@ function AppointmentsPage() {
     }
     if (editForm.serviceIds.length === 0) {
       nextErrors.services = "Select at least one service.";
+    }
+    if (editForm.products.length > 50) {
+      nextErrors.products = "Add up to 50 products to an appointment.";
+    } else if (
+      editForm.products.some(
+        (product) =>
+          !product.productId ||
+          !Number.isInteger(product.quantity) ||
+          product.quantity < 1 ||
+          product.quantity > 999 ||
+          !Number.isFinite(product.unitPrice) ||
+          product.unitPrice < 0,
+      )
+    ) {
+      nextErrors.products = "Choose each product and enter a valid quantity and price.";
+    } else if (
+      new Set(editForm.products.map((product) => product.productId)).size !==
+      editForm.products.length
+    ) {
+      nextErrors.products = "Each product can only be added once.";
+    } else if (editForm.products.length > 0 && !selectedAppointment.wants_products) {
+      nextErrors.products = "This customer selected No for shop products.";
+    } else if (
+      editForm.products.length > 0 &&
+      !["in_progress", "completed"].includes(editForm.status)
+    ) {
+      nextErrors.products =
+        "Products can only be recorded while service is in progress or completed.";
     }
     if (!editForm.appointmentDate) {
       nextErrors.appointmentDate = "Select an appointment date.";
@@ -860,9 +990,9 @@ function AppointmentsPage() {
           {archiveError}
         </p>
       )}
-      {confirmationEmailWarning && (
+      {confirmationNotificationWarning && (
         <p role="alert" className="mt-4 text-sm text-destructive">
-          {confirmationEmailWarning}
+          {confirmationNotificationWarning}
         </p>
       )}
 
@@ -1098,6 +1228,145 @@ function AppointmentsPage() {
                     <FieldError message={editErrors.services} />
                   </div>
 
+                  <div className="space-y-3 rounded-lg border border-border/70 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <h4 className="font-medium">Products used during service</h4>
+                        <p className="mt-1 text-sm text-muted-foreground">
+                          Customer preference: {selectedAppointment.wants_products ? "Yes" : "No"}.
+                          Product quantities and selling prices are saved as appointment records.
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={
+                          !selectedAppointment.wants_products ||
+                          !["in_progress", "completed"].includes(editForm.status) ||
+                          editForm.products.length >= 50
+                        }
+                        onClick={addProduct}
+                      >
+                        Add product
+                      </Button>
+                    </div>
+                    {!selectedAppointment.wants_products && (
+                      <p className="text-sm text-muted-foreground">
+                        Products cannot be added because the customer selected No during booking.
+                      </p>
+                    )}
+                    {selectedAppointment.wants_products &&
+                      !["in_progress", "completed"].includes(editForm.status) && (
+                        <p className="text-sm text-muted-foreground">
+                          Set the appointment status to In Progress or Completed to record products
+                          used during service.
+                        </p>
+                      )}
+                    <div className="space-y-3">
+                      {editForm.products.map((product, index) => {
+                        const selectedProduct = (products.data ?? []).find(
+                          (item) => item.id === product.productId,
+                        );
+                        return (
+                          <div
+                            key={`${product.productId || "new"}-${index}`}
+                            className="grid gap-3 rounded-md border border-border/70 p-3 md:grid-cols-[minmax(0,1fr)_7rem_9rem_auto] md:items-end"
+                          >
+                            <div className="space-y-1.5">
+                              <Label>Product</Label>
+                              <Select
+                                {...(product.productId ? { value: product.productId } : {})}
+                                onValueChange={(productId) => {
+                                  const item = (products.data ?? []).find(
+                                    (entry) => entry.id === productId,
+                                  );
+                                  updateProduct(index, {
+                                    productId,
+                                    unitPrice: item ? Number(item.price) : product.unitPrice,
+                                  });
+                                }}
+                              >
+                                <SelectTrigger>
+                                  <SelectValue placeholder="Choose product" />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {(products.data ?? []).map((item) => (
+                                    <SelectItem
+                                      key={item.id}
+                                      value={item.id}
+                                      disabled={
+                                        (!item.is_active || !item.in_stock) &&
+                                        item.id !== product.productId
+                                      }
+                                    >
+                                      {item.brand ? `${item.brand} — ` : ""}
+                                      {item.name} ({item.stock_quantity} in stock)
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label>Quantity</Label>
+                              <Input
+                                type="number"
+                                min={1}
+                                max={999}
+                                value={product.quantity}
+                                onChange={(event) =>
+                                  updateProduct(index, {
+                                    quantity: Number.parseInt(event.target.value, 10) || 0,
+                                  })
+                                }
+                              />
+                            </div>
+                            <div className="space-y-1.5">
+                              <Label>Unit price</Label>
+                              <Input
+                                type="number"
+                                min={0}
+                                step="0.01"
+                                value={product.unitPrice}
+                                onChange={(event) =>
+                                  updateProduct(index, { unitPrice: Number(event.target.value) })
+                                }
+                              />
+                            </div>
+                            <Button
+                              type="button"
+                              variant="outline"
+                              size="sm"
+                              onClick={() => removeProduct(index)}
+                            >
+                              Remove
+                            </Button>
+                            {selectedProduct && !selectedProduct.is_active && (
+                              <p className="md:col-span-4 text-xs text-muted-foreground">
+                                This product is inactive and can only remain as an existing
+                                appointment record.
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {products.isLoading && (
+                      <p className="text-sm text-muted-foreground">Loading shop products…</p>
+                    )}
+                    {products.isError && (
+                      <p className="text-sm text-destructive">
+                        Could not load shop products. Please try again.
+                      </p>
+                    )}
+                    {editForm.products.length === 0 && selectedAppointment.wants_products && (
+                      <p className="text-sm text-muted-foreground">
+                        No products have been recorded.
+                      </p>
+                    )}
+                    <FieldError message={editErrors.products} />
+                  </div>
+
                   <div className="grid gap-4 lg:grid-cols-[auto_minmax(0,1fr)]">
                     <div className="space-y-1.5">
                       <Label>Appointment date</Label>
@@ -1126,7 +1395,7 @@ function AppointmentsPage() {
                             }
                             onSelect={(selectedDate) => {
                               if (!selectedDate) return;
-                              const nextDate = format(selectedDate, "yyyy-MM-dd");
+                              const nextDate = calendarDateToIso(selectedDate);
                               if (nextDate === editForm.appointmentDate) return;
                               setEditForm({
                                 ...editForm,
@@ -1143,7 +1412,7 @@ function AppointmentsPage() {
                               );
                             }}
                             disabled={(date) =>
-                              !availableAppointmentDateSet.has(format(date, "yyyy-MM-dd"))
+                              !availableAppointmentDateSet.has(calendarDateToIso(date))
                             }
                             modifiers={{
                               fullyBooked: fullyBookedAppointmentDates.map((value) =>
@@ -1425,11 +1694,65 @@ function AppointmentsPage() {
                       </div>
                     ))}
                     <div className="flex items-center justify-between gap-4 pt-3 font-medium">
-                      <span>Total estimate</span>
+                      <span>Service subtotal</span>
                       <span className="text-primary">
                         {formatPHP(selectedAppointment.total_estimate)}
                       </span>
                     </div>
+                  </div>
+                </section>
+                <section className="rounded-lg border border-border/70 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="font-medium">Products</h3>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Customer selected: {selectedAppointment.wants_products ? "Yes" : "No"}
+                      </p>
+                    </div>
+                    <span className="text-sm font-medium text-primary">
+                      Product subtotal{" "}
+                      {formatPHP(
+                        selectedAppointment.appointment_products.reduce(
+                          (total, product) => total + product.quantity * Number(product.unit_price),
+                          0,
+                        ),
+                      )}
+                    </span>
+                  </div>
+                  {selectedAppointment.appointment_products.length > 0 ? (
+                    <div className="mt-3 divide-y divide-border/70 text-sm">
+                      {selectedAppointment.appointment_products.map((product) => (
+                        <div
+                          key={product.id}
+                          className="flex items-center justify-between gap-4 py-2"
+                        >
+                          <span>
+                            {product.product_name}
+                            <span className="ml-2 text-xs text-muted-foreground">
+                              {product.quantity} × {formatPHP(product.unit_price)}
+                            </span>
+                          </span>
+                          <span className="text-primary">
+                            {formatPHP(product.quantity * Number(product.unit_price))}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="mt-3 text-sm text-muted-foreground">No products recorded.</p>
+                  )}
+                  <div className="mt-3 flex items-center justify-between gap-4 border-t border-border/70 pt-3 font-medium">
+                    <span>Financial total</span>
+                    <span className="text-primary">
+                      {formatPHP(
+                        Number(selectedAppointment.total_estimate) +
+                          selectedAppointment.appointment_products.reduce(
+                            (total, product) =>
+                              total + product.quantity * Number(product.unit_price),
+                            0,
+                          ),
+                      )}
+                    </span>
                   </div>
                 </section>
                 <section className="grid gap-4 sm:grid-cols-2">
@@ -1831,32 +2154,13 @@ function buildAppointmentDateRange(
   customRange?: DateRange,
 ): IsoDateRange | undefined {
   const today = manilaNow().date;
-  const selectedDate = new Date(`${today}T12:00:00`);
 
   if (period === "today") return { from: today, to: today };
   if (period === "7d") return { from: addDays(today, -6), to: today };
-  if (period === "month") {
-    return {
-      from: format(
-        new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1, 12),
-        "yyyy-MM-dd",
-      ),
-      to: format(
-        new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0, 12),
-        "yyyy-MM-dd",
-      ),
-    };
-  }
-  if (period === "year") {
-    return {
-      from: format(new Date(selectedDate.getFullYear(), 0, 1, 12), "yyyy-MM-dd"),
-      to: format(new Date(selectedDate.getFullYear(), 11, 31, 12), "yyyy-MM-dd"),
-    };
-  }
+  if (period === "month") return manilaMonthDateRange(today);
+  if (period === "year") return manilaYearDateRange(today);
   if (period === "custom" && customRange?.from && customRange.to) {
-    const from = format(customRange.from, "yyyy-MM-dd");
-    const to = format(customRange.to, "yyyy-MM-dd");
-    return from <= to ? { from, to } : { from: to, to: from };
+    return calendarRangeToIso(customRange);
   }
   return undefined;
 }
@@ -1868,5 +2172,5 @@ function appointmentDatePeriodLabel(period: AppointmentDatePeriod, range?: IsoDa
   if (period === "month") return "This month";
   if (period === "year") return "This year";
   if (!range) return "Custom date range";
-  return `${format(new Date(`${range.from}T12:00:00`), "MMM d")} – ${format(new Date(`${range.to}T12:00:00`), "MMM d, yyyy")}`;
+  return `${format(isoDateToCalendarDate(range.from), "MMM d")} – ${format(isoDateToCalendarDate(range.to), "MMM d, yyyy")}`;
 }

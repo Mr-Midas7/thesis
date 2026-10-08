@@ -27,6 +27,7 @@ import {
   isBookingStartTime,
   isBookingSubmissionOpen,
   isBookingTimeRangeWithinHours,
+  isValidCalendarDate,
   isShopOpenDate,
   isSlotBookable,
   manilaNow,
@@ -221,9 +222,16 @@ const bookingSchema = z
       .min(1)
       .max(MAX_BOOKING_SERVICE_SELECTIONS)
       .refine((ids) => new Set(ids).size === ids.length, "Services must be unique"),
-    date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-    startTime: z.string().regex(/^\d{2}:\d{2}(:\d{2})?$/),
+    date: z.string().refine(isValidCalendarDate, "Enter a valid appointment date."),
+    startTime: z
+      .string()
+      .regex(/^\d{2}:\d{2}$/, "Enter a valid appointment start time.")
+      .refine(
+        (value) => Number.isFinite(timeToMinutes(value)),
+        "Enter a valid appointment start time.",
+      ),
     notes: z.string().trim().max(500).optional().or(z.literal("")),
+    wantsProducts: z.boolean(),
     turnstileToken: z.string().trim().max(2048).default(""),
     idempotencyKey: z.string().uuid(),
     termsAccepted: z.literal(true),
@@ -1483,6 +1491,7 @@ export const createBooking = createServerFn({ method: "POST" })
       p_appointment_date: data.date,
       p_start_time: `${startTime}:00`,
       p_notes: data.notes || null,
+      p_wants_products: data.wantsProducts,
       p_total_estimate: total,
       p_booking_duration_minutes: firstDayDuration,
       p_assigned_crew_id: assignedMechanicId,
@@ -1608,7 +1617,7 @@ async function findAppointmentByReference(reference: string) {
   const primaryLookup = await supabaseAdmin
     .from("appointments")
     .select(
-      "id,reference_code,customer_name,first_name,middle_name,last_name,phone,email,moto_brand,moto_model,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reason,pending_reschedule_reference_code,appointment_services(service_id,service_name,price)",
+      "id,reference_code,customer_name,first_name,middle_name,last_name,phone,email,moto_brand,moto_model,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,wants_products,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reason,pending_reschedule_reference_code,appointment_services(service_id,service_name,price)",
     )
     // Legacy records may have been written with lower-case reference codes.
     // Input is validated before this query, so it cannot introduce LIKE wildcards.
@@ -1626,7 +1635,7 @@ async function findAppointmentByReference(reference: string) {
     ? await supabaseAdmin
         .from("appointments")
         .select(
-          "id,reference_code,customer_name,first_name,middle_name,last_name,phone,email,moto_brand,moto_model,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reason,appointment_services(service_id,service_name,price)",
+          "id,reference_code,customer_name,first_name,middle_name,last_name,phone,email,moto_brand,moto_model,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,wants_products,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reason,appointment_services(service_id,service_name,price)",
         )
         .ilike("reference_code", normalizeReferenceCode(reference))
         .maybeSingle()
@@ -1766,6 +1775,7 @@ export const getRescheduleDetails = createServerFn({ method: "POST" })
         motoYear: String(appt.moto_year ?? new Date().getFullYear()),
         plateNumber: appt.plate_number,
         notes: appt.notes ?? "",
+        wantsProducts: appt.wants_products,
         serviceIds,
       },
     };

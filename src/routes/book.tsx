@@ -65,19 +65,17 @@ import {
   formatTime,
   formatNamePartInput,
   isBookingSubmissionOpen,
+  isValidCalendarDate,
   normalizePhilippineMobile,
   sanitizePhilippineMobileInput,
 } from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
 const searchSchema = z.object({
-  date: z
-    .string()
-    .regex(/^\d{4}-\d{2}-\d{2}$/)
-    .optional(),
+  date: z.string().refine(isValidCalendarDate, "Enter a valid appointment date.").optional(),
   startTime: z
     .string()
-    .regex(/^\d{2}:\d{2}(:\d{2})?$/)
+    .regex(/^\d{2}:\d{2}$/, "Enter a valid appointment start time.")
     .optional(),
   serviceId: z.string().uuid().optional(),
   reschedule: z
@@ -128,6 +126,7 @@ type Errors = Partial<{
   motoModel: string;
   plateNumber: string;
   services: string;
+  wantsProducts: string;
   date: string;
   startTime: string;
   schedule: string;
@@ -145,6 +144,7 @@ const validationFieldOrder: (keyof Errors)[] = [
   "motoModel",
   "plateNumber",
   "services",
+  "wantsProducts",
   "rescheduleReason",
   "date",
   "startTime",
@@ -162,6 +162,7 @@ const validationFocusTargets: Partial<Record<keyof Errors, string>> = {
   motoModel: "#booking-moto-model",
   plateNumber: "#booking-plate-number",
   services: "#booking-services",
+  wantsProducts: "#booking-products",
   rescheduleReason: "#reschedule-reason",
   date: "#booking-date button[data-day]:not([disabled])",
   startTime: "#booking-start-time button:not([disabled])",
@@ -191,6 +192,7 @@ function BookPage() {
     motoYear: String(new Date().getFullYear()),
     plateNumber: "",
     notes: "",
+    wantsProducts: null as boolean | null,
   });
   const [serviceIds, setServiceIds] = useState<string[]>(
     search.serviceId ? [search.serviceId] : [],
@@ -288,6 +290,7 @@ function BookPage() {
       motoYear: appointment.motoYear,
       plateNumber: appointment.plateNumber,
       notes: appointment.notes,
+      wantsProducts: appointment.wantsProducts,
     });
     setServiceIds(appointment.serviceIds);
     setServiceCategory("all");
@@ -394,7 +397,7 @@ function BookPage() {
     [availability.data],
   );
 
-  const selectedDate = date ? parseISO(date) : undefined;
+  const selectedDate = date && isValidCalendarDate(date) ? parseISO(date) : undefined;
   const availabilityError = availability.data?.error;
 
   const selectedServices = (services.data ?? []).filter((s) => serviceIds.includes(s.id));
@@ -497,6 +500,9 @@ function BookPage() {
 
   const mutation = useMutation({
     mutationFn: async () => {
+      if (form.wantsProducts === null) {
+        throw new Error("Choose whether you would like to avail shop products.");
+      }
       const submittedSchedule = { date, startTime };
       const res = await book({
         data: {
@@ -514,6 +520,7 @@ function BookPage() {
           date,
           startTime,
           notes: form.notes.trim(),
+          wantsProducts: form.wantsProducts,
           turnstileToken,
           idempotencyKey: bookingRequestId,
           termsAccepted: true as const,
@@ -629,7 +636,10 @@ function BookPage() {
     }
     if (steps.includes(4) && !date) e.date = "Select your preferred date.";
     if (steps.includes(4) && date && !startTime) e.startTime = "Select your preferred time.";
-    if (steps.includes(4) && availability.isLoading) {
+    if (steps.includes(3) && form.wantsProducts === null) {
+      e.wantsProducts = "Choose Yes or No for shop products.";
+    }
+    if (steps.includes(4) && (availability.isPending || availability.isFetching)) {
       e.schedule = "Availability is still loading. Please wait a moment.";
     }
     if (steps.includes(4) && (availability.isError || availabilityError)) {
@@ -852,7 +862,7 @@ function BookPage() {
         <div className="sticky top-20 z-20 -mx-4 mt-6 border-y border-border/70 bg-background/95 px-4 py-3 backdrop-blur">
           <div className="flex items-center justify-between text-xs text-muted-foreground">
             <span className="font-medium text-foreground">
-              {bookingPage === "details" ? "Steps 1–4 of 4" : "Review Booking"}
+              {bookingPage === "details" ? "" : "Review Booking"}
             </span>
             <span>
               {bookingPage === "details" ? "Complete your details" : "Final confirmation"}
@@ -1146,6 +1156,47 @@ function BookPage() {
                 </Link>{" "}
                 for details to understand what each service includes.
               </p>
+              <div className="mt-5 border-t border-border/70 pt-5">
+                <Label>Avail Products</Label>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Would you like to avail shop products during your service? Specific products are
+                  selected by the shop only if needed during the actual service.
+                </p>
+                <div
+                  id="booking-products"
+                  className="mt-3 flex flex-wrap gap-3"
+                  role="radiogroup"
+                  aria-label="Avail products"
+                  aria-invalid={Boolean(errors.wantsProducts)}
+                >
+                  {[
+                    { value: true, label: "Yes" },
+                    { value: false, label: "No" },
+                  ].map((option) => (
+                    <button
+                      type="button"
+                      key={option.label}
+                      role="radio"
+                      aria-checked={form.wantsProducts === option.value}
+                      disabled={isReschedule}
+                      onClick={() => {
+                        setForm({ ...form, wantsProducts: option.value });
+                        setErrors(({ wantsProducts: _, ...current }) => current);
+                      }}
+                      className={cn(
+                        "min-w-24 rounded-lg border px-4 py-2 text-sm font-medium transition-colors",
+                        form.wantsProducts === option.value
+                          ? "border-primary bg-primary/10 text-primary"
+                          : "border-border bg-card/50 hover:border-primary/50",
+                        isReschedule && "cursor-not-allowed opacity-75",
+                      )}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+                <FieldError message={errors.wantsProducts} className="mt-2" />
+              </div>
             </Section>
 
             <Section title="4. Date and time selection" error={errors.schedule}>
@@ -1153,7 +1204,11 @@ function BookPage() {
                 <p className="text-sm text-muted-foreground">
                   Select a service first to view available dates and time slots.
                 </p>
-              ) : availability.isLoading ? (
+              ) : !motorcycleSelectionReady ? (
+                <p className="text-sm text-muted-foreground">
+                  Select a motorcycle brand and model to view available dates and time slots.
+                </p>
+              ) : availability.isPending || availability.isFetching ? (
                 <p className="text-sm text-muted-foreground">Loading available schedules...</p>
               ) : availability.isError || availabilityError ? (
                 <p className="text-sm text-destructive">
@@ -1203,6 +1258,7 @@ function BookPage() {
                             onSelect={(d) => {
                               if (!d) return;
                               const iso = format(d, "yyyy-MM-dd");
+                              if (!availableDateSet.has(iso)) return;
                               setDate(iso);
                               setStartTime("");
                             }}
@@ -1251,6 +1307,7 @@ function BookPage() {
                                 key={slot.id}
                                 disabled={slot.disabled}
                                 onClick={() => {
+                                  if (slot.disabled) return;
                                   setStartTime(slot.startTime);
                                 }}
                                 className={cn(
@@ -1355,6 +1412,12 @@ function BookPage() {
               <ReviewItem
                 label="Date and time"
                 value={`${formatDateLong(date)} at ${formatTime(startTime)}`}
+              />
+              <ReviewItem
+                label="Avail shop products"
+                value={
+                  form.wantsProducts === null ? "Not selected" : form.wantsProducts ? "Yes" : "No"
+                }
               />
               <div className="flex items-start gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
                 <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />

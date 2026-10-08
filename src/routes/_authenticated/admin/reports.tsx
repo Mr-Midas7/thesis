@@ -7,29 +7,17 @@ import {
   CalendarRange,
   CheckCircle2,
   CircleDollarSign,
-  Download,
-  FileText,
   Filter,
   ListFilter,
+  Printer,
   RotateCcw,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { DateRange } from "react-day-picker";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import exportLogoUrl from "@/assets/export-logo.png";
-import reportPdfFontUrl from "@/assets/NotoSans-Regular.ttf";
 import { PaginationControls } from "@/components/admin/pagination-controls";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -43,14 +31,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field-error";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Label } from "@/components/ui/label";
-import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -67,22 +49,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  calendarDateToIso,
+  calendarRangeToIso,
+  isoDateToCalendarDate,
+  manilaMonthDateRange,
+  manilaWeekDateRange,
+  manilaYearDateRange,
+} from "@/lib/admin-date-range";
 import { recordAdminActivityEvent } from "@/lib/admin-activity";
-import {
-  formatBusinessTimestamp,
-  getShopLogoDataUrl,
-  SHOP_EXPORT_NAME,
-  SHOP_OWNER_NAME,
-} from "@/lib/export-branding";
-import {
-  SHOP,
-  addDays,
-  formatDateLong,
-  formatPHP,
-  manilaNow,
-  statusLabel,
-  statusTone,
-} from "@/lib/shop";
+import { formatBusinessTimestamp, SHOP_EXPORT_NAME, SHOP_OWNER_NAME } from "@/lib/export-branding";
+import { SHOP, formatDateLong, formatPHP, manilaNow, statusLabel, statusTone } from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/admin/reports")({
@@ -97,22 +74,8 @@ const periodOptions = [
   { value: "custom", label: "Custom dates" },
 ] as const;
 
-const statusOptions = [
-  "pending",
-  "confirmed",
-  "in_progress",
-  "completed",
-  "rescheduled",
-  "cancelled",
-  "rejected",
-  "no_show",
-];
-const REPORT_PDF_FONT = "NotoSans";
-const REPORT_PDF_FONT_FILE = "NotoSans-Regular.ttf";
-
-type ReportKind = "bookings" | "services";
+type ReportKind = "bookings" | "services" | "financial";
 type PeriodPreset = (typeof periodOptions)[number]["value"];
-type ExportType = "pdf" | "docx";
 type ReportFilters = {
   periodPreset: PeriodPreset;
   from: string;
@@ -129,8 +92,12 @@ type BookingRow = {
   customer_name: string;
   appointment_date: string;
   service: string;
+  products?: string;
   status: string;
   total_estimate: number | string;
+  service_subtotal?: number | string;
+  product_subtotal?: number | string;
+  total_amount?: number | string;
 };
 type ServiceRow = {
   appointment_id: string;
@@ -149,21 +116,82 @@ type ReportMetrics = {
   completed_rows?: number;
   completed_value: number | string;
   total_value?: number | string;
+  service_total?: number | string;
+  product_total?: number | string;
   status_counts: Record<string, number>;
 };
 type ReportPage = { rows: Array<BookingRow | ServiceRow>; total: number; metrics: ReportMetrics };
-type ExportCardTone = "primary" | "success" | "accent" | "chart";
-type ExportSummaryCard = {
+type FinancialTransactionRow = {
+  id: string;
+  reference_code: string;
+  transaction_date: string;
+  services: string;
+  products: string;
+  service_amount: number | string;
+  product_amount: number | string;
+  total_amount: number | string;
+};
+type FinancialMetrics = {
+  total_revenue: number | string;
+  service_revenue: number | string;
+  product_revenue: number | string;
+  completed_transactions: number;
+  total_completed_services: number;
+  total_products_sold: number;
+  average_transaction_amount: number | string;
+};
+type ServicePerformanceRow = {
+  service_name: string;
+  completed_count: number;
+  revenue: number | string;
+};
+type ProductSalesRow = {
+  product_name: string;
+  quantity_sold: number;
+  unit_price: number | string;
+  total_sales: number | string;
+};
+type RevenuePeriodRow = {
+  period: string;
+  completed_transactions: number;
+  service_revenue: number | string;
+  product_revenue: number | string;
+  total_revenue: number | string;
+};
+type FinancialReportPage = {
+  rows: FinancialTransactionRow[];
+  total: number;
+  metrics: FinancialMetrics;
+  service_performance: ServicePerformanceRow[];
+  product_sales: ProductSalesRow[];
+  daily_revenue: RevenuePeriodRow[];
+  monthly_revenue: RevenuePeriodRow[];
+};
+type ReportSummaryCard = {
   label: string;
   value: string;
   detail: string;
-  tone: ExportCardTone;
+  tone: "primary" | "chart" | "success" | "accent";
 };
-type ExportData = {
+type ReportData = {
   headers: string[];
   rows: string[][];
-  cards: ExportSummaryCard[];
+  cards: ReportSummaryCard[];
   totalAmount: number;
+};
+type PrintPayload = {
+  data: ReportData;
+  generatedAt: string;
+  period: string;
+  reportKind: ReportKind;
+  scope: string;
+  title: string;
+  financial?: {
+    servicePerformance: ServicePerformanceRow[];
+    productSales: ProductSalesRow[];
+    revenueTitle: string;
+    revenueRows: RevenuePeriodRow[];
+  };
 };
 function ReportsPage() {
   const pageSize = 10;
@@ -172,13 +200,15 @@ function ReportsPage() {
   const [draftFilters, setDraftFilters] = useState<ReportFilters>(initialFilters);
   const [filters, setFilters] = useState<ReportFilters>(initialFilters);
   const [page, setPage] = useState(0);
-  const [pendingExport, setPendingExport] = useState<ExportType | null>(null);
-  const [exportError, setExportError] = useState<string | null>(null);
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [printError, setPrintError] = useState<string | null>(null);
+  const [printPayload, setPrintPayload] = useState<PrintPayload | null>(null);
+  const [revenuePeriod, setRevenuePeriod] = useState<"daily" | "monthly">("daily");
   const [serviceListDialog, setServiceListDialog] = useState<{
     referenceCode: string;
     services: string[];
   } | null>(null);
-  const reportKind: ReportKind = "bookings";
+  const reportKind: ReportKind = "financial";
   const { from, to, status, category, serviceName } = filters;
   const customDateError =
     draftFilters.periodPreset === "custom" && (!draftFilters.from || !draftFilters.to)
@@ -229,20 +259,19 @@ function ReportsPage() {
         .sort((first, second) => first.name.localeCompare(second.name)),
     [catalog.data, draftFilters.category],
   );
-  const metrics = data.data?.metrics;
-  const byStatus = Object.entries(metrics?.status_counts ?? {}).sort(([first], [second]) =>
-    first.localeCompare(second),
-  );
-  const preview = makeExportData(reportKind, data.data?.rows ?? [], metrics);
-  const reportTitle =
-    reportKind === "bookings"
-      ? "Booking Report"
-      : `${serviceName !== "all" ? serviceName : category !== "all" ? category : "All Services"} Activity Report`;
+  const financialReport = data.data as FinancialReportPage | undefined;
+  const metrics = financialReport?.metrics;
+  const reportData = makeReportData(reportKind, financialReport?.rows ?? [], metrics);
+  const reportTitle = "Financial Report (Summary)";
+  const revenueRows =
+    revenuePeriod === "daily"
+      ? (financialReport?.daily_revenue ?? [])
+      : (financialReport?.monthly_revenue ?? []);
   const appliedFilters = [
-    { label: "Reporting period", value: formatDateRange(from, to) },
+    { label: "Completed on", value: formatDateRange(from, to) },
     { label: "Service category", value: category === "all" ? "All categories" : category },
     { label: "Specific service", value: serviceName === "all" ? "All services" : serviceName },
-    { label: "Booking status", value: status === "all" ? "All statuses" : statusLabel(status) },
+    { label: "Transactions", value: "Completed only" },
   ];
   const reportScope = appliedFilters
     .slice(1)
@@ -257,10 +286,6 @@ function ReportsPage() {
         ...current,
         periodPreset: value,
         ...range,
-        // Month and year presets start as overall booking reports and must
-        // not inherit a previous status selection. Admins can subsequently
-        // select a status, category, or service to narrow the report scope.
-        ...(value === "this_month" || value === "this_year" ? { status: "all" } : {}),
       };
     });
   }
@@ -278,10 +303,20 @@ function ReportsPage() {
     setPage(0);
   }
 
-  async function confirmExport() {
-    if (!pendingExport) return;
+  useEffect(() => {
+    if (!printPayload) return;
+    const timer = window.setTimeout(() => {
+      window.print();
+      setPrintPayload(null);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [printPayload]);
+
+  async function printReport() {
+    if (isPrinting) return;
+    setIsPrinting(true);
     try {
-      setExportError(null);
+      setPrintError(null);
       const allRows = await getAllReportRows({
         reportKind,
         from,
@@ -290,30 +325,53 @@ function ReportsPage() {
         category,
         serviceName,
       });
-      // Export totals and completed metrics are derived from the complete
+      // Print totals and completed metrics are derived from the complete
       // filtered result set, not the currently visible paginated page.
-      const exportData = makeExportData(reportKind, allRows.rows, allRows.metrics, {
+      const completeReportData = makeReportData(reportKind, allRows.rows, allRows.metrics, {
         hasCompleteRows: true,
       });
-      if (pendingExport === "pdf")
-        await exportPdf(exportData, reportKind, reportTitle, reportScope, from, to);
-      if (pendingExport === "docx")
-        await exportDocx(exportData, reportKind, reportTitle, reportScope, from, to);
-      await recordAdminActivityEvent({
-        action: "exported",
-        resourceType: "Reports",
-        targetLabel: reportTitle,
-        summary: `Exported ${allRows.total} ${reportKind === "services" ? "service entries" : "bookings"} as ${pendingExport.toUpperCase()}.`,
-        changedFields: ["report_type", "date_range", "export_format"],
+      setPrintPayload({
+        data: completeReportData,
+        generatedAt: formatBusinessTimestamp(),
+        period: formatDateRange(from, to),
+        reportKind,
+        scope: reportScope,
+        title: reportTitle,
+        ...(allRows.financial
+          ? {
+              financial: {
+                servicePerformance: allRows.financial.service_performance,
+                productSales: allRows.financial.product_sales,
+                revenueTitle: revenuePeriod === "daily" ? "Daily revenue" : "Monthly revenue",
+                revenueRows:
+                  revenuePeriod === "daily"
+                    ? allRows.financial.daily_revenue
+                    : allRows.financial.monthly_revenue,
+              },
+            }
+          : {}),
       });
-    } catch {
-      setExportError("Could not create this report export. Please try again.");
+      try {
+        await recordAdminActivityEvent({
+          action: "printed",
+          resourceType: "Reports",
+          targetLabel: reportTitle,
+          summary: `Opened the print dialog for ${allRows.total} completed transactions.`,
+          changedFields: ["report_type", "date_range", "print_format"],
+        });
+      } catch (error) {
+        // An audit-log failure must not prevent a valid report from printing.
+        console.error("Could not record report print activity:", error);
+      }
+    } catch (error) {
+      console.error("Could not prepare report for printing:", error);
+      setPrintError("Could not prepare this report for printing. Please try again.");
     } finally {
-      setPendingExport(null);
+      setIsPrinting(false);
     }
   }
 
-  const rowLabel = "bookings";
+  const rowLabel = "completed transactions";
 
   return (
     <div>
@@ -323,37 +381,30 @@ function ReportsPage() {
             <BarChart3 className="size-5" aria-hidden="true" />
           </span>
           <div>
-            <h1 className="font-display text-2xl tracking-wide uppercase md:text-3xl">Reports</h1>
+            <h1 className="font-display text-2xl tracking-wide uppercase md:text-3xl">
+              Financial Report (Summary)
+            </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              View booking volume and service activity for a selected period.
+              Track completed revenue, service performance, and product sales for the selected
+              period.
             </p>
           </div>
         </div>
         <div className="w-full sm:w-auto">
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="outline"
-                disabled={!data.data?.total}
-                className="w-full uppercase sm:w-auto"
-              >
-                <Download /> Export selected report
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end">
-              <DropdownMenuItem onSelect={() => setPendingExport("pdf")}>
-                <FileText className="mr-2 h-4 w-4" /> Export PDF table
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={() => setPendingExport("docx")}>
-                <FileText className="mr-2 h-4 w-4" /> Export DOCX document
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!data.data?.total || isPrinting}
+            className="w-full uppercase sm:w-auto"
+            onClick={() => void printReport()}
+          >
+            <Printer /> {isPrinting ? "Preparing print..." : "Print report"}
+          </Button>
         </div>
       </header>
-      {exportError && (
+      {printError && (
         <p role="alert" className="mb-5 text-sm text-destructive">
-          {exportError}
+          {printError}
         </p>
       )}
 
@@ -363,7 +414,7 @@ function ReportsPage() {
             <Filter className="size-4 text-primary" aria-hidden="true" />
             <h2 className="font-display text-base tracking-wide uppercase">Filters</h2>
           </div>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.25fr)_auto] lg:items-end">
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.25fr)_auto] lg:items-end">
             <FilterSelect
               label="Service category"
               value={draftFilters.category}
@@ -400,17 +451,6 @@ function ReportsPage() {
                 </SelectContent>
               </Select>
             </div>
-            <FilterSelect
-              label="Booking status"
-              value={draftFilters.status}
-              onValueChange={(value) =>
-                setDraftFilters((current) => ({ ...current, status: value }))
-              }
-              options={[
-                { value: "all", label: "All statuses" },
-                ...statusOptions.map((value) => ({ value, label: statusLabel(value) })),
-              ]}
-            />
             <div className="min-w-0 space-y-1.5">
               <Label>Period</Label>
               <PeriodPicker
@@ -447,6 +487,10 @@ function ReportsPage() {
               </Button>
             </div>
           </div>
+          <p className="mt-4 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
+            Only completed appointments are included in revenue. Pending, rejected, cancelled, and
+            rescheduled appointments are excluded from all financial totals.
+          </p>
           <div className="mt-4 border-t border-border pt-3" aria-live="polite">
             <p className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
               Applied report scope
@@ -493,37 +537,156 @@ function ReportsPage() {
             </p>
           </div>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           <Stat
-            label="Total Bookings"
-            value={String(metrics?.total_bookings ?? 0)}
-            detail="All bookings in selected period"
-            icon={CalendarDays}
-            iconClassName="bg-chart-4/15 text-chart-4"
-          />
-          <Stat
-            label="Completed Jobs"
-            value={String(metrics?.completed_bookings ?? 0)}
-            detail={'Bookings with status "Completed"'}
-            icon={CheckCircle2}
+            label="Total Revenue"
+            value={formatPHP(metrics?.total_revenue ?? 0)}
+            detail="Completed service and product revenue"
+            icon={CircleDollarSign}
             iconClassName="bg-emerald-500/15 text-emerald-400"
           />
           <Stat
-            label="Revenue (Completed Jobs)"
-            value={formatPHP(metrics?.completed_value ?? 0)}
-            detail="Total amount from completed jobs"
+            label="Service Revenue"
+            value={formatPHP(metrics?.service_revenue ?? 0)}
+            detail="From completed services"
+            icon={CircleDollarSign}
+            iconClassName="bg-primary/15 text-primary"
+          />
+          <Stat
+            label="Product Revenue"
+            value={formatPHP(metrics?.product_revenue ?? 0)}
+            detail="From products sold during service"
             icon={CircleDollarSign}
             iconClassName="bg-accent/15 text-accent"
           />
           <Stat
-            label="Status Groups"
-            value={String(byStatus.length)}
-            detail="Different booking statuses in scope"
-            icon={BarChart3}
+            label="Completed Transactions"
+            value={String(metrics?.completed_transactions ?? 0)}
+            detail="Revenue-recognized appointments"
+            icon={CheckCircle2}
             iconClassName="bg-chart-4/15 text-chart-4"
+          />
+          <Stat
+            label="Total Completed Services"
+            value={String(metrics?.total_completed_services ?? 0)}
+            detail="Service entries performed"
+            icon={CalendarDays}
+            iconClassName="bg-primary/15 text-primary"
+          />
+          <Stat
+            label="Total Products Sold"
+            value={String(metrics?.total_products_sold ?? 0)}
+            detail="Units recorded during completed service"
+            icon={CircleDollarSign}
+            iconClassName="bg-accent/15 text-accent"
+          />
+          <Stat
+            label="Average Transaction"
+            value={formatPHP(metrics?.average_transaction_amount ?? 0)}
+            detail="Average amount per completed transaction"
+            icon={CheckCircle2}
+            iconClassName="bg-emerald-500/15 text-emerald-400"
           />
         </div>
       </section>
+
+      <div className="mb-6 grid gap-4 xl:grid-cols-2">
+        <FinancialTableCard
+          title="Service Performance"
+          description="Completed services and revenue recognized from their saved service prices."
+          headers={["Service", "Completed", "Revenue"]}
+          rows={(financialReport?.service_performance ?? []).map((row) => [
+            row.service_name,
+            String(row.completed_count),
+            formatPHP(row.revenue),
+          ])}
+          emptyMessage="No completed services match this report selection."
+          totalLabel="Total service revenue"
+          totalValue={formatPHP(metrics?.service_revenue ?? 0)}
+        />
+        <FinancialTableCard
+          title="Product Sales"
+          description="Products recorded during completed appointments, grouped by their saved selling price."
+          headers={["Product", "Qty Sold", "Unit Price", "Total Sales"]}
+          rows={(financialReport?.product_sales ?? []).map((row) => [
+            row.product_name,
+            String(row.quantity_sold),
+            formatPHP(row.unit_price),
+            formatPHP(row.total_sales),
+          ])}
+          emptyMessage="No products were sold in completed transactions for this period."
+          totalLabel="Total product revenue"
+          totalValue={formatPHP(metrics?.product_revenue ?? 0)}
+        />
+      </div>
+
+      <Card className="mb-6 border-border/70 bg-card/60">
+        <CardContent className="overflow-x-auto p-0">
+          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-5">
+            <div>
+              <h2 className="font-display text-base tracking-wide uppercase">Revenue over time</h2>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                Completed transaction revenue by {revenuePeriod} period.
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant={revenuePeriod === "daily" ? "default" : "outline"}
+                onClick={() => setRevenuePeriod("daily")}
+              >
+                Daily
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant={revenuePeriod === "monthly" ? "default" : "outline"}
+                onClick={() => setRevenuePeriod("monthly")}
+              >
+                Monthly
+              </Button>
+            </div>
+          </div>
+          <Table className="admin-data-table">
+            <TableHeader>
+              <TableRow>
+                <TableHead>{revenuePeriod === "daily" ? "Date" : "Month"}</TableHead>
+                <TableHead className="text-right">Transactions</TableHead>
+                <TableHead className="text-right">Service Revenue</TableHead>
+                <TableHead className="text-right">Product Revenue</TableHead>
+                <TableHead className="text-right">Total Revenue</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {revenueRows.map((row) => (
+                <TableRow key={row.period}>
+                  <TableCell className="text-sm">
+                    {formatRevenuePeriod(row.period, revenuePeriod)}
+                  </TableCell>
+                  <TableCell className="text-right text-sm">{row.completed_transactions}</TableCell>
+                  <TableCell className="text-right text-sm">
+                    {formatPHP(row.service_revenue)}
+                  </TableCell>
+                  <TableCell className="text-right text-sm">
+                    {formatPHP(row.product_revenue)}
+                  </TableCell>
+                  <TableCell className="text-right text-sm font-medium text-primary">
+                    {formatPHP(row.total_revenue)}
+                  </TableCell>
+                </TableRow>
+              ))}
+              {!data.isLoading && revenueRows.length === 0 && (
+                <TableRow>
+                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                    No completed revenue is available for this period.
+                  </TableCell>
+                </TableRow>
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
 
       <Card className="border-border/70 bg-card/60">
         <CardContent className="overflow-x-auto p-0">
@@ -532,7 +695,7 @@ function ReportsPage() {
               <ListFilter className="size-4 text-primary" aria-hidden="true" />
               <div>
                 <h2 className="font-display text-base tracking-wide uppercase">
-                  Bookings for Selected Period
+                  Completed Transactions
                 </h2>
                 <p className="mt-0.5 text-xs text-muted-foreground">{reportScope}</p>
               </div>
@@ -545,31 +708,35 @@ function ReportsPage() {
           <Table className="admin-data-table">
             <TableHeader>
               <TableRow>
-                {preview.headers.map((header) => (
+                {reportData.headers.map((header) => (
                   <TableHead key={header}>{header}</TableHead>
                 ))}
               </TableRow>
             </TableHeader>
             <TableBody>
-              {preview.rows.map((row, index) => (
+              {reportData.rows.map((row, index) => (
                 <TableRow key={`${row[0]}-${index}`}>
                   {row.map((cell, cellIndex) => (
                     <TableCell
                       key={`${cellIndex}-${cell}`}
-                      data-label={preview.headers[cellIndex]}
+                      data-label={reportData.headers[cellIndex]}
                       className="text-sm"
                     >
-                      {preview.headers[cellIndex] === "Status" ? (
+                      {reportData.headers[cellIndex] === "Status" ? (
                         <Badge
                           variant="outline"
                           className={cn(
                             "text-[10px] uppercase",
-                            statusTone(data.data?.rows[index]?.status ?? ""),
+                            statusTone(
+                              data.data?.rows[index] && "status" in data.data.rows[index]
+                                ? data.data.rows[index].status
+                                : "",
+                            ),
                           )}
                         >
                           {cell}
                         </Badge>
-                      ) : preview.headers[cellIndex] === "Service" ? (
+                      ) : reportData.headers[cellIndex] === "Services" ? (
                         <ReportServicesCell
                           value={cell}
                           referenceCode={row[0] ?? "this booking"}
@@ -584,10 +751,10 @@ function ReportsPage() {
                   ))}
                 </TableRow>
               ))}
-              {!data.isLoading && preview.rows.length === 0 && (
+              {!data.isLoading && reportData.rows.length === 0 && (
                 <TableRow>
                   <TableCell
-                    colSpan={preview.headers.length}
+                    colSpan={reportData.headers.length}
                     className="py-10 text-center text-sm text-muted-foreground"
                   >
                     No {rowLabel} match this report selection.
@@ -642,196 +809,8 @@ function ReportsPage() {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog
-        open={pendingExport !== null}
-        onOpenChange={(open) => !open && setPendingExport(null)}
-      >
-        <AlertDialogContent className="max-w-xl">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Confirm {pendingExport?.toUpperCase()} export</AlertDialogTitle>
-            <AlertDialogDescription>
-              You are about to export the selected {reportTitle.toLowerCase()} as a{" "}
-              <strong className="font-medium text-foreground">
-                {pendingExport?.toUpperCase()}
-              </strong>{" "}
-              file with all {data.data?.total ?? 0} {rowLabel}.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <ExportFormatPreview
-            format={pendingExport}
-            reportKind={reportKind}
-            title={reportTitle}
-            period={formatDateRange(from, to)}
-            scope={reportScope}
-            data={preview}
-          />
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmExport}>
-              Export {pendingExport?.toUpperCase()}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <PrintReport payload={printPayload} />
     </div>
-  );
-}
-
-function ExportFormatPreview({
-  format,
-  reportKind,
-  title,
-  period,
-  scope,
-  data,
-}: {
-  format: ExportType | null;
-  reportKind: ReportKind;
-  title: string;
-  period: string;
-  scope: string;
-  data: ExportData;
-}) {
-  const isDocx = format === "docx";
-  const formatLabel = isDocx ? "Word document (.docx)" : "PDF document (.pdf)";
-  const previewRows = data.rows.slice(0, 3);
-
-  return (
-    <div className="rounded-lg border border-border bg-muted/20 p-3 sm:p-4">
-      <div className="mb-3 flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <span className="grid size-8 place-items-center rounded-md bg-primary/10 text-primary">
-            <FileText className="size-4" aria-hidden="true" />
-          </span>
-          <div>
-            <p className="text-sm font-medium">{formatLabel}</p>
-            <p className="text-xs text-muted-foreground">Export preview</p>
-          </div>
-        </div>
-        <span className="rounded border border-border bg-background px-2 py-1 text-[10px] font-medium tracking-wide text-muted-foreground uppercase">
-          {format}
-        </span>
-      </div>
-
-      <div className="rounded-md border border-border bg-muted/60 p-3 sm:p-4">
-        <div className="mx-auto aspect-[297/210] w-full max-w-2xl overflow-hidden bg-background px-3 py-2 font-sans text-foreground shadow-md sm:px-4 sm:py-3">
-          <div className="flex items-center justify-between gap-3 rounded-md bg-foreground px-3 py-2 text-background">
-            <div className="flex min-w-0 items-center gap-2">
-              <img src={exportLogoUrl} alt="" className="h-10 w-[4.5rem] shrink-0 object-contain" />
-              <div className="min-w-0">
-                <p className="truncate text-[8px] font-bold tracking-wide">{SHOP_EXPORT_NAME}</p>
-                <p className="truncate text-[5px] opacity-80">{SHOP.tagline}</p>
-              </div>
-            </div>
-            <div className="shrink-0 text-right">
-              <p className="text-[7px] font-bold uppercase">{title}</p>
-              <p className="mt-0.5 text-[5px] opacity-80">Generated {formatBusinessTimestamp()}</p>
-            </div>
-          </div>
-          <div className="mt-2 rounded border border-border bg-muted/40 px-2 py-1">
-            <p className="text-[5px] font-bold tracking-wider text-primary uppercase">
-              Report period
-            </p>
-            <p className="text-[7px] font-semibold">{period}</p>
-            <p className="text-[4px] leading-tight text-muted-foreground">Filters: {scope}</p>
-          </div>
-          <p className="mt-2 flex items-center gap-2 text-[6px] font-bold tracking-wide uppercase">
-            <span className="h-px flex-1 bg-primary/60" />
-            <span>Report summary</span>
-            <span className="h-px flex-1 bg-primary/60" />
-          </p>
-          <div className="mt-1 grid grid-cols-2 gap-x-4 gap-y-1 border-y border-primary/30 py-1.5">
-            {data.cards.map((card) => (
-              <div key={card.label} className="flex min-w-0 items-baseline gap-1">
-                <p className="truncate text-[4px] font-bold tracking-wide text-muted-foreground uppercase">
-                  {card.label}:
-                </p>
-                <p className="truncate text-[6px] font-semibold text-foreground">{card.value}</p>
-              </div>
-            ))}
-          </div>
-          <p className="mt-2 flex items-center gap-2 text-[6px] font-bold tracking-wide uppercase">
-            <span className="h-px flex-1 bg-primary/60" />
-            <span>
-              {reportKind === "services" ? "Service entries" : "Bookings for selected period"}
-            </span>
-            <span className="h-px flex-1 bg-primary/60" />
-          </p>
-          <ExportDocumentTable data={data} rows={previewRows} variant={isDocx ? "docx" : "pdf"} />
-          <div className="mt-5 flex justify-between gap-4 text-[4px] text-muted-foreground">
-            <span>Prepared By: ____________________</span>
-            <span className="text-right">
-              Approved By: <strong className="text-foreground">{SHOP_OWNER_NAME}</strong> · Shop
-              Owner
-            </span>
-          </div>
-        </div>
-      </div>
-      <p className="mt-2 text-xs text-muted-foreground">
-        This preview mirrors the actual {isDocx ? "Word document" : "PDF"} layout. The exported file
-        includes the complete table.
-      </p>
-    </div>
-  );
-}
-
-function ExportDocumentTable({
-  data,
-  rows,
-  variant,
-}: {
-  data: ExportData;
-  rows: string[][];
-  variant: "pdf" | "docx";
-}) {
-  return (
-    <table className="mt-2 w-full table-fixed border-collapse text-[4px] leading-tight">
-      <thead className="bg-foreground text-background">
-        <tr>
-          {data.headers.map((header, index) => (
-            <th
-              key={header}
-              className={cn(
-                "truncate border border-border px-0.5 py-0.5 text-left font-bold",
-                index === data.headers.length - 1 && "text-right",
-              )}
-            >
-              {header}
-            </th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map((row, index) => (
-          <tr key={`${row.join("-")}-${index}`}>
-            {row.map((cell, cellIndex) => (
-              <td
-                key={`${cell}-${cellIndex}`}
-                className={cn(
-                  "truncate border border-border px-0.5 py-0.5",
-                  cellIndex === row.length - 1 && "text-right",
-                )}
-              >
-                {cell}
-              </td>
-            ))}
-          </tr>
-        ))}
-      </tbody>
-      <tfoot className="bg-muted/60 font-bold">
-        <tr>
-          <td
-            colSpan={data.headers.length - 1}
-            className="border border-border px-0.5 py-0.5 text-right"
-          >
-            Total Amount
-          </td>
-          <td className="border border-border px-0.5 py-0.5 text-right text-primary">
-            {formatPHP(data.totalAmount)}
-          </td>
-        </tr>
-      </tfoot>
-    </table>
   );
 }
 
@@ -866,6 +845,80 @@ function ReportServicesCell({
         See More
       </Button>
     </div>
+  );
+}
+
+function FinancialTableCard({
+  title,
+  description,
+  headers,
+  rows,
+  emptyMessage,
+  totalLabel,
+  totalValue,
+}: {
+  title: string;
+  description: string;
+  headers: string[];
+  rows: string[][];
+  emptyMessage: string;
+  totalLabel: string;
+  totalValue: string;
+}) {
+  return (
+    <Card className="border-border/70 bg-card/60">
+      <CardContent className="overflow-x-auto p-0">
+        <div className="border-b border-border px-4 py-4 sm:px-5">
+          <h2 className="font-display text-base tracking-wide uppercase">{title}</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+        </div>
+        <Table className="admin-data-table">
+          <TableHeader>
+            <TableRow>
+              {headers.map((header) => (
+                <TableHead key={header} className={header === headers[0] ? "" : "text-right"}>
+                  {header}
+                </TableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((row, index) => (
+              <TableRow key={`${row[0]}-${index}`}>
+                {row.map((cell, cellIndex) => (
+                  <TableCell
+                    key={`${cell}-${cellIndex}`}
+                    className={cn("text-sm", cellIndex > 0 && "text-right")}
+                  >
+                    {cell}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+            {rows.length === 0 && (
+              <TableRow>
+                <TableCell
+                  colSpan={headers.length}
+                  className="py-8 text-center text-sm text-muted-foreground"
+                >
+                  {emptyMessage}
+                </TableCell>
+              </TableRow>
+            )}
+          </TableBody>
+          <tfoot>
+            <TableRow className="border-t border-border bg-muted/40">
+              <TableCell colSpan={headers.length - 1} className="text-right text-sm font-medium">
+                {totalLabel}
+              </TableCell>
+              <TableCell className="text-right text-sm font-medium text-primary">
+                {totalValue}
+              </TableCell>
+            </TableRow>
+          </tfoot>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }
 
@@ -921,91 +974,97 @@ function PeriodPicker({
   onValueChange: (value: PeriodPreset) => void;
   onRangeChange: (range: { from: string; to: string }) => void;
 }) {
-  const [customOpen, setCustomOpen] = useState(false);
-  const customOpenTimer = useRef<number | null>(null);
+  const [customDialogOpen, setCustomDialogOpen] = useState(false);
+  const [isSelectingCustomRange, setIsSelectingCustomRange] = useState(false);
   const selectedRange = from
-    ? { from: dateFromIso(from), to: to ? dateFromIso(to) : undefined }
+    ? { from: isoDateToCalendarDate(from), to: to ? isoDateToCalendarDate(to) : undefined }
     : undefined;
   const [draftRange, setDraftRange] = useState<DateRange | undefined>(selectedRange);
-  const [calendarMonth, setCalendarMonth] = useState<Date>(() => selectedRange?.from ?? new Date());
+  const [calendarMonth, setCalendarMonth] = useState<Date>(
+    () => selectedRange?.from ?? isoDateToCalendarDate(manilaNow().date),
+  );
+  const draftFrom = draftRange?.from ? calendarDateToIso(draftRange.from) : "";
+  const draftTo = draftRange?.to ? calendarDateToIso(draftRange.to) : "";
+  const draftRangeError =
+    !draftFrom || !draftTo
+      ? "Select both a start and end date."
+      : draftFrom > draftTo
+        ? "The end date must be on or after the start date."
+        : undefined;
 
-  function clearPendingCustomOpen() {
-    if (customOpenTimer.current === null) return;
-    window.clearTimeout(customOpenTimer.current);
-    customOpenTimer.current = null;
-  }
+  useEffect(() => {
+    if (!isSelectingCustomRange || customDialogOpen) return;
+    const timeout = window.setTimeout(() => setCustomDialogOpen(true), 0);
+    return () => window.clearTimeout(timeout);
+  }, [customDialogOpen, isSelectingCustomRange]);
 
-  useEffect(() => clearPendingCustomOpen, []);
-
-  function scheduleCustomOpen() {
-    clearPendingCustomOpen();
+  function startCustomRangeSelection() {
+    setIsSelectingCustomRange(true);
     setDraftRange(selectedRange);
-    setCalendarMonth(selectedRange?.from ?? new Date());
-    // Wait until Radix Select has finished restoring focus to its trigger.
-    // Opening sooner makes the Popover see that focus restoration as an
-    // outside interaction and dismiss itself immediately.
-    customOpenTimer.current = window.setTimeout(() => {
-      customOpenTimer.current = null;
-      setCustomOpen(true);
-    }, 100);
+    setCalendarMonth(selectedRange?.from ?? isoDateToCalendarDate(manilaNow().date));
   }
 
   function handlePeriodValueChange(nextValue: string) {
     const nextPeriod = nextValue as PeriodPreset;
     if (nextPeriod !== "custom") {
-      clearPendingCustomOpen();
+      setIsSelectingCustomRange(false);
       onValueChange(nextPeriod);
-      setCustomOpen(false);
+      setCustomDialogOpen(false);
       return;
     }
 
-    onValueChange("custom");
-    scheduleCustomOpen();
+    startCustomRangeSelection();
+  }
+
+  function cancelCustomRange() {
+    setDraftRange(selectedRange);
+    setIsSelectingCustomRange(false);
+    setCustomDialogOpen(false);
+  }
+
+  function updateDraftDate(boundary: "from" | "to", value: string) {
+    const date = value ? isoDateToCalendarDate(value) : undefined;
+    setDraftRange((current) => {
+      const next =
+        boundary === "from" ? { from: date, to: current?.to } : { from: current?.from, to: date };
+      return next.from || next.to ? next : undefined;
+    });
+    if (date) setCalendarMonth(date);
   }
 
   return (
     <div className="space-y-1.5">
-      <Popover
-        open={customOpen}
+      <Select
+        value={isSelectingCustomRange ? "custom" : value}
+        onValueChange={handlePeriodValueChange}
+      >
+        <SelectTrigger aria-label="Select report period" aria-invalid={Boolean(error)}>
+          <CalendarRange className="mr-2 size-4 shrink-0 text-muted-foreground" />
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {periodOptions.map((option) => (
+            <SelectItem key={option.value} value={option.value}>
+              {option.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Dialog
+        open={customDialogOpen}
         onOpenChange={(nextOpen) => {
-          if (!nextOpen) clearPendingCustomOpen();
-          setCustomOpen(nextOpen);
+          if (nextOpen) {
+            setCustomDialogOpen(true);
+            return;
+          }
+          cancelCustomRange();
         }}
       >
-        <PopoverAnchor asChild>
-          <div>
-            <Select value={value} onValueChange={handlePeriodValueChange}>
-              <SelectTrigger aria-label="Select report period" aria-invalid={Boolean(error)}>
-                <CalendarRange className="mr-2 size-4 shrink-0 text-muted-foreground" />
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {periodOptions.map((option) => (
-                  <SelectItem
-                    key={option.value}
-                    value={option.value}
-                    onPointerDown={option.value === "custom" ? scheduleCustomOpen : undefined}
-                    onKeyDown={(event) => {
-                      if (
-                        option.value === "custom" &&
-                        (event.key === "Enter" || event.key === " ")
-                      ) {
-                        scheduleCustomOpen();
-                      }
-                    }}
-                  >
-                    {option.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        </PopoverAnchor>
-        <PopoverContent align="start" className="w-auto max-w-[calc(100vw-2rem)] p-2">
-          <div className="px-1 pb-2">
-            <p className="text-sm font-medium">Custom date range</p>
-            <p className="text-xs text-muted-foreground">Select a start date and an end date.</p>
-          </div>
+        <DialogContent className="w-auto max-w-[calc(100vw-2rem)] p-4 sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="font-display uppercase">Custom date range</DialogTitle>
+            <DialogDescription>Select a start date and an end date.</DialogDescription>
+          </DialogHeader>
           <Calendar
             mode="range"
             selected={draftRange}
@@ -1016,55 +1075,53 @@ function PeriodPicker({
               nav: "inset-x-auto left-1/2 w-48 -translate-x-1/2 justify-between",
             }}
           />
-          <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
-            <DateRangeValue label="Start date" value={draftRange?.from} />
-            <DateRangeValue label="End date" value={draftRange?.to} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="report-custom-start-date">Start date</Label>
+              <Input
+                id="report-custom-start-date"
+                type="date"
+                value={draftFrom}
+                max={draftTo || undefined}
+                aria-invalid={Boolean(draftRangeError)}
+                onChange={(event) => updateDraftDate("from", event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="report-custom-end-date">End date</Label>
+              <Input
+                id="report-custom-end-date"
+                type="date"
+                value={draftTo}
+                min={draftFrom || undefined}
+                aria-invalid={Boolean(draftRangeError)}
+                onChange={(event) => updateDraftDate("to", event.target.value)}
+              />
+            </div>
           </div>
-          <div className="mt-3 flex justify-end gap-2 border-t border-border pt-3">
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setDraftRange(selectedRange);
-                setCustomOpen(false);
-              }}
-            >
+          <FieldError message={draftRangeError} />
+          <DialogFooter className="mt-1 border-t border-border pt-3">
+            <Button type="button" variant="outline" onClick={cancelCustomRange}>
               Cancel
             </Button>
             <Button
               type="button"
-              size="sm"
-              disabled={!draftRange?.from || !draftRange.to}
+              disabled={Boolean(draftRangeError)}
               onClick={() => {
-                if (!draftRange?.from || !draftRange.to) return;
-                const draftFrom = format(draftRange.from, "yyyy-MM-dd");
-                const draftTo = format(draftRange.to, "yyyy-MM-dd");
-                onRangeChange(
-                  draftFrom <= draftTo
-                    ? { from: draftFrom, to: draftTo }
-                    : { from: draftTo, to: draftFrom },
-                );
-                setCustomOpen(false);
+                if (draftRangeError) return;
+                const range = calendarRangeToIso(draftRange);
+                if (!range) return;
+                setIsSelectingCustomRange(false);
+                onRangeChange(range);
+                setCustomDialogOpen(false);
               }}
             >
               Apply
             </Button>
-          </div>
-        </PopoverContent>
-      </Popover>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       <FieldError message={error} />
-    </div>
-  );
-}
-
-function DateRangeValue({ label, value }: { label: string; value: Date | undefined }) {
-  return (
-    <div className="rounded-md border border-border bg-muted/30 px-2 py-1.5">
-      <p className="text-[10px] tracking-wide text-muted-foreground uppercase">{label}</p>
-      <p className="mt-0.5 truncate font-medium text-foreground">
-        {value ? format(value, "MMM d, yyyy") : "Not selected"}
-      </p>
     </div>
   );
 }
@@ -1079,6 +1136,22 @@ async function getReportPage(input: {
   limit: number;
   offset: number;
 }) {
+  if (input.reportKind === "financial") {
+    const { data, error } = await supabase.rpc("get_completed_financial_report_page", {
+      p_from: input.from,
+      p_to: input.to,
+      p_category: input.category === "all" ? null : input.category,
+      p_service_name: input.serviceName === "all" ? null : input.serviceName,
+      p_limit: input.limit,
+      p_offset: input.offset,
+    });
+    if (error) throw error;
+    if (!data || typeof data !== "object" || !Array.isArray((data as FinancialReportPage).rows)) {
+      throw new Error("The financial report response was incomplete.");
+    }
+    return data as unknown as FinancialReportPage;
+  }
+
   const { data, error } = await supabase.rpc("get_admin_report_page", {
     p_report_kind: input.reportKind,
     p_from: input.from,
@@ -1090,6 +1163,9 @@ async function getReportPage(input: {
     p_offset: input.offset,
   });
   if (error) throw error;
+  if (!data || typeof data !== "object" || !Array.isArray((data as ReportPage).rows)) {
+    throw new Error("The report response was incomplete.");
+  }
   return data as unknown as ReportPage;
 }
 
@@ -1098,33 +1174,112 @@ async function getAllReportRows(
 ) {
   const limit = 250;
   let offset = 0;
-  let first: ReportPage | null = null;
-  let rows: Array<BookingRow | ServiceRow> = [];
+  let first: FinancialReportPage | ReportPage | null = null;
+  let rows: Array<FinancialTransactionRow | BookingRow | ServiceRow> = [];
   do {
     const current = await getReportPage({ ...input, limit, offset });
     first ??= current;
+    if (current.rows.length === 0 && offset < current.total) {
+      throw new Error("The report printout could not retrieve all matching rows.");
+    }
     rows = rows.concat(current.rows);
     offset += current.rows.length;
   } while (first && offset < first.total);
-  return { rows, total: first?.total ?? 0, metrics: first?.metrics };
+  return {
+    rows,
+    total: first?.total ?? 0,
+    metrics: first?.metrics,
+    financial: input.reportKind === "financial" ? (first as FinancialReportPage | null) : undefined,
+  };
 }
 
-function makeExportData(
+function makeReportData(
   reportKind: ReportKind,
-  rows: Array<BookingRow | ServiceRow>,
-  metrics?: ReportMetrics,
+  rows: Array<FinancialTransactionRow | BookingRow | ServiceRow>,
+  metrics?: FinancialMetrics | ReportMetrics,
   options: { hasCompleteRows?: boolean } = {},
-): ExportData {
+): ReportData {
+  if (reportKind === "financial") {
+    const financialRows = rows as FinancialTransactionRow[];
+    const financialMetrics = metrics as FinancialMetrics | undefined;
+    const serviceAmount = sumMoney(financialRows.map((row) => row.service_amount));
+    const productAmount = sumMoney(financialRows.map((row) => row.product_amount));
+    const totalAmount = sumMoney(financialRows.map((row) => row.total_amount));
+    return {
+      headers: [
+        "Reference",
+        "Date",
+        "Services",
+        "Products",
+        "Service Amount",
+        "Product Amount",
+        "Total Amount",
+      ],
+      rows: financialRows.map((row) => [
+        row.reference_code,
+        formatDateLong(row.transaction_date),
+        row.services || "-",
+        row.products || "-",
+        formatPHP(row.service_amount),
+        formatPHP(row.product_amount),
+        formatPHP(row.total_amount),
+      ]),
+      cards: [
+        {
+          label: "Total revenue",
+          value: formatPHP(
+            options.hasCompleteRows
+              ? totalAmount
+              : (financialMetrics?.total_revenue ?? totalAmount),
+          ),
+          detail: "Completed transactions only",
+          tone: "success",
+        },
+        {
+          label: "Service revenue",
+          value: formatPHP(
+            options.hasCompleteRows
+              ? serviceAmount
+              : (financialMetrics?.service_revenue ?? serviceAmount),
+          ),
+          detail: "Completed service charges",
+          tone: "primary",
+        },
+        {
+          label: "Product revenue",
+          value: formatPHP(
+            options.hasCompleteRows
+              ? productAmount
+              : (financialMetrics?.product_revenue ?? productAmount),
+          ),
+          detail: "Products sold during service",
+          tone: "accent",
+        },
+        {
+          label: "Completed transactions",
+          value: String(
+            options.hasCompleteRows
+              ? financialRows.length
+              : (financialMetrics?.completed_transactions ?? financialRows.length),
+          ),
+          detail: "Revenue-recognized appointments",
+          tone: "chart",
+        },
+      ],
+      totalAmount,
+    };
+  }
   if (reportKind === "services") {
+    const legacyMetrics = metrics as ReportMetrics | undefined;
     const serviceRows = rows as ServiceRow[];
     const completedRows = serviceRows.filter((row) => row.status === "completed");
     const completeValue = sumMoney(completedRows.map((row) => row.price));
     const selectedAmount = sumMoney(serviceRows.map((row) => row.price));
     const totalAmount = options.hasCompleteRows
       ? selectedAmount
-      : metrics?.total_value === undefined
+      : legacyMetrics?.total_value === undefined
         ? selectedAmount
-        : moneyValue(metrics.total_value);
+        : moneyValue(legacyMetrics.total_value);
     return {
       headers: ["Reference", "Customer", "Date", "Status", "Service", "Category", "Value"],
       rows: serviceRows.map((row) => [
@@ -1145,14 +1300,14 @@ function makeExportData(
         },
         {
           label: "Bookings served",
-          value: String(metrics?.total_bookings ?? 0),
+          value: String(legacyMetrics?.total_bookings ?? 0),
           detail: "Bookings represented",
           tone: "chart",
         },
         {
           label: "Completed entries",
           value: String(
-            options.hasCompleteRows ? completedRows.length : (metrics?.completed_rows ?? 0),
+            options.hasCompleteRows ? completedRows.length : (legacyMetrics?.completed_rows ?? 0),
           ),
           detail: "Jobs with status Completed",
           tone: "success",
@@ -1160,7 +1315,7 @@ function makeExportData(
         {
           label: "Completed value",
           value: formatPHP(
-            options.hasCompleteRows ? completeValue : (metrics?.completed_value ?? 0),
+            options.hasCompleteRows ? completeValue : (legacyMetrics?.completed_value ?? 0),
           ),
           detail: "Value from completed jobs",
           tone: "accent",
@@ -1169,57 +1324,91 @@ function makeExportData(
       totalAmount,
     };
   }
+  const legacyMetrics = metrics as ReportMetrics | undefined;
   const bookingRows = rows as BookingRow[];
   const completedBookings = bookingRows.filter((row) => row.status === "completed");
-  const completedValue = sumMoney(completedBookings.map((row) => row.total_estimate));
-  const selectedAmount = sumMoney(bookingRows.map((row) => row.total_estimate));
+  const completedValue = sumMoney(completedBookings.map(bookingTotal));
+  const selectedServiceSubtotal = sumMoney(bookingRows.map(bookingServiceSubtotal));
+  const selectedProductSubtotal = sumMoney(bookingRows.map(bookingProductSubtotal));
+  const selectedAmount = sumMoney(bookingRows.map(bookingTotal));
   const totalAmount = options.hasCompleteRows
     ? selectedAmount
-    : metrics?.total_value === undefined
+    : legacyMetrics?.total_value === undefined
       ? selectedAmount
-      : moneyValue(metrics.total_value);
+      : moneyValue(legacyMetrics.total_value);
   return {
-    headers: ["Reference", "Customer", "Date", "Service", "Status", "Amount"],
+    headers: [
+      "Reference",
+      "Customer",
+      "Date",
+      "Status",
+      "Services",
+      "Products",
+      "Service subtotal",
+      "Product subtotal",
+      "Total",
+    ],
     rows: bookingRows.map((row) => [
       row.reference_code,
       row.customer_name,
       formatDateLong(row.appointment_date),
-      row.service || "—",
       statusLabel(row.status),
-      formatPHP(row.total_estimate),
+      row.service || "—",
+      row.products || "—",
+      formatPHP(bookingServiceSubtotal(row)),
+      formatPHP(bookingProductSubtotal(row)),
+      formatPHP(bookingTotal(row)),
     ]),
     cards: [
       {
         label: "Total bookings",
-        value: String(metrics?.total_bookings ?? 0),
+        value: String(legacyMetrics?.total_bookings ?? 0),
         detail: "All bookings in selected period",
         tone: "primary",
       },
       {
-        label: "Completed jobs",
-        value: String(
-          options.hasCompleteRows ? completedBookings.length : (metrics?.completed_bookings ?? 0),
+        label: "Service charges",
+        value: formatPHP(
+          options.hasCompleteRows
+            ? selectedServiceSubtotal
+            : (legacyMetrics?.service_total ?? selectedServiceSubtotal),
         ),
-        detail: 'Jobs with status "Completed"',
-        tone: "success",
+        detail: "Service subtotal",
+        tone: "primary",
       },
       {
-        label: "Revenue (completed jobs)",
+        label: "Product charges",
         value: formatPHP(
-          options.hasCompleteRows ? completedValue : (metrics?.completed_value ?? 0),
+          options.hasCompleteRows
+            ? selectedProductSubtotal
+            : (legacyMetrics?.product_total ?? selectedProductSubtotal),
         ),
-        detail: "Total amount from completed jobs",
+        detail: "Products recorded during service",
         tone: "accent",
       },
       {
-        label: "Status groups",
-        value: String(Object.keys(metrics?.status_counts ?? {}).length),
-        detail: "Different booking status groups",
-        tone: "chart",
+        label: "Completed amount",
+        value: formatPHP(
+          options.hasCompleteRows ? completedValue : (legacyMetrics?.completed_value ?? 0),
+        ),
+        detail: "Service and product charges for completed jobs",
+        tone: "success",
       },
     ],
     totalAmount,
   };
+}
+
+function bookingServiceSubtotal(row: BookingRow) {
+  return moneyValue(row.service_subtotal ?? row.total_estimate);
+}
+
+function bookingProductSubtotal(row: BookingRow) {
+  return moneyValue(row.product_subtotal);
+}
+
+function bookingTotal(row: BookingRow) {
+  return moneyValue(row.total_amount ?? bookingServiceSubtotal(row) + bookingProductSubtotal(row));
 }
 
 function moneyValue(value: number | string | null | undefined) {
@@ -1229,6 +1418,11 @@ function moneyValue(value: number | string | null | undefined) {
 
 function sumMoney(values: Array<number | string | null | undefined>) {
   return values.reduce<number>((total, value) => total + moneyValue(value), 0);
+}
+
+function formatRevenuePeriod(period: string, kind: "daily" | "monthly") {
+  const date = isoDateToCalendarDate(period);
+  return format(date, kind === "daily" ? "MMM d, yyyy" : "MMMM yyyy");
 }
 
 function getInitialFilters(today: string): ReportFilters {
@@ -1242,18 +1436,14 @@ function getInitialFilters(today: string): ReportFilters {
   };
 }
 
-function dateFromIso(value: string) {
-  return new Date(`${value}T12:00:00`);
-}
-
 function formatDateRange(from: string, to: string) {
   if (!from) return "Select custom dates";
 
-  const fromDate = dateFromIso(from);
+  const fromDate = isoDateToCalendarDate(from);
   const fromLabel = format(fromDate, "MMM d, yyyy");
   if (!to) return `${fromLabel} to Select end date`;
 
-  const toDate = dateFromIso(to);
+  const toDate = isoDateToCalendarDate(to);
   return fromDate.getFullYear() === toDate.getFullYear()
     ? `${format(fromDate, "MMM d")} to ${format(toDate, "MMM d, yyyy")}`
     : `${fromLabel} to ${format(toDate, "MMM d, yyyy")}`;
@@ -1262,23 +1452,13 @@ function formatDateRange(from: string, to: string) {
 function periodRange(preset: Exclude<PeriodPreset, "custom">, today: string) {
   if (preset === "today") return { from: today, to: today };
   if (preset === "this_week") {
-    const day = new Date(`${today}T00:00:00`).getDay();
-    const from = addDays(today, -((day + 6) % 7));
-    return { from, to: addDays(from, 6) };
+    return manilaWeekDateRange(today);
   }
-  if (preset === "this_year") {
-    const year = today.slice(0, 4);
-    return { from: `${year}-01-01`, to: `${year}-12-31` };
-  }
-
-  const [year = 1970, month = 1] = today.slice(0, 7).split("-").map(Number);
-  const lastDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
-  return {
-    from: `${today.slice(0, 8)}01`,
-    to: `${today.slice(0, 8)}${String(lastDay).padStart(2, "0")}`,
-  };
+  if (preset === "this_year") return manilaYearDateRange(today);
+  return manilaMonthDateRange(today);
 }
 
+/* Removed file-export implementation. Reports now use the browser print system.
 async function addReportPdfFont(doc: import("jspdf").jsPDF) {
   const response = await fetch(reportPdfFontUrl);
   if (!response.ok) throw new Error("Could not load the PDF export font.");
@@ -1870,6 +2050,261 @@ function downloadBlob(contents: BlobPart, filename: string, type: string) {
 }
 function fileName(reportKind: ReportKind) {
   return reportKind === "services" ? "service-activity-report" : "booking-report";
+}
+*/
+
+const REPORT_PRINT_STYLES = `
+  .report-print-root { display: none; }
+
+  @page { size: A4 landscape; margin: 12mm; }
+
+  @media print {
+    body * { visibility: hidden !important; }
+    .report-print-root,
+    .report-print-root * { visibility: visible !important; }
+    .report-print-root {
+      position: fixed;
+      inset: 0;
+      display: block !important;
+      width: 100%;
+      min-height: 100%;
+      background: #fff;
+      color: #1f2937;
+      font-family: Arial, Helvetica, sans-serif;
+    }
+    .report-print-document { width: 100%; }
+    .report-print-header,
+    .report-print-meta,
+    .report-print-summary,
+    .report-print-footer { break-inside: avoid; }
+    .report-print-header {
+      display: grid;
+      grid-template-columns: 34mm 1fr 42mm;
+      align-items: center;
+      gap: 8mm;
+    }
+    .report-print-logo { width: 31mm; height: auto; object-fit: contain; }
+    .report-print-heading { text-align: center; }
+    .report-print-heading p { margin: 0; font-size: 8pt; letter-spacing: .08em; text-transform: uppercase; }
+    .report-print-heading p:nth-child(2) { margin-top: 1mm; font-size: 7pt; letter-spacing: .03em; text-transform: none; }
+    .report-print-heading h1 { margin: 3mm 0 2mm; font-size: 18pt; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+    .report-print-heading p:last-child { font-size: 7pt; font-weight: 700; }
+    .report-print-generated { margin: 0; text-align: right; font-size: 7pt; line-height: 1.45; color: #4b5563; }
+    .report-print-rule { height: 1.25pt; margin: 5mm 0 4mm; background: #0f5b49; }
+    .report-print-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8mm; font-size: 8pt; }
+    .report-print-meta div:last-child { text-align: right; }
+    .report-print-meta span,
+    .report-print-summary span { display: block; color: #4b5563; font-size: 7pt; text-transform: uppercase; letter-spacing: .04em; }
+    .report-print-meta strong { display: block; margin-top: 1mm; font-size: 9pt; font-weight: 600; }
+    .report-print-section { margin-top: 6mm; }
+    .report-print-section h2 { margin: 0 0 3mm; font-size: 11pt; font-weight: 700; }
+    .report-print-summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); border-top: .75pt solid #9ca3af; border-bottom: .75pt solid #9ca3af; }
+    .report-print-summary-grid > div { min-height: 17mm; padding: 3mm; border-right: .75pt solid #d1d5db; }
+    .report-print-summary-grid > div:last-child { border-right: 0; }
+    .report-print-summary-grid strong { display: block; margin-top: 1.5mm; font-size: 12pt; }
+    .report-print-summary-grid small { display: block; margin-top: 1mm; color: #4b5563; font-size: 7pt; }
+    .report-print-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7.5pt; }
+    .report-print-table thead { display: table-header-group; background: #e5e7eb; }
+    .report-print-table th,
+    .report-print-table td { border: .75pt solid #6b7280; padding: 2.25mm 2mm; vertical-align: top; overflow-wrap: anywhere; }
+    .report-print-table th { font-size: 7pt; text-align: left; font-weight: 700; }
+    .report-print-table th:last-child,
+    .report-print-table td:last-child { text-align: right; }
+    .report-print-table tr { break-inside: avoid; }
+    .report-print-table tbody tr:nth-child(even) { background: #f9fafb; }
+    .report-print-table tfoot { display: table-row-group; font-weight: 700; background: #f3f4f6; }
+    .report-print-table tfoot td:first-child { text-align: right; text-transform: uppercase; }
+    .report-print-footer { display: grid; grid-template-columns: 1fr 1fr; gap: 30mm; margin-top: 16mm; font-size: 8pt; }
+    .report-print-footer > div:last-child { text-align: right; }
+    .report-print-footer span,
+    .report-print-footer small { display: block; color: #4b5563; }
+    .report-print-footer strong { display: block; margin-top: 6mm; }
+    .report-print-footer div > div { margin-top: 2mm; border-bottom: .75pt solid #374151; }
+    .report-print-timestamp { margin: 9mm 0 0; text-align: center; color: #6b7280; font-size: 7pt; }
+  }
+`;
+
+function PrintReport({ payload }: { payload: PrintPayload | null }) {
+  if (!payload) return null;
+
+  const tableTitle =
+    payload.reportKind === "financial"
+      ? "Completed transactions"
+      : payload.reportKind === "services"
+        ? "Service entries"
+        : "Financial details for selected period";
+
+  return (
+    <div className="report-print-root">
+      <style>{REPORT_PRINT_STYLES}</style>
+      <article className="report-print-document">
+        <header className="report-print-header">
+          <img src={exportLogoUrl} alt="" className="report-print-logo" />
+          <div className="report-print-heading">
+            <p>{SHOP_EXPORT_NAME}</p>
+            <p>{SHOP.tagline}</p>
+            <h1>{payload.title}</h1>
+            <p>Reporting summary</p>
+          </div>
+          <p className="report-print-generated">
+            Generated
+            <br />
+            {payload.generatedAt}
+          </p>
+        </header>
+        <div className="report-print-rule" />
+        <section className="report-print-meta">
+          <div>
+            <span>Coverage</span>
+            <strong>{payload.period}</strong>
+          </div>
+          <div>
+            <span>Report scope</span>
+            <strong>{payload.scope}</strong>
+          </div>
+        </section>
+        <section className="report-print-section report-print-summary">
+          <h2>Report summary</h2>
+          <div className="report-print-summary-grid">
+            {payload.data.cards.map((card) => (
+              <div key={card.label}>
+                <span>{card.label}</span>
+                <strong>{card.value}</strong>
+                <small>{card.detail}</small>
+              </div>
+            ))}
+          </div>
+        </section>
+        {payload.financial && (
+          <>
+            <PrintSimpleTable
+              title="Service performance"
+              headers={["Service", "Completed", "Revenue"]}
+              rows={payload.financial.servicePerformance.map((row) => [
+                row.service_name,
+                String(row.completed_count),
+                formatPHP(row.revenue),
+              ])}
+              emptyMessage="No completed services match this report selection."
+            />
+            <PrintSimpleTable
+              title="Product sales"
+              headers={["Product", "Qty Sold", "Unit Price", "Total Sales"]}
+              rows={payload.financial.productSales.map((row) => [
+                row.product_name,
+                String(row.quantity_sold),
+                formatPHP(row.unit_price),
+                formatPHP(row.total_sales),
+              ])}
+              emptyMessage="No products were sold in completed transactions for this period."
+            />
+            <PrintSimpleTable
+              title={payload.financial.revenueTitle}
+              headers={[
+                "Period",
+                "Transactions",
+                "Service Revenue",
+                "Product Revenue",
+                "Total Revenue",
+              ]}
+              rows={payload.financial.revenueRows.map((row) => [
+                formatRevenuePeriod(
+                  row.period,
+                  payload.financial?.revenueTitle === "Daily revenue" ? "daily" : "monthly",
+                ),
+                String(row.completed_transactions),
+                formatPHP(row.service_revenue),
+                formatPHP(row.product_revenue),
+                formatPHP(row.total_revenue),
+              ])}
+              emptyMessage="No completed revenue is available for this period."
+            />
+          </>
+        )}
+        <section className="report-print-section">
+          <h2>{tableTitle}</h2>
+          <table className="report-print-table">
+            <thead>
+              <tr>
+                {payload.data.headers.map((header) => (
+                  <th key={header}>{header}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {payload.data.rows.map((row, index) => (
+                <tr key={`${row.join("-")}-${index}`}>
+                  {row.map((cell, cellIndex) => (
+                    <td key={`${cell}-${cellIndex}`}>{cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={payload.data.headers.length - 1}>Total amount</td>
+                <td>{formatPHP(payload.data.totalAmount)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </section>
+        <footer className="report-print-footer">
+          <div>
+            <span>Prepared by</span>
+            <div />
+          </div>
+          <div>
+            <span>Approved by</span>
+            <strong>{SHOP_OWNER_NAME}</strong>
+            <small>Shop Owner</small>
+            <div />
+          </div>
+        </footer>
+        <p className="report-print-timestamp">Generated on {payload.generatedAt}</p>
+      </article>
+    </div>
+  );
+}
+
+function PrintSimpleTable({
+  title,
+  headers,
+  rows,
+  emptyMessage,
+}: {
+  title: string;
+  headers: string[];
+  rows: string[][];
+  emptyMessage: string;
+}) {
+  return (
+    <section className="report-print-section">
+      <h2>{title}</h2>
+      <table className="report-print-table">
+        <thead>
+          <tr>
+            {headers.map((header) => (
+              <th key={header}>{header}</th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row, index) => (
+            <tr key={`${row.join("-")}-${index}`}>
+              {row.map((cell, cellIndex) => (
+                <td key={`${cell}-${cellIndex}`}>{cell}</td>
+              ))}
+            </tr>
+          ))}
+          {rows.length === 0 && (
+            <tr>
+              <td colSpan={headers.length}>{emptyMessage}</td>
+            </tr>
+          )}
+        </tbody>
+      </table>
+    </section>
+  );
 }
 
 function Stat({

@@ -123,6 +123,54 @@ export type Database = {
           },
         ];
       };
+      appointment_products: {
+        Row: {
+          appointment_id: string;
+          created_at: string;
+          id: string;
+          product_id: string;
+          product_name: string;
+          quantity: number;
+          unit_price: number;
+          updated_at: string;
+        };
+        Insert: {
+          appointment_id: string;
+          created_at?: string;
+          id?: string;
+          product_id: string;
+          product_name: string;
+          quantity?: number;
+          unit_price?: number;
+          updated_at?: string;
+        };
+        Update: {
+          appointment_id?: string;
+          created_at?: string;
+          id?: string;
+          product_id?: string;
+          product_name?: string;
+          quantity?: number;
+          unit_price?: number;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "appointment_products_appointment_id_fkey";
+            columns: ["appointment_id"];
+            isOneToOne: false;
+            referencedRelation: "appointments";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "appointment_products_product_id_fkey";
+            columns: ["product_id"];
+            isOneToOne: false;
+            referencedRelation: "products";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       appointment_continuations: {
         Row: {
           appointment_date: string;
@@ -217,6 +265,7 @@ export type Database = {
           terms_accepted: boolean;
           total_estimate: number;
           updated_at: string;
+          wants_products: boolean;
         };
         Insert: {
           admin_notes?: string | null;
@@ -263,6 +312,7 @@ export type Database = {
           terms_accepted?: boolean;
           total_estimate?: number;
           updated_at?: string;
+          wants_products?: boolean;
         };
         Update: {
           admin_notes?: string | null;
@@ -309,6 +359,7 @@ export type Database = {
           terms_accepted?: boolean;
           total_estimate?: number;
           updated_at?: string;
+          wants_products?: boolean;
         };
         Relationships: [
           {
@@ -357,6 +408,97 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "appointment_confirmation_emails_appointment_id_fkey";
+            columns: ["appointment_id"];
+            isOneToOne: false;
+            referencedRelation: "appointments";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      appointment_confirmation_sms: {
+        Row: {
+          appointment_id: string;
+          attempt_count: number;
+          created_at: string;
+          id: string;
+          last_error: string | null;
+          recipient_phone: string;
+          sent_at: string | null;
+          status: string;
+          updated_at: string;
+        };
+        Insert: {
+          appointment_id: string;
+          attempt_count?: number;
+          created_at?: string;
+          id?: string;
+          last_error?: string | null;
+          recipient_phone: string;
+          sent_at?: string | null;
+          status?: string;
+          updated_at?: string;
+        };
+        Update: {
+          appointment_id?: string;
+          attempt_count?: number;
+          created_at?: string;
+          id?: string;
+          last_error?: string | null;
+          recipient_phone?: string;
+          sent_at?: string | null;
+          status?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "appointment_confirmation_sms_appointment_id_fkey";
+            columns: ["appointment_id"];
+            isOneToOne: false;
+            referencedRelation: "appointments";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      appointment_completion_notifications: {
+        Row: {
+          appointment_id: string;
+          attempt_count: number;
+          channel: string;
+          created_at: string;
+          id: string;
+          last_error: string | null;
+          recipient: string;
+          sent_at: string | null;
+          status: string;
+          updated_at: string;
+        };
+        Insert: {
+          appointment_id: string;
+          attempt_count?: number;
+          channel: string;
+          created_at?: string;
+          id?: string;
+          last_error?: string | null;
+          recipient: string;
+          sent_at?: string | null;
+          status?: string;
+          updated_at?: string;
+        };
+        Update: {
+          appointment_id?: string;
+          attempt_count?: number;
+          channel?: string;
+          created_at?: string;
+          id?: string;
+          last_error?: string | null;
+          recipient?: string;
+          sent_at?: string | null;
+          status?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "appointment_completion_notifications_appointment_id_fkey";
             columns: ["appointment_id"];
             isOneToOne: false;
             referencedRelation: "appointments";
@@ -1045,6 +1187,7 @@ export type Database = {
           p_services: Json;
           p_start_time: string;
           p_total_estimate: number;
+          p_wants_products: boolean;
         };
         Returns: {
           appointment_id: string;
@@ -1104,6 +1247,24 @@ export type Database = {
         };
         Returns: undefined;
       };
+      update_appointment_financial_details_atomic: {
+        Args: {
+          p_admin_notes: string | null;
+          p_appointment_date: string;
+          p_appointment_id: string;
+          p_assigned_crew_id: string | null;
+          p_crew_assignment_manual: boolean;
+          p_first_name: string;
+          p_last_name: string;
+          p_middle_name: string;
+          p_phone: string;
+          p_products: Json;
+          p_service_ids: string[];
+          p_start_time: string;
+          p_status: string;
+        };
+        Returns: undefined;
+      };
       enforce_public_rate_limit: {
         Args: {
           p_limit: number;
@@ -1151,6 +1312,17 @@ export type Database = {
           p_report_kind: string;
           p_service_name?: string | null;
           p_status?: string | null;
+          p_to: string;
+        };
+        Returns: Json;
+      };
+      get_completed_financial_report_page: {
+        Args: {
+          p_category?: string | null;
+          p_from: string;
+          p_limit?: number;
+          p_offset?: number;
+          p_service_name?: string | null;
           p_to: string;
         };
         Returns: Json;

@@ -31,6 +31,12 @@ import {
 } from "@/components/ui/chart";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  calendarDateToIso,
+  calendarRangeToIso,
+  isoDateToCalendarDate,
+  type IsoDateRange,
+} from "@/lib/admin-date-range";
 import { addDays, formatPHP, formatTime, manilaNow, statusLabel, statusTone } from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
@@ -78,16 +84,15 @@ type Trend = {
 };
 
 type OverviewPeriod = "today" | "7d" | "month" | "year" | "custom";
-type IsoDateRange = { from: string; to: string };
 
 function Dashboard() {
   const today = manilaNow().date;
-  const selectedDate = useMemo(() => dateFromIso(today), [today]);
+  const selectedDate = useMemo(() => isoDateToCalendarDate(today), [today]);
   const [dashboardPeriod, setDashboardPeriod] = useState<OverviewPeriod>("today");
   const [dashboardCustomDateRange, setDashboardCustomDateRange] = useState<DateRange>();
   const [chartPeriod, setChartPeriod] = useState<OverviewPeriod>("7d");
   const [chartCustomDateRange, setChartCustomDateRange] = useState<DateRange>();
-  const selectedDateIso = format(selectedDate, "yyyy-MM-dd");
+  const selectedDateIso = calendarDateToIso(selectedDate);
 
   const data = useQuery({
     queryKey: ["admin-dashboard", selectedDateIso],
@@ -748,8 +753,8 @@ function SchedulePanel({
                   <>
                     <div className="min-w-0">
                       <p className="text-sm font-medium">
-                        {format(dateFromIso(appointment.appointment_date), "MMM d, yyyy")} &middot;{" "}
-                        {formatTime(String(appointment.start_time).slice(0, 5))}
+                        {format(isoDateToCalendarDate(appointment.appointment_date), "MMM d, yyyy")}{" "}
+                        &middot; {formatTime(String(appointment.start_time).slice(0, 5))}
                       </p>
                       <p className="mt-0.5 truncate text-xs text-muted-foreground sm:hidden">
                         {appointment.customer_name} &middot; {appointment.reference_code}
@@ -763,7 +768,10 @@ function SchedulePanel({
                   <>
                     <p className="text-sm font-medium">
                       {showDate && (
-                        <>{format(dateFromIso(appointment.appointment_date), "MMM d")} &middot; </>
+                        <>
+                          {format(isoDateToCalendarDate(appointment.appointment_date), "MMM d")}{" "}
+                          &middot;{" "}
+                        </>
                       )}
                       {formatTime(String(appointment.start_time).slice(0, 5))}
                     </p>
@@ -806,10 +814,6 @@ function SchedulePanel({
       </CardContent>
     </Card>
   );
-}
-
-function dateFromIso(value: string) {
-  return new Date(`${value}T12:00:00`);
 }
 
 function rangeFromBuckets(buckets: { from: string; to: string }[], fallback: string): IsoDateRange {
@@ -874,21 +878,20 @@ function buildOverviewBuckets(date: Date, period: OverviewPeriod, customRange?: 
   }
 
   if (period === "custom" && customRange?.from && customRange.to) {
-    const start = format(customRange.from, "yyyy-MM-dd");
-    const end = format(customRange.to, "yyyy-MM-dd");
-    return buildDailyBuckets(start <= end ? start : end, start <= end ? end : start);
+    const range = calendarRangeToIso(customRange);
+    if (range) return buildDailyBuckets(range.from, range.to);
   }
 
   return Array.from({ length: 7 }, (_, index) => {
     const day = addDays(today, index - 6);
-    return { label: format(dateFromIso(day), "MMM d"), from: day, to: day };
+    return { label: format(isoDateToCalendarDate(day), "MMM d"), from: day, to: day };
   });
 }
 
 function buildDailyBuckets(from: string, to: string) {
   const buckets = [] as { label: string; from: string; to: string }[];
   for (let day = from; day <= to; day = addDays(day, 1)) {
-    buckets.push({ label: format(dateFromIso(day), "MMM d"), from: day, to: day });
+    buckets.push({ label: format(isoDateToCalendarDate(day), "MMM d"), from: day, to: day });
   }
   return buckets;
 }

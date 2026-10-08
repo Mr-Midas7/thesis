@@ -48,6 +48,12 @@ import {
 } from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import {
+  calendarRangeToIso,
+  isoDateToCalendarDate,
+  manilaMonthDateRange,
+  manilaYearDateRange,
+} from "@/lib/admin-date-range";
+import {
   formatBusinessTimestamp,
   getShopLogoDataUrl,
   SHOP_EXPORT_NAME,
@@ -884,26 +890,16 @@ function activityRangeFromPeriod(
   if (period === "today") return { from: today, to: today };
   if (period === "7d") return { from: addDays(today, -6), to: today };
 
-  const date = dateFromIso(today);
   if (period === "month") {
-    return {
-      from: format(new Date(date.getFullYear(), date.getMonth(), 1, 12), "yyyy-MM-dd"),
-      to: format(new Date(date.getFullYear(), date.getMonth() + 1, 0, 12), "yyyy-MM-dd"),
-    };
+    return manilaMonthDateRange(today);
   }
   if (period === "year") {
-    return { from: `${date.getFullYear()}-01-01`, to: `${date.getFullYear()}-12-31` };
+    return manilaYearDateRange(today);
   }
   if (customRange?.from && customRange.to) {
-    const from = format(customRange.from, "yyyy-MM-dd");
-    const to = format(customRange.to, "yyyy-MM-dd");
-    return from <= to ? { from, to } : { from: to, to: from };
+    return calendarRangeToIso(customRange);
   }
   return undefined;
-}
-
-function dateFromIso(value: string) {
-  return new Date(`${value}T12:00:00`);
 }
 
 function cleanSearchTerm(value: string) {
@@ -914,7 +910,7 @@ function cleanSearchTerm(value: string) {
 }
 
 function formatActivityDate(date: string) {
-  return new Date(`${date}T00:00:00`).toLocaleDateString("en-PH", {
+  return isoDateToCalendarDate(date).toLocaleDateString("en-PH", {
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -957,5 +953,5 @@ function downloadFile(file: Blob, filename: string) {
 }
 
 function fileDate() {
-  return new Date().toISOString().slice(0, 10);
+  return manilaNow().date;
 }

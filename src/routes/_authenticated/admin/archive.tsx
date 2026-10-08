@@ -48,6 +48,14 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
 import {
+  calendarRangeToIso,
+  isoDateToCalendarDate,
+  manilaMonthDateRange,
+  manilaWeekDateRange,
+  startOfManilaDay,
+  startOfNextManilaDay,
+} from "@/lib/admin-date-range";
+import {
   formatDateLong,
   formatPHP,
   formatTime,
@@ -171,7 +179,7 @@ function ArchivePage() {
         .order("sort_order");
       if (searchTerm) query = query.ilike("name", `%${searchTerm}%`);
       if (filters.dateFrom) query = query.gte("created_at", startOfManilaDay(filters.dateFrom));
-      if (filters.dateTo) query = query.lte("created_at", endOfDay(filters.dateTo));
+      if (filters.dateTo) query = query.lt("created_at", startOfNextManilaDay(filters.dateTo));
       const { data, error, count } = await query.range(
         page * pageSize,
         page * pageSize + pageSize - 1,
@@ -192,7 +200,7 @@ function ArchivePage() {
         .order("sort_order");
       if (searchTerm) query = query.or(`name.ilike.%${searchTerm}%,brand.ilike.%${searchTerm}%`);
       if (filters.dateFrom) query = query.gte("created_at", startOfManilaDay(filters.dateFrom));
-      if (filters.dateTo) query = query.lte("created_at", endOfDay(filters.dateTo));
+      if (filters.dateTo) query = query.lt("created_at", startOfNextManilaDay(filters.dateTo));
       const { data, error, count } = await query.range(
         page * pageSize,
         page * pageSize + pageSize - 1,
@@ -213,7 +221,7 @@ function ArchivePage() {
         .order("model");
       if (searchTerm) query = query.or(`model.ilike.%${searchTerm}%,brand.ilike.%${searchTerm}%`);
       if (filters.dateFrom) query = query.gte("created_at", startOfManilaDay(filters.dateFrom));
-      if (filters.dateTo) query = query.lte("created_at", endOfDay(filters.dateTo));
+      if (filters.dateTo) query = query.lt("created_at", startOfNextManilaDay(filters.dateTo));
       const { data, error, count } = await query.range(
         page * pageSize,
         page * pageSize + pageSize - 1,
@@ -236,7 +244,7 @@ function ArchivePage() {
           `name.ilike.%${searchTerm}%,role.ilike.%${searchTerm}%,phone.ilike.%${searchTerm}%`,
         );
       if (filters.dateFrom) query = query.gte("created_at", startOfManilaDay(filters.dateFrom));
-      if (filters.dateTo) query = query.lte("created_at", endOfDay(filters.dateTo));
+      if (filters.dateTo) query = query.lt("created_at", startOfNextManilaDay(filters.dateTo));
       const { data, error, count } = await query.range(
         page * pageSize,
         page * pageSize + pageSize - 1,
@@ -276,7 +284,7 @@ function ArchivePage() {
         .order("created_at", { ascending: false });
       if (searchTerm) query = query.or(`phone.ilike.%${searchTerm}%,reason.ilike.%${searchTerm}%`);
       if (filters.dateFrom) query = query.gte("created_at", startOfManilaDay(filters.dateFrom));
-      if (filters.dateTo) query = query.lte("created_at", endOfDay(filters.dateTo));
+      if (filters.dateTo) query = query.lt("created_at", startOfNextManilaDay(filters.dateTo));
       const { data, error, count } = await query.range(
         page * pageSize,
         page * pageSize + pageSize - 1,
@@ -1205,10 +1213,6 @@ function cleanSearchTerm(value: string) {
     .replace(/\s+/g, " ");
 }
 
-function dateFromIso(value: string) {
-  return new Date(`${value}T12:00:00`);
-}
-
 function ArchiveDateRangeFilter({
   period,
   dateFrom,
@@ -1233,8 +1237,8 @@ function ArchiveDateRangeFilter({
   const [draftRange, setDraftRange] = useState<DateRange>();
   const selectedRange = customDateFrom
     ? {
-        from: dateFromIso(customDateFrom),
-        to: customDateTo ? dateFromIso(customDateTo) : undefined,
+        from: isoDateToCalendarDate(customDateFrom),
+        to: customDateTo ? isoDateToCalendarDate(customDateTo) : undefined,
       }
     : undefined;
 
@@ -1254,10 +1258,10 @@ function ArchiveDateRangeFilter({
 
   const applyCustomRange = () => {
     if (!draftRange?.from || !draftRange.to) return;
-    const nextDateFrom = format(draftRange.from, "yyyy-MM-dd");
-    const nextDateTo = format(draftRange.to, "yyyy-MM-dd");
-    onDateRangeChange(nextDateFrom, nextDateTo);
-    onCustomDateRangeChange(nextDateFrom, nextDateTo);
+    const range = calendarRangeToIso(draftRange);
+    if (!range) return;
+    onDateRangeChange(range.from, range.to);
+    onCustomDateRangeChange(range.from, range.to);
     onPeriodChange("custom");
     setIsPickingCustomRange(false);
     setOpen(false);
@@ -1394,31 +1398,13 @@ function buildArchiveDateRange(period: Exclude<ArchiveDatePeriod, "all" | "custo
   to: string;
 } {
   const today = manilaNow().date;
-  const selectedDate = dateFromIso(today);
 
   if (period === "today") return { from: today, to: today };
   if (period === "week") {
-    const mondayOffset = (selectedDate.getDay() + 6) % 7;
-    const monday = new Date(
-      selectedDate.getFullYear(),
-      selectedDate.getMonth(),
-      selectedDate.getDate() - mondayOffset,
-      12,
-    );
-    const sunday = new Date(monday.getFullYear(), monday.getMonth(), monday.getDate() + 6, 12);
-    return { from: format(monday, "yyyy-MM-dd"), to: format(sunday, "yyyy-MM-dd") };
+    return manilaWeekDateRange(today);
   }
 
-  return {
-    from: format(
-      new Date(selectedDate.getFullYear(), selectedDate.getMonth(), 1, 12),
-      "yyyy-MM-dd",
-    ),
-    to: format(
-      new Date(selectedDate.getFullYear(), selectedDate.getMonth() + 1, 0, 12),
-      "yyyy-MM-dd",
-    ),
-  };
+  return manilaMonthDateRange(today);
 }
 
 function archiveDatePeriodLabel(period: ArchiveDatePeriod, dateFrom: string, dateTo: string) {
@@ -1432,22 +1418,14 @@ function archiveDatePeriodLabel(period: ArchiveDatePeriod, dateFrom: string, dat
 function formatDateRange(from: string, to: string) {
   if (!from) return "Select date range";
 
-  const fromDate = dateFromIso(from);
+  const fromDate = isoDateToCalendarDate(from);
   const fromLabel = format(fromDate, "MMM d, yyyy");
   if (!to) return `${fromLabel} – Select end date`;
 
-  const toDate = dateFromIso(to);
+  const toDate = isoDateToCalendarDate(to);
   return fromDate.getFullYear() === toDate.getFullYear()
     ? `${format(fromDate, "MMM d")} – ${format(toDate, "MMM d, yyyy")}`
     : `${fromLabel} – ${format(toDate, "MMM d, yyyy")}`;
-}
-
-function startOfManilaDay(date: string) {
-  return `${date}T00:00:00+08:00`;
-}
-
-function endOfDay(date: string) {
-  return `${date}T23:59:59.999+08:00`;
 }
 
 function ArchiveRowActions({

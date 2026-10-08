@@ -22,6 +22,7 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   reviewPendingAppointmentWithConfirmation,
   reviewRescheduleRequestWithConfirmation,
+  updateAppointmentServiceProgressWithNotifications,
 } from "@/lib/appointment-confirmation.functions";
 import { cn } from "@/lib/utils";
 
@@ -44,6 +45,9 @@ function NotificationsPage() {
   } | null>(null);
   const reviewPendingWithConfirmation = useServerFn(reviewPendingAppointmentWithConfirmation);
   const reviewRescheduleWithConfirmation = useServerFn(reviewRescheduleRequestWithConfirmation);
+  const updateProgressWithNotifications = useServerFn(
+    updateAppointmentServiceProgressWithNotifications,
+  );
 
   const list = useQuery({
     queryKey: ["notifications"],
@@ -160,7 +164,11 @@ function NotificationsPage() {
       return result;
     },
     onSuccess: (result) => {
-      setActionError("emailError" in result ? result.emailError : null);
+      const warnings = [
+        "emailError" in result ? result.emailError : null,
+        "smsError" in result ? result.smsError : null,
+      ].filter((warning): warning is string => Boolean(warning));
+      setActionError(warnings.join(" ") || null);
       refresh();
       queryClient.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
@@ -188,7 +196,11 @@ function NotificationsPage() {
       return result;
     },
     onSuccess: (result) => {
-      setActionError("emailError" in result ? result.emailError : null);
+      const warnings = [
+        "emailError" in result ? result.emailError : null,
+        "smsError" in result ? result.smsError : null,
+      ].filter((warning): warning is string => Boolean(warning));
+      setActionError(warnings.join(" ") || null);
       refresh();
       queryClient.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
@@ -208,14 +220,18 @@ function NotificationsPage() {
       appointmentId: string;
       action: "start" | "snooze_arrival" | "no_show" | "complete" | "snooze_completion";
     }) => {
-      const { error } = await supabase.rpc("manage_appointment_service_progress", {
-        p_appointment_id: appointmentId,
-        p_action: action,
+      const result = await updateProgressWithNotifications({
+        data: { appointmentId, action },
       });
-      if (error) throw error;
+      if (!result.ok) throw new Error(result.error);
+      return result;
     },
-    onSuccess: () => {
-      setActionError(null);
+    onSuccess: (result) => {
+      const warnings = [
+        "emailError" in result ? result.emailError : null,
+        "smsError" in result ? result.smsError : null,
+      ].filter((warning): warning is string => Boolean(warning));
+      setActionError(warnings.join(" ") || null);
       refresh();
       queryClient.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
       queryClient.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
