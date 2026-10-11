@@ -60,7 +60,7 @@ type ConfirmationEmailConfig = {
   from: string;
 };
 
-type ConfirmationEmailResult = { sent: true } | { sent: false; error: string };
+type ConfirmationEmailResult = { sent: true } | { sent: false; error: string | null };
 
 type TextBeeConfig = {
   apiKey: string;
@@ -69,6 +69,8 @@ type TextBeeConfig = {
 };
 
 const TEXTBEE_DEMO_PHONE = "09242698505";
+const DELIVERY_LEASE_MS = 5 * 60 * 1000;
+const EMAIL_ADDRESS_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type ConfirmationSmsResult = {
   sent: boolean;
@@ -76,18 +78,36 @@ type ConfirmationSmsResult = {
   error: string | null;
 };
 
-function emailConfig(): ConfirmationEmailConfig | null {
+function senderAddress(value: string) {
+  const trimmed = value.trim();
+  const namedAddress = trimmed.match(/^[^<>]*<\s*([^<>\s]+)\s*>$/);
+  const address = (namedAddress?.[1] ?? trimmed).toLowerCase();
+  return EMAIL_ADDRESS_PATTERN.test(address) ? address : null;
+}
+
+function emailConfig(): { config: ConfirmationEmailConfig } | { error: string } {
   const apiKey = process.env["RESEND_API_KEY"]?.trim();
   const from = process.env["RESEND_FROM_EMAIL"]?.trim();
-  return apiKey && from ? { apiKey, from } : null;
+  if (!apiKey || !from) {
+    return {
+      error:
+        "Email is not configured. Set RESEND_API_KEY and RESEND_FROM_EMAIL in the server environment.",
+    };
+  }
+  if (!senderAddress(from)) {
+    return {
+      error:
+        "Email is not configured correctly. RESEND_FROM_EMAIL must be a valid email address or display-name address.",
+    };
+  }
+  return { config: { apiKey, from } };
 }
 
 function textBeeConfig(): { config: TextBeeConfig } | { error: string } {
   const apiKey = process.env["TEXTBEE_API_KEY"]?.trim();
   if (!apiKey) {
     return {
-      error:
-        "SMS is not configured. Set TEXTBEE_API_KEY before sending customer notifications.",
+      error: "SMS is not configured. Set TEXTBEE_API_KEY before sending customer notifications.",
     };
   }
 
@@ -165,6 +185,60 @@ function isTextBeeDemoPhone(phone: string) {
   return phone.trim() === TEXTBEE_DEMO_PHONE;
 }
 
+function deliveryLeaseExpired(updatedAt: string | null | undefined) {
+  if (!updatedAt) return true;
+  const updatedAtMs = new Date(updatedAt).getTime();
+  return !Number.isFinite(updatedAtMs) || updatedAtMs <= Date.now() - DELIVERY_LEASE_MS;
+}
+
+function redactProviderDetail(value: string) {
+  return value
+    .replace(/\b(?:re|txb)_[A-Za-z0-9_-]+\b/g, "[redacted-api-key]")
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]")
+    .replace(/\+?\d[\d\s()-]{7,}\d/g, "[redacted-phone]")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 400);
+}
+
+async function assertProviderAccepted(provider: "Resend" | "TextBee", response: Response) {
+  const body = await response.text();
+  if (!response.ok) {
+    const detail = redactProviderDetail(body);
+    console.error(`[${provider}] provider rejected notification`, {
+      status: response.status,
+      detail: detail || undefined,
+    });
+    throw new Error(`${provider} returned ${response.status}${detail ? `: ${detail}` : "."}`);
+  }
+
+  if (provider !== "TextBee" || !body) return;
+  try {
+    const payload = JSON.parse(body) as {
+      data?: { success?: boolean; successCount?: number; failureCount?: number };
+    };
+    const delivery = payload.data;
+    if (
+      delivery?.success === false ||
+      (typeof delivery?.failureCount === "number" && delivery.failureCount > 0) ||
+      (typeof delivery?.successCount === "number" && delivery.successCount < 1)
+    ) {
+      console.error("[TextBee] notification was not accepted", {
+        success: delivery?.success,
+        successCount: delivery?.successCount,
+        failureCount: delivery?.failureCount,
+      });
+      throw new Error("TextBee did not accept the SMS for delivery.");
+    }
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      console.warn("[TextBee] provider returned a non-JSON success response");
+      return;
+    }
+    throw error;
+  }
+}
+
 function authenticatedSupabaseClient() {
   const authorization = getRequest()?.headers.get("authorization");
   const url = process.env["SUPABASE_URL"];
@@ -180,20 +254,32 @@ function authenticatedSupabaseClient() {
   });
 }
 
-async function sendQueuedConfirmationEmail(appointmentId: string): Promise<ConfirmationEmailResult> {
-  const config = emailConfig();
-  if (!config) {
+async function sendQueuedConfirmationEmail(
+  appointmentId: string,
+): Promise<ConfirmationEmailResult> {
+  const configured = emailConfig();
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  if ("error" in configured) {
+    console.error("[Confirmation email] configuration unavailable", { reason: configured.error });
+    const { error } = await supabaseAdmin
+      .from("appointment_confirmation_emails")
+      .update({
+        last_error: configured.error.slice(0, 500),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("appointment_id", appointmentId)
+      .eq("status", "pending");
+    if (error) console.error("[Confirmation email] configuration-state update failed", error);
     return {
       sent: false,
-      error: "Confirmation email is not configured. Set RESEND_API_KEY and RESEND_FROM_EMAIL.",
+      error: configured.error,
     };
   }
 
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const now = new Date().toISOString();
   const { data: queuedDelivery, error: pendingError } = await supabaseAdmin
     .from("appointment_confirmation_emails")
-    .select("id,attempt_count,recipient_email,status")
+    .select("id,attempt_count,recipient_email,status,updated_at")
     .eq("appointment_id", appointmentId)
     .maybeSingle();
   if (pendingError) {
@@ -204,11 +290,16 @@ async function sendQueuedConfirmationEmail(appointmentId: string): Promise<Confi
     return { sent: false, error: "The confirmation email could not be queued." };
   }
   if (queuedDelivery.status === "sent") return { sent: true };
-  if (queuedDelivery.status !== "pending") {
-    return { sent: false, error: "The confirmation email is already being sent." };
+  const retryingStaleClaim =
+    queuedDelivery.status === "sending" && deliveryLeaseExpired(queuedDelivery.updated_at);
+  if (queuedDelivery.status !== "pending" && !retryingStaleClaim) {
+    console.info("[Confirmation email] delivery is already in progress", { appointmentId });
+    return { sent: false, error: null };
   }
+  if (retryingStaleClaim)
+    console.warn("[Confirmation email] retrying stale delivery lease", { appointmentId });
 
-  const { data: delivery, error: claimError } = await supabaseAdmin
+  let claimQuery = supabaseAdmin
     .from("appointment_confirmation_emails")
     .update({
       status: "sending",
@@ -216,15 +307,23 @@ async function sendQueuedConfirmationEmail(appointmentId: string): Promise<Confi
       last_error: null,
       updated_at: now,
     })
-    .eq("id", queuedDelivery.id)
-    .eq("status", "pending")
+    .eq("id", queuedDelivery.id);
+  claimQuery = retryingStaleClaim
+    ? claimQuery
+        .eq("status", "sending")
+        .lte("updated_at", new Date(Date.now() - DELIVERY_LEASE_MS).toISOString())
+    : claimQuery.eq("status", "pending");
+  const { data: delivery, error: claimError } = await claimQuery
     .select("id,recipient_email")
     .maybeSingle();
   if (claimError) {
     console.error("[Confirmation email] queue claim failed", claimError);
     return { sent: false, error: "The confirmation email could not be queued." };
   }
-  if (!delivery) return { sent: true };
+  if (!delivery) {
+    console.info("[Confirmation email] delivery claim lost to another request", { appointmentId });
+    return { sent: false, error: null };
+  }
 
   try {
     const { data: appointment, error: appointmentError } = await supabaseAdmin
@@ -233,7 +332,7 @@ async function sendQueuedConfirmationEmail(appointmentId: string): Promise<Confi
         "reference_code,customer_name,appointment_date,start_time,booking_duration_minutes,total_estimate,moto_brand,moto_model,moto_variant,moto_year,plate_number,notes,appointment_services(service_name,duration_minutes),appointment_continuations(segment_number,appointment_date,start_time,booking_duration_minutes)",
       )
       .eq("id", appointmentId)
-      .eq("status", "confirmed")
+      .in("status", ["confirmed", "in_progress", "completed"])
       .maybeSingle();
     if (appointmentError || !appointment) {
       throw new Error("The approved appointment details could not be loaded.");
@@ -282,21 +381,19 @@ async function sendQueuedConfirmationEmail(appointmentId: string): Promise<Confi
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${config.apiKey}`,
+        Authorization: `Bearer ${configured.config.apiKey}`,
         "Content-Type": "application/json",
         "Idempotency-Key": `appointment-confirmation-${delivery.id}`,
       },
       body: JSON.stringify({
-        from: config.from,
+        from: configured.config.from,
         to: [delivery.recipient_email],
-        subject: `Appointment confirmed — ${appointment.reference_code}`,
+        subject: `Appointment confirmed - ${appointment.reference_code}`,
         html,
         text,
       }),
     });
-    if (!response.ok) {
-      throw new Error(`Email provider returned ${response.status}.`);
-    }
+    await assertProviderAccepted("Resend", response);
 
     const { error: sentError } = await supabaseAdmin
       .from("appointment_confirmation_emails")
@@ -327,14 +424,12 @@ async function sendQueuedConfirmationEmail(appointmentId: string): Promise<Confi
   }
 }
 
-async function sendQueuedConfirmationSms(
-  appointmentId: string,
-): Promise<ConfirmationSmsResult> {
+async function sendQueuedConfirmationSms(appointmentId: string): Promise<ConfirmationSmsResult> {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const now = new Date().toISOString();
   const { data: queuedDelivery, error: pendingError } = await supabaseAdmin
     .from("appointment_confirmation_sms")
-    .select("id,attempt_count,recipient_phone,status")
+    .select("id,attempt_count,recipient_phone,status,updated_at")
     .eq("appointment_id", appointmentId)
     .maybeSingle();
   if (pendingError) {
@@ -346,15 +441,16 @@ async function sendQueuedConfirmationSms(
   }
   if (queuedDelivery.status === "sent") return { sent: true, skipped: false, error: null };
   if (queuedDelivery.status === "skipped") return { sent: false, skipped: true, error: null };
-  if (queuedDelivery.status !== "pending") {
-    return {
-      sent: false,
-      skipped: false,
-      error: "The confirmation SMS is already being sent.",
-    };
+  const retryingStaleClaim =
+    queuedDelivery.status === "sending" && deliveryLeaseExpired(queuedDelivery.updated_at);
+  if (queuedDelivery.status !== "pending" && !retryingStaleClaim) {
+    console.info("[Confirmation SMS] delivery is already in progress", { appointmentId });
+    return { sent: false, skipped: false, error: null };
   }
+  if (retryingStaleClaim)
+    console.warn("[Confirmation SMS] retrying stale delivery lease", { appointmentId });
 
-  const { data: delivery, error: claimError } = await supabaseAdmin
+  let claimQuery = supabaseAdmin
     .from("appointment_confirmation_sms")
     .update({
       status: "sending",
@@ -362,15 +458,23 @@ async function sendQueuedConfirmationSms(
       last_error: null,
       updated_at: now,
     })
-    .eq("id", queuedDelivery.id)
-    .eq("status", "pending")
+    .eq("id", queuedDelivery.id);
+  claimQuery = retryingStaleClaim
+    ? claimQuery
+        .eq("status", "sending")
+        .lte("updated_at", new Date(Date.now() - DELIVERY_LEASE_MS).toISOString())
+    : claimQuery.eq("status", "pending");
+  const { data: delivery, error: claimError } = await claimQuery
     .select("id,recipient_phone")
     .maybeSingle();
   if (claimError) {
     console.error("[Confirmation SMS] queue claim failed", claimError);
     return { sent: false, skipped: false, error: "The confirmation SMS could not be queued." };
   }
-  if (!delivery) return { sent: true, skipped: false, error: null };
+  if (!delivery) {
+    console.info("[Confirmation SMS] delivery claim lost to another request", { appointmentId });
+    return { sent: false, skipped: false, error: null };
+  }
 
   if (!isTextBeeDemoPhone(delivery.recipient_phone)) {
     const { error: skipError } = await supabaseAdmin
@@ -408,7 +512,7 @@ async function sendQueuedConfirmationSms(
         "reference_code,appointment_date,start_time,booking_duration_minutes,total_estimate,rescheduled_from_appointment_id,appointment_services(service_name)",
       )
       .eq("id", appointmentId)
-      .eq("status", "confirmed")
+      .in("status", ["confirmed", "in_progress", "completed"])
       .maybeSingle();
     if (appointmentError || !appointment) {
       throw new Error("The approved appointment details could not be loaded.");
@@ -453,9 +557,7 @@ async function sendQueuedConfirmationSms(
       },
       body: JSON.stringify(body),
     });
-    if (!response.ok) {
-      throw new Error(`TextBee returned ${response.status}.`);
-    }
+    await assertProviderAccepted("TextBee", response);
 
     const { error: sentError } = await supabaseAdmin
       .from("appointment_confirmation_sms")
@@ -468,7 +570,8 @@ async function sendQueuedConfirmationSms(
     if (sentError) console.error("[Confirmation SMS] sent-state update failed", sentError);
     return { sent: true, skipped: false, error: null };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "The SMS provider could not be reached.";
+    const message =
+      error instanceof Error ? error.message : "The SMS provider could not be reached.";
     console.error("[Confirmation SMS] send failed", error);
     await supabaseAdmin
       .from("appointment_confirmation_sms")
@@ -515,12 +618,13 @@ async function sendConfirmationNotifications(appointmentId: string) {
   return { emailDelivery, smsDelivery };
 }
 
-type CompletionDeliveryResult = { sent: true } | { sent: false; error: string };
+type CompletionDeliveryResult = { sent: true } | { sent: false; error: string | null };
 type CompletionChannel = "email" | "sms";
 type CompletionClaim =
   | { kind: "claimed"; id: string; recipient: string }
   | { kind: "sent" }
   | { kind: "skipped" }
+  | { kind: "in_progress" }
   | { kind: "error"; error: string };
 
 function completionChannelLabel(channel: CompletionChannel) {
@@ -535,7 +639,7 @@ async function claimCompletionNotification(
   const label = completionChannelLabel(channel);
   const { data: queuedDelivery, error: pendingError } = await supabaseAdmin
     .from("appointment_completion_notifications")
-    .select("id,attempt_count,recipient,status")
+    .select("id,attempt_count,recipient,status,updated_at")
     .eq("appointment_id", appointmentId)
     .eq("channel", channel)
     .maybeSingle();
@@ -545,11 +649,17 @@ async function claimCompletionNotification(
   }
   if (queuedDelivery.status === "sent") return { kind: "sent" };
   if (queuedDelivery.status === "skipped") return { kind: "skipped" };
-  if (queuedDelivery.status !== "pending") {
-    return { kind: "error", error: `The completion ${label} is already being sent.` };
+  const retryingStaleClaim =
+    queuedDelivery.status === "sending" && deliveryLeaseExpired(queuedDelivery.updated_at);
+  if (queuedDelivery.status !== "pending" && !retryingStaleClaim) {
+    console.info(`[Completion ${label}] delivery is already in progress`, { appointmentId });
+    return { kind: "in_progress" };
+  }
+  if (retryingStaleClaim) {
+    console.warn(`[Completion ${label}] retrying stale delivery lease`, { appointmentId });
   }
 
-  const { data: delivery, error: claimError } = await supabaseAdmin
+  let claimQuery = supabaseAdmin
     .from("appointment_completion_notifications")
     .update({
       status: "sending",
@@ -557,15 +667,24 @@ async function claimCompletionNotification(
       last_error: null,
       updated_at: new Date().toISOString(),
     })
-    .eq("id", queuedDelivery.id)
-    .eq("status", "pending")
+    .eq("id", queuedDelivery.id);
+  claimQuery = retryingStaleClaim
+    ? claimQuery
+        .eq("status", "sending")
+        .lte("updated_at", new Date(Date.now() - DELIVERY_LEASE_MS).toISOString())
+    : claimQuery.eq("status", "pending");
+  const { data: delivery, error: claimError } = await claimQuery
     .select("id,recipient")
     .maybeSingle();
   if (claimError) {
     console.error(`[Completion ${label}] queue claim failed`, claimError);
     return { kind: "error", error: `The completion ${label} could not be queued.` };
   }
-  return delivery ? { kind: "claimed", ...delivery } : { kind: "sent" };
+  if (!delivery) {
+    console.info(`[Completion ${label}] delivery claim lost to another request`, { appointmentId });
+    return { kind: "in_progress" };
+  }
+  return { kind: "claimed", ...delivery };
 }
 
 async function resetCompletionNotification(
@@ -574,7 +693,8 @@ async function resetCompletionNotification(
   channel: CompletionChannel,
 ) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const message = error instanceof Error ? error.message : "The notification provider could not be reached.";
+  const message =
+    error instanceof Error ? error.message : "The notification provider could not be reached.";
   console.error(`[Completion ${completionChannelLabel(channel)}] send failed`, error);
   await supabaseAdmin
     .from("appointment_completion_notifications")
@@ -596,7 +716,11 @@ async function markCompletionNotificationSent(deliveryId: string, channel: Compl
       updated_at: new Date().toISOString(),
     })
     .eq("id", deliveryId);
-  if (error) console.error(`[Completion ${completionChannelLabel(channel)}] sent-state update failed`, error);
+  if (error)
+    console.error(
+      `[Completion ${completionChannelLabel(channel)}] sent-state update failed`,
+      error,
+    );
 }
 
 async function markCompletionNotificationSkipped(deliveryId: string) {
@@ -659,15 +783,28 @@ function formatCompletionSmsDate(value: string | null, appointmentDate: string) 
 }
 
 async function sendQueuedCompletionEmail(appointmentId: string): Promise<CompletionDeliveryResult> {
-  const config = emailConfig();
-  if (!config) {
+  const configured = emailConfig();
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  if ("error" in configured) {
+    console.error("[Completion email] configuration unavailable", { reason: configured.error });
+    const { error } = await supabaseAdmin
+      .from("appointment_completion_notifications")
+      .update({
+        last_error: configured.error.slice(0, 500),
+        updated_at: new Date().toISOString(),
+      })
+      .eq("appointment_id", appointmentId)
+      .eq("channel", "email")
+      .eq("status", "pending");
+    if (error) console.error("[Completion email] configuration-state update failed", error);
     return {
       sent: false,
-      error: "Completion email is not configured. Set RESEND_API_KEY and RESEND_FROM_EMAIL.",
+      error: configured.error,
     };
   }
   const claim = await claimCompletionNotification(appointmentId, "email");
   if (claim.kind === "sent") return { sent: true };
+  if (claim.kind === "in_progress") return { sent: false, error: null };
   if (claim.kind === "skipped") {
     return { sent: false, error: "The completion email was skipped." };
   }
@@ -679,7 +816,9 @@ async function sendQueuedCompletionEmail(appointmentId: string): Promise<Complet
       appointment.service_ended_at,
       appointment.appointment_date,
     );
-    const serviceList = appointment.services.map((service) => `<li>${escapeHtml(service)}</li>`).join("");
+    const serviceList = appointment.services
+      .map((service) => `<li>${escapeHtml(service)}</li>`)
+      .join("");
     const text = [
       `Hello ${appointment.customer_name},`,
       "",
@@ -694,19 +833,19 @@ async function sendQueuedCompletionEmail(appointmentId: string): Promise<Complet
     const response = await fetch("https://api.resend.com/emails", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${config.apiKey}`,
+        Authorization: `Bearer ${configured.config.apiKey}`,
         "Content-Type": "application/json",
         "Idempotency-Key": `appointment-completion-${claim.id}`,
       },
       body: JSON.stringify({
-        from: config.from,
+        from: configured.config.from,
         to: [claim.recipient],
-        subject: `Service completed â€” ${appointment.reference_code}`,
+        subject: `Service completed - ${appointment.reference_code}`,
         html,
         text,
       }),
     });
-    if (!response.ok) throw new Error(`Email provider returned ${response.status}.`);
+    await assertProviderAccepted("Resend", response);
     await markCompletionNotificationSent(claim.id, "email");
     return { sent: true };
   } catch (error) {
@@ -722,6 +861,7 @@ async function sendQueuedCompletionSms(appointmentId: string): Promise<Confirmat
   const claim = await claimCompletionNotification(appointmentId, "sms");
   if (claim.kind === "sent") return { sent: true, skipped: false, error: null };
   if (claim.kind === "skipped") return { sent: false, skipped: true, error: null };
+  if (claim.kind === "in_progress") return { sent: false, skipped: false, error: null };
   if (claim.kind === "error") return { sent: false, skipped: false, error: claim.error };
   if (claim.kind !== "claimed") {
     return { sent: false, skipped: false, error: "The completion SMS could not be queued." };
@@ -770,7 +910,7 @@ async function sendQueuedCompletionSms(appointmentId: string): Promise<Confirmat
       },
       body: JSON.stringify(body),
     });
-    if (!response.ok) throw new Error(`TextBee returned ${response.status}.`);
+    await assertProviderAccepted("TextBee", response);
     await markCompletionNotificationSent(claim.id, "sms");
     return { sent: true, skipped: false, error: null };
   } catch (error) {
@@ -811,6 +951,70 @@ async function sendCompletionNotifications(appointmentId: string) {
   }
   return { emailDelivery, smsDelivery };
 }
+
+async function requireActiveAdminSession() {
+  const client = authenticatedSupabaseClient();
+  const { data: isActive, error } = await client.rpc("validate_admin_session");
+  if (error || !isActive) {
+    throw new Error("Your administrator session has expired. Please sign in again.");
+  }
+}
+
+/**
+ * A provider outage or a deployment during delivery can leave an already-approved
+ * notification pending. Retrying the durable queue from an active admin session
+ * recovers those messages without changing an appointment or exposing the queue
+ * to the browser.
+ */
+export const retryPendingCustomerNotifications = createServerFn({ method: "POST" }).handler(
+  async () => {
+    await requireActiveAdminSession();
+    const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+    const [confirmationEmailRows, confirmationSmsRows, completionRows] = await Promise.all([
+      supabaseAdmin
+        .from("appointment_confirmation_emails")
+        .select("appointment_id")
+        .in("status", ["pending", "sending"])
+        .limit(25),
+      supabaseAdmin
+        .from("appointment_confirmation_sms")
+        .select("appointment_id")
+        .in("status", ["pending", "sending"])
+        .limit(25),
+      supabaseAdmin
+        .from("appointment_completion_notifications")
+        .select("appointment_id")
+        .in("status", ["pending", "sending"])
+        .limit(25),
+    ]);
+    const queueError =
+      confirmationEmailRows.error ?? confirmationSmsRows.error ?? completionRows.error;
+    if (queueError) {
+      console.error("[Customer notifications] retry queue lookup failed", queueError);
+      return { ok: false as const };
+    }
+
+    const confirmationAppointmentIds = new Set([
+      ...(confirmationEmailRows.data ?? []).map((delivery) => delivery.appointment_id),
+      ...(confirmationSmsRows.data ?? []).map((delivery) => delivery.appointment_id),
+    ]);
+    const completionAppointmentIds = new Set(
+      (completionRows.data ?? []).map((delivery) => delivery.appointment_id),
+    );
+    await Promise.allSettled([
+      ...Array.from(confirmationAppointmentIds, sendConfirmationNotifications),
+      ...Array.from(completionAppointmentIds, sendCompletionNotifications),
+    ]);
+    const attempted = confirmationAppointmentIds.size + completionAppointmentIds.size;
+    if (attempted) {
+      console.info("[Customer notifications] retried durable deliveries", {
+        confirmationAppointments: confirmationAppointmentIds.size,
+        completionAppointments: completionAppointmentIds.size,
+      });
+    }
+    return { ok: true as const, attempted };
+  },
+);
 
 export const updateAppointmentServiceProgressWithNotifications = createServerFn({ method: "POST" })
   .validator((input: unknown) => serviceProgressSchema.parse(input))

@@ -15,6 +15,7 @@ import {
 import type { LucideIcon } from "lucide-react";
 import type { DateRange } from "react-day-picker";
 import { useEffect, useMemo, useState } from "react";
+import { createPortal } from "react-dom";
 
 import exportLogoUrl from "@/assets/export-logo.png";
 import { PaginationControls } from "@/components/admin/pagination-controls";
@@ -138,7 +139,6 @@ type FinancialMetrics = {
   completed_transactions: number;
   total_completed_services: number;
   total_products_sold: number;
-  average_transaction_amount: number | string;
 };
 type ServicePerformanceRow = {
   service_name: string;
@@ -189,8 +189,7 @@ type PrintPayload = {
   financial?: {
     servicePerformance: ServicePerformanceRow[];
     productSales: ProductSalesRow[];
-    revenueTitle: string;
-    revenueRows: RevenuePeriodRow[];
+    dailyRevenue: RevenuePeriodRow[];
   };
 };
 function ReportsPage() {
@@ -342,11 +341,7 @@ function ReportsPage() {
               financial: {
                 servicePerformance: allRows.financial.service_performance,
                 productSales: allRows.financial.product_sales,
-                revenueTitle: revenuePeriod === "daily" ? "Daily revenue" : "Monthly revenue",
-                revenueRows:
-                  revenuePeriod === "daily"
-                    ? allRows.financial.daily_revenue
-                    : allRows.financial.monthly_revenue,
+                dailyRevenue: allRows.financial.daily_revenue,
               },
             }
           : {}),
@@ -537,56 +532,51 @@ function ReportsPage() {
             </p>
           </div>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          <Stat
-            label="Total Revenue"
-            value={formatPHP(metrics?.total_revenue ?? 0)}
-            detail="Completed service and product revenue"
-            icon={CircleDollarSign}
-            iconClassName="bg-emerald-500/15 text-emerald-400"
-          />
-          <Stat
-            label="Service Revenue"
-            value={formatPHP(metrics?.service_revenue ?? 0)}
-            detail="From completed services"
-            icon={CircleDollarSign}
-            iconClassName="bg-primary/15 text-primary"
-          />
-          <Stat
-            label="Product Revenue"
-            value={formatPHP(metrics?.product_revenue ?? 0)}
-            detail="From products sold during service"
-            icon={CircleDollarSign}
-            iconClassName="bg-accent/15 text-accent"
-          />
-          <Stat
-            label="Completed Transactions"
-            value={String(metrics?.completed_transactions ?? 0)}
-            detail="Revenue-recognized appointments"
-            icon={CheckCircle2}
-            iconClassName="bg-chart-4/15 text-chart-4"
-          />
-          <Stat
-            label="Total Completed Services"
-            value={String(metrics?.total_completed_services ?? 0)}
-            detail="Service entries performed"
-            icon={CalendarDays}
-            iconClassName="bg-primary/15 text-primary"
-          />
-          <Stat
-            label="Total Products Sold"
-            value={String(metrics?.total_products_sold ?? 0)}
-            detail="Units recorded during completed service"
-            icon={CircleDollarSign}
-            iconClassName="bg-accent/15 text-accent"
-          />
-          <Stat
-            label="Average Transaction"
-            value={formatPHP(metrics?.average_transaction_amount ?? 0)}
-            detail="Average amount per completed transaction"
-            icon={CheckCircle2}
-            iconClassName="bg-emerald-500/15 text-emerald-400"
-          />
+        <div className="overflow-x-auto pb-1">
+          <div className="grid min-w-[72rem] grid-cols-6 gap-3">
+            <Stat
+              label="Total Revenue"
+              value={formatPHP(metrics?.total_revenue ?? 0)}
+              detail="Completed service and product revenue"
+              icon={CircleDollarSign}
+              iconClassName="bg-emerald-500/15 text-emerald-400"
+            />
+            <Stat
+              label="Service Revenue"
+              value={formatPHP(metrics?.service_revenue ?? 0)}
+              detail="From completed services"
+              icon={CircleDollarSign}
+              iconClassName="bg-primary/15 text-primary"
+            />
+            <Stat
+              label="Product Revenue"
+              value={formatPHP(metrics?.product_revenue ?? 0)}
+              detail="From products sold during service"
+              icon={CircleDollarSign}
+              iconClassName="bg-accent/15 text-accent"
+            />
+            <Stat
+              label="Completed Transactions"
+              value={String(metrics?.completed_transactions ?? 0)}
+              detail="Revenue-recognized appointments"
+              icon={CheckCircle2}
+              iconClassName="bg-chart-4/15 text-chart-4"
+            />
+            <Stat
+              label="Total Completed Services"
+              value={String(metrics?.total_completed_services ?? 0)}
+              detail="Service entries performed"
+              icon={CalendarDays}
+              iconClassName="bg-primary/15 text-primary"
+            />
+            <Stat
+              label="Total Products Sold"
+              value={String(metrics?.total_products_sold ?? 0)}
+              detail="Units recorded during completed service"
+              icon={CircleDollarSign}
+              iconClassName="bg-accent/15 text-accent"
+            />
+          </div>
         </div>
       </section>
 
@@ -2056,64 +2046,91 @@ function fileName(reportKind: ReportKind) {
 const REPORT_PRINT_STYLES = `
   .report-print-root { display: none; }
 
-  @page { size: A4 landscape; margin: 12mm; }
+  @page { size: A4 landscape; margin: 12mm 11mm 15mm; }
 
   @media print {
-    body * { visibility: hidden !important; }
-    .report-print-root,
-    .report-print-root * { visibility: visible !important; }
+    html,
+    body {
+      width: auto !important;
+      min-width: 0 !important;
+      height: auto !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      background: #fff !important;
+    }
+    body > :not(.report-print-root) { display: none !important; }
     .report-print-root {
-      position: fixed;
-      inset: 0;
+      position: static !important;
       display: block !important;
-      width: 100%;
-      min-height: 100%;
+      width: auto !important;
+      min-width: 0 !important;
+      min-height: 0 !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      overflow: visible !important;
       background: #fff;
       color: #1f2937;
       font-family: Arial, Helvetica, sans-serif;
     }
-    .report-print-document { width: 100%; }
+    .report-print-document {
+      width: 100% !important;
+      min-width: 0 !important;
+      max-width: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      overflow: visible !important;
+    }
     .report-print-header,
     .report-print-meta,
     .report-print-summary,
-    .report-print-footer { break-inside: avoid; }
+    .report-print-footer {
+      break-inside: avoid-page;
+      page-break-inside: avoid;
+    }
     .report-print-header {
       display: grid;
-      grid-template-columns: 34mm 1fr 42mm;
+      grid-template-columns: 26mm minmax(0, 1fr) 36mm;
       align-items: center;
-      gap: 8mm;
+      gap: 6mm;
     }
-    .report-print-logo { width: 31mm; height: auto; object-fit: contain; }
-    .report-print-heading { text-align: center; }
+    .report-print-logo { width: 24mm; max-width: 100%; height: auto; object-fit: contain; }
+    .report-print-heading { min-width: 0; text-align: center; }
     .report-print-heading p { margin: 0; font-size: 8pt; letter-spacing: .08em; text-transform: uppercase; }
     .report-print-heading p:nth-child(2) { margin-top: 1mm; font-size: 7pt; letter-spacing: .03em; text-transform: none; }
-    .report-print-heading h1 { margin: 3mm 0 2mm; font-size: 18pt; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+    .report-print-heading h1 { margin: 3mm 0 2mm; font-size: 18pt; font-weight: 700; letter-spacing: .04em; overflow-wrap: anywhere; text-transform: uppercase; }
     .report-print-heading p:last-child { font-size: 7pt; font-weight: 700; }
-    .report-print-generated { margin: 0; text-align: right; font-size: 7pt; line-height: 1.45; color: #4b5563; }
+    .report-print-generated { min-width: 0; margin: 0; overflow-wrap: anywhere; text-align: right; font-size: 7pt; line-height: 1.45; color: #4b5563; }
     .report-print-rule { height: 1.25pt; margin: 5mm 0 4mm; background: #0f5b49; }
-    .report-print-meta { display: grid; grid-template-columns: 1fr 1fr; gap: 8mm; font-size: 8pt; }
+    .report-print-meta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8mm; font-size: 8pt; }
     .report-print-meta div:last-child { text-align: right; }
     .report-print-meta span,
     .report-print-summary span { display: block; color: #4b5563; font-size: 7pt; text-transform: uppercase; letter-spacing: .04em; }
-    .report-print-meta strong { display: block; margin-top: 1mm; font-size: 9pt; font-weight: 600; }
-    .report-print-section { margin-top: 6mm; }
-    .report-print-section h2 { margin: 0 0 3mm; font-size: 11pt; font-weight: 700; }
+    .report-print-meta strong { display: block; margin-top: 1mm; overflow-wrap: anywhere; font-size: 9pt; font-weight: 600; }
+    .report-print-section { min-width: 0; margin-top: 6mm; break-inside: auto; page-break-inside: auto; }
+    .report-print-section h2 { margin: 0 0 3mm; break-after: avoid-page; page-break-after: avoid; font-size: 11pt; font-weight: 700; }
     .report-print-summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); border-top: .75pt solid #9ca3af; border-bottom: .75pt solid #9ca3af; }
     .report-print-summary-grid > div { min-height: 17mm; padding: 3mm; border-right: .75pt solid #d1d5db; }
     .report-print-summary-grid > div:last-child { border-right: 0; }
     .report-print-summary-grid strong { display: block; margin-top: 1.5mm; font-size: 12pt; }
     .report-print-summary-grid small { display: block; margin-top: 1mm; color: #4b5563; font-size: 7pt; }
-    .report-print-table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7.5pt; }
-    .report-print-table thead { display: table-header-group; background: #e5e7eb; }
+    .report-print-summary-table { width: 100%; border-collapse: collapse; font-size: 8pt; }
+    .report-print-summary-table th,
+    .report-print-summary-table td { border: .75pt solid #6b7280; padding: 2.25mm 2mm; }
+    .report-print-summary-table th { background: #e5e7eb; font-size: 7pt; text-align: left; text-transform: uppercase; }
+    .report-print-summary-table th:last-child,
+    .report-print-summary-table td:last-child { text-align: right; }
+    .report-print-summary-table tbody tr:last-child td { font-weight: 700; background: #f3f4f6; }
+    .report-print-table { width: 100%; max-width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7.5pt; }
+    .report-print-table thead { display: table-header-group; break-inside: avoid-page; background: #e5e7eb; }
     .report-print-table th,
-    .report-print-table td { border: .75pt solid #6b7280; padding: 2.25mm 2mm; vertical-align: top; overflow-wrap: anywhere; }
+    .report-print-table td { box-sizing: border-box; border: .75pt solid #6b7280; padding: 2.25mm 2mm; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
     .report-print-table th { font-size: 7pt; text-align: left; font-weight: 700; }
     .report-print-table th:last-child,
     .report-print-table td:last-child { text-align: right; }
-    .report-print-table tr { break-inside: avoid; }
+    .report-print-table tr { break-inside: avoid-page; page-break-inside: avoid; }
     .report-print-table tbody tr:nth-child(even) { background: #f9fafb; }
-    .report-print-table tfoot { display: table-row-group; font-weight: 700; background: #f3f4f6; }
-    .report-print-table tfoot td:first-child { text-align: right; text-transform: uppercase; }
+    .report-print-table tfoot { display: table-row-group; break-inside: avoid-page; font-weight: 700; background: #f3f4f6; }
+    .report-print-table tfoot td:first-child { text-transform: uppercase; }
     .report-print-footer { display: grid; grid-template-columns: 1fr 1fr; gap: 30mm; margin-top: 16mm; font-size: 8pt; }
     .report-print-footer > div:last-child { text-align: right; }
     .report-print-footer span,
@@ -2125,7 +2142,23 @@ const REPORT_PRINT_STYLES = `
 `;
 
 function PrintReport({ payload }: { payload: PrintPayload | null }) {
-  if (!payload) return null;
+  if (!payload || typeof document === "undefined") return null;
+
+  const financial = payload.financial;
+  const serviceCompleted = financial
+    ? financial.servicePerformance.reduce((total, row) => total + row.completed_count, 0)
+    : 0;
+  const serviceRevenue = financial
+    ? sumMoney(financial.servicePerformance.map((row) => row.revenue))
+    : 0;
+  const productsSold = financial
+    ? financial.productSales.reduce((total, row) => total + row.quantity_sold, 0)
+    : 0;
+  const productRevenue = financial
+    ? sumMoney(financial.productSales.map((row) => row.total_sales))
+    : 0;
+  const dailyRevenue = financial?.dailyRevenue ?? [];
+  const dailyRevenueTotals = revenueTotals(dailyRevenue);
 
   const tableTitle =
     payload.reportKind === "financial"
@@ -2134,7 +2167,7 @@ function PrintReport({ payload }: { payload: PrintPayload | null }) {
         ? "Service entries"
         : "Financial details for selected period";
 
-  return (
+  return createPortal(
     <div className="report-print-root">
       <style>{REPORT_PRINT_STYLES}</style>
       <article className="report-print-document">
@@ -2164,66 +2197,110 @@ function PrintReport({ payload }: { payload: PrintPayload | null }) {
           </div>
         </section>
         <section className="report-print-section report-print-summary">
-          <h2>Report summary</h2>
-          <div className="report-print-summary-grid">
-            {payload.data.cards.map((card) => (
-              <div key={card.label}>
-                <span>{card.label}</span>
-                <strong>{card.value}</strong>
-                <small>{card.detail}</small>
-              </div>
-            ))}
-          </div>
+          <h2>{financial ? "A. Financial summary" : "Report summary"}</h2>
+          {financial ? (
+            <table className="report-print-summary-table">
+              <thead>
+                <tr>
+                  <th>Description</th>
+                  <th>Amount</th>
+                </tr>
+              </thead>
+              <tbody>
+                {payload.data.cards.map((card) => (
+                  <tr key={card.label}>
+                    <td>{card.label}</td>
+                    <td>{card.value}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          ) : (
+            <div className="report-print-summary-grid">
+              {payload.data.cards.map((card) => (
+                <div key={card.label}>
+                  <span>{card.label}</span>
+                  <strong>{card.value}</strong>
+                  <small>{card.detail}</small>
+                </div>
+              ))}
+            </div>
+          )}
         </section>
-        {payload.financial && (
+        {financial && (
           <>
             <PrintSimpleTable
-              title="Service performance"
+              title="B. Service revenue breakdown"
               headers={["Service", "Completed", "Revenue"]}
-              rows={payload.financial.servicePerformance.map((row) => [
+              columnWidths={["58%", "18%", "24%"]}
+              rows={financial.servicePerformance.map((row) => [
                 row.service_name,
                 String(row.completed_count),
                 formatPHP(row.revenue),
               ])}
+              footerRow={[
+                "Total service revenue",
+                String(serviceCompleted),
+                formatPHP(serviceRevenue),
+              ]}
               emptyMessage="No completed services match this report selection."
             />
             <PrintSimpleTable
-              title="Product sales"
+              title="C. Product sales breakdown"
               headers={["Product", "Qty Sold", "Unit Price", "Total Sales"]}
-              rows={payload.financial.productSales.map((row) => [
+              columnWidths={["42%", "18%", "20%", "20%"]}
+              rows={financial.productSales.map((row) => [
                 row.product_name,
                 String(row.quantity_sold),
                 formatPHP(row.unit_price),
                 formatPHP(row.total_sales),
               ])}
+              footerRow={[
+                "Total product revenue",
+                String(productsSold),
+                "",
+                formatPHP(productRevenue),
+              ]}
               emptyMessage="No products were sold in completed transactions for this period."
             />
             <PrintSimpleTable
-              title={payload.financial.revenueTitle}
+              title="D. Daily revenue"
               headers={[
-                "Period",
+                "Date",
                 "Transactions",
                 "Service Revenue",
                 "Product Revenue",
                 "Total Revenue",
               ]}
-              rows={payload.financial.revenueRows.map((row) => [
-                formatRevenuePeriod(
-                  row.period,
-                  payload.financial?.revenueTitle === "Daily revenue" ? "daily" : "monthly",
-                ),
+              columnWidths={["26%", "14%", "20%", "20%", "20%"]}
+              rows={dailyRevenue.map((row) => [
+                formatRevenuePeriod(row.period, "daily"),
                 String(row.completed_transactions),
                 formatPHP(row.service_revenue),
                 formatPHP(row.product_revenue),
                 formatPHP(row.total_revenue),
               ])}
+              footerRow={[
+                "Total daily revenue",
+                String(dailyRevenueTotals.transactions),
+                formatPHP(dailyRevenueTotals.serviceRevenue),
+                formatPHP(dailyRevenueTotals.productRevenue),
+                formatPHP(dailyRevenueTotals.totalRevenue),
+              ]}
               emptyMessage="No completed revenue is available for this period."
             />
           </>
         )}
         <section className="report-print-section">
-          <h2>{tableTitle}</h2>
+          <h2>{financial ? `E. ${tableTitle}` : tableTitle}</h2>
           <table className="report-print-table">
+            {financial && (
+              <colgroup>
+                {["10%", "13%", "23%", "16%", "12%", "13%", "13%"].map((width, index) => (
+                  <col key={`${width}-${index}`} style={{ width }} />
+                ))}
+              </colgroup>
+            )}
             <thead>
               <tr>
                 {payload.data.headers.map((header) => (
@@ -2262,25 +2339,37 @@ function PrintReport({ payload }: { payload: PrintPayload | null }) {
         </footer>
         <p className="report-print-timestamp">Generated on {payload.generatedAt}</p>
       </article>
-    </div>
+    </div>,
+    document.body,
   );
 }
 
 function PrintSimpleTable({
   title,
   headers,
+  columnWidths,
   rows,
+  footerRow,
   emptyMessage,
 }: {
   title: string;
   headers: string[];
+  columnWidths?: string[];
   rows: string[][];
+  footerRow?: string[];
   emptyMessage: string;
 }) {
   return (
     <section className="report-print-section">
       <h2>{title}</h2>
       <table className="report-print-table">
+        {columnWidths && (
+          <colgroup>
+            {columnWidths.map((width, index) => (
+              <col key={`${width}-${index}`} style={{ width }} />
+            ))}
+          </colgroup>
+        )}
         <thead>
           <tr>
             {headers.map((header) => (
@@ -2302,9 +2391,27 @@ function PrintSimpleTable({
             </tr>
           )}
         </tbody>
+        {footerRow && rows.length > 0 && (
+          <tfoot>
+            <tr>
+              {footerRow.map((cell, index) => (
+                <td key={`${cell}-${index}`}>{cell}</td>
+              ))}
+            </tr>
+          </tfoot>
+        )}
       </table>
     </section>
   );
+}
+
+function revenueTotals(rows: RevenuePeriodRow[]) {
+  return {
+    transactions: rows.reduce((total, row) => total + row.completed_transactions, 0),
+    serviceRevenue: sumMoney(rows.map((row) => row.service_revenue)),
+    productRevenue: sumMoney(rows.map((row) => row.product_revenue)),
+    totalRevenue: sumMoney(rows.map((row) => row.total_revenue)),
+  };
 }
 
 function Stat({

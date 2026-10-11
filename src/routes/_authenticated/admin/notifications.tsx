@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
 import { BellRing, CheckCheck, CheckCircle2, CircleX, Clock3, Play, Trash2 } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { PageHeader } from "@/components/admin/page-header";
 import {
@@ -22,6 +22,7 @@ import { supabase } from "@/integrations/supabase/client";
 import {
   reviewPendingAppointmentWithConfirmation,
   reviewRescheduleRequestWithConfirmation,
+  retryPendingCustomerNotifications,
   updateAppointmentServiceProgressWithNotifications,
 } from "@/lib/appointment-confirmation.functions";
 import { cn } from "@/lib/utils";
@@ -39,15 +40,25 @@ function NotificationsPage() {
   const navigate = useNavigate();
   const [actionError, setActionError] = useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
+  const retryAttempted = useRef(false);
   const [noShowTarget, setNoShowTarget] = useState<{
     appointmentId: string;
     referenceCode: string;
   } | null>(null);
   const reviewPendingWithConfirmation = useServerFn(reviewPendingAppointmentWithConfirmation);
   const reviewRescheduleWithConfirmation = useServerFn(reviewRescheduleRequestWithConfirmation);
+  const retryPendingNotifications = useServerFn(retryPendingCustomerNotifications);
   const updateProgressWithNotifications = useServerFn(
     updateAppointmentServiceProgressWithNotifications,
   );
+
+  useEffect(() => {
+    if (retryAttempted.current) return;
+    retryAttempted.current = true;
+    void retryPendingNotifications().then((result) => {
+      if (!result.ok) console.error("Could not retry pending customer notifications.");
+    });
+  }, [retryPendingNotifications]);
 
   const list = useQuery({
     queryKey: ["notifications"],

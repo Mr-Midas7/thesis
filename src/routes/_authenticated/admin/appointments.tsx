@@ -172,6 +172,12 @@ type AppointmentEditErrors = Partial<
   >
 >;
 
+const PRODUCT_RECORDABLE_STATUSES = new Set(["confirmed", "in_progress", "completed"]);
+
+function canRecordAppointmentProducts(status: string) {
+  return PRODUCT_RECORDABLE_STATUSES.has(status);
+}
+
 function AppointmentServicesList({
   appointmentId,
   services,
@@ -842,12 +848,9 @@ function AppointmentsPage() {
       nextErrors.products = "Each product can only be added once.";
     } else if (editForm.products.length > 0 && !selectedAppointment.wants_products) {
       nextErrors.products = "This customer selected No for shop products.";
-    } else if (
-      editForm.products.length > 0 &&
-      !["in_progress", "completed"].includes(editForm.status)
-    ) {
+    } else if (editForm.products.length > 0 && !canRecordAppointmentProducts(editForm.status)) {
       nextErrors.products =
-        "Products can only be recorded while service is in progress or completed.";
+        "Products can be recorded after the appointment is confirmed, before or during service.";
     }
     if (!editForm.appointmentDate) {
       nextErrors.appointmentDate = "Select an appointment date.";
@@ -1231,7 +1234,7 @@ function AppointmentsPage() {
                   <div className="space-y-3 rounded-lg border border-border/70 p-4">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
-                        <h4 className="font-medium">Products used during service</h4>
+                        <h4 className="font-medium">Products for this appointment</h4>
                         <p className="mt-1 text-sm text-muted-foreground">
                           Customer preference: {selectedAppointment.wants_products ? "Yes" : "No"}.
                           Product quantities and selling prices are saved as appointment records.
@@ -1243,7 +1246,7 @@ function AppointmentsPage() {
                         size="sm"
                         disabled={
                           !selectedAppointment.wants_products ||
-                          !["in_progress", "completed"].includes(editForm.status) ||
+                          !canRecordAppointmentProducts(editForm.status) ||
                           editForm.products.length >= 50
                         }
                         onClick={addProduct}
@@ -1257,10 +1260,10 @@ function AppointmentsPage() {
                       </p>
                     )}
                     {selectedAppointment.wants_products &&
-                      !["in_progress", "completed"].includes(editForm.status) && (
+                      !canRecordAppointmentProducts(editForm.status) && (
                         <p className="text-sm text-muted-foreground">
-                          Set the appointment status to In Progress or Completed to record products
-                          used during service.
+                          Confirm the appointment to add products before service begins. Products can
+                          also be adjusted while service is in progress or completed.
                         </p>
                       )}
                     <div className="space-y-3">
