@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   CircleDollarSign,
   Filter,
+  Info,
   ListFilter,
   Printer,
   RotateCcw,
@@ -18,8 +19,19 @@ import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
 
 import exportLogoUrl from "@/assets/export-logo.png";
+import {
+  AdminPage,
+  DataList,
+  type DataListColumn,
+  InlineAlert,
+  ListCard,
+  ListCardTitle,
+  ListEmpty,
+  ListToolbar,
+  ToolbarFilters,
+} from "@/components/admin/data-list";
+import { PageHeader } from "@/components/admin/page-header";
 import { PaginationControls } from "@/components/admin/pagination-controls";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent } from "@/components/ui/card";
@@ -41,14 +53,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import {
   calendarDateToIso,
@@ -60,7 +64,7 @@ import {
 } from "@/lib/admin-date-range";
 import { recordAdminActivityEvent } from "@/lib/admin-activity";
 import { formatBusinessTimestamp, SHOP_EXPORT_NAME, SHOP_OWNER_NAME } from "@/lib/export-branding";
-import { SHOP, formatDateLong, formatPHP, manilaNow, statusLabel, statusTone } from "@/lib/shop";
+import { SHOP, formatDateLong, formatPHP, manilaNow } from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/admin/reports")({
@@ -75,7 +79,6 @@ const periodOptions = [
   { value: "custom", label: "Custom dates" },
 ] as const;
 
-type ReportKind = "bookings" | "services" | "financial";
 type PeriodPreset = (typeof periodOptions)[number]["value"];
 type ReportFilters = {
   periodPreset: PeriodPreset;
@@ -83,45 +86,9 @@ type ReportFilters = {
   to: string;
   category: string;
   serviceName: string;
-  status: string;
 };
 
 type CatalogService = { id: string; name: string; category: string };
-type BookingRow = {
-  id: string;
-  reference_code: string;
-  customer_name: string;
-  appointment_date: string;
-  service: string;
-  products?: string;
-  status: string;
-  total_estimate: number | string;
-  service_subtotal?: number | string;
-  product_subtotal?: number | string;
-  total_amount?: number | string;
-};
-type ServiceRow = {
-  appointment_id: string;
-  service_id: string | null;
-  service_name: string;
-  price: number | string;
-  reference_code: string;
-  customer_name: string;
-  appointment_date: string;
-  status: string;
-  category: string;
-};
-type ReportMetrics = {
-  total_bookings: number;
-  completed_bookings?: number;
-  completed_rows?: number;
-  completed_value: number | string;
-  total_value?: number | string;
-  service_total?: number | string;
-  product_total?: number | string;
-  status_counts: Record<string, number>;
-};
-type ReportPage = { rows: Array<BookingRow | ServiceRow>; total: number; metrics: ReportMetrics };
 type FinancialTransactionRow = {
   id: string;
   reference_code: string;
@@ -183,10 +150,9 @@ type PrintPayload = {
   data: ReportData;
   generatedAt: string;
   period: string;
-  reportKind: ReportKind;
   scope: string;
   title: string;
-  financial?: {
+  financial: {
     servicePerformance: ServicePerformanceRow[];
     productSales: ProductSalesRow[];
     dailyRevenue: RevenuePeriodRow[];
@@ -207,8 +173,7 @@ function ReportsPage() {
     referenceCode: string;
     services: string[];
   } | null>(null);
-  const reportKind: ReportKind = "financial";
-  const { from, to, status, category, serviceName } = filters;
+  const { from, to, category, serviceName } = filters;
   const customDateError =
     draftFilters.periodPreset === "custom" && (!draftFilters.from || !draftFilters.to)
       ? "Select both a start and end date."
@@ -230,13 +195,11 @@ function ReportsPage() {
   });
 
   const data = useQuery({
-    queryKey: ["reports", { reportKind, from, to, status, category, serviceName, page }],
+    queryKey: ["reports", { from, to, category, serviceName, page }],
     queryFn: () =>
       getReportPage({
-        reportKind,
         from,
         to,
-        status,
         category,
         serviceName,
         limit: pageSize,
@@ -258,9 +221,9 @@ function ReportsPage() {
         .sort((first, second) => first.name.localeCompare(second.name)),
     [catalog.data, draftFilters.category],
   );
-  const financialReport = data.data as FinancialReportPage | undefined;
+  const financialReport = data.data;
   const metrics = financialReport?.metrics;
-  const reportData = makeReportData(reportKind, financialReport?.rows ?? [], metrics);
+  const reportData = makeReportData(financialReport?.rows ?? [], metrics);
   const reportTitle = "Financial Report (Summary)";
   const revenueRows =
     revenuePeriod === "daily"
@@ -304,11 +267,32 @@ function ReportsPage() {
 
   useEffect(() => {
     if (!printPayload) return;
-    const timer = window.setTimeout(() => {
+    let cancelled = false;
+    const timer = window.setTimeout(async () => {
+      const root = document.querySelector<HTMLElement>(".report-print-root");
+      if (root) {
+        // The logo must be decoded before the pages are measured.
+        await Promise.all(
+          Array.from(root.querySelectorAll("img"), (image) =>
+            image.decode().catch(() => undefined),
+          ),
+        );
+        if (cancelled) return;
+        paginateReport(root);
+      }
+      // Shown in the print dialog and used as the "Save as PDF" file name.
+      const previousTitle = document.title;
+      document.title = `${printPayload.title} - ${printPayload.period}`;
+      window.addEventListener("afterprint", () => (document.title = previousTitle), {
+        once: true,
+      });
       window.print();
       setPrintPayload(null);
     }, 0);
-    return () => window.clearTimeout(timer);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
   }, [printPayload]);
 
   async function printReport() {
@@ -316,35 +300,23 @@ function ReportsPage() {
     setIsPrinting(true);
     try {
       setPrintError(null);
-      const allRows = await getAllReportRows({
-        reportKind,
-        from,
-        to,
-        status,
-        category,
-        serviceName,
-      });
+      const allRows = await getAllReportRows({ from, to, category, serviceName });
       // Print totals and completed metrics are derived from the complete
       // filtered result set, not the currently visible paginated page.
-      const completeReportData = makeReportData(reportKind, allRows.rows, allRows.metrics, {
+      const completeReportData = makeReportData(allRows.rows, allRows.metrics, {
         hasCompleteRows: true,
       });
       setPrintPayload({
         data: completeReportData,
         generatedAt: formatBusinessTimestamp(),
         period: formatDateRange(from, to),
-        reportKind,
         scope: reportScope,
         title: reportTitle,
-        ...(allRows.financial
-          ? {
-              financial: {
-                servicePerformance: allRows.financial.service_performance,
-                productSales: allRows.financial.product_sales,
-                dailyRevenue: allRows.financial.daily_revenue,
-              },
-            }
-          : {}),
+        financial: {
+          servicePerformance: allRows.servicePerformance,
+          productSales: allRows.productSales,
+          dailyRevenue: allRows.dailyRevenue,
+        },
       });
       try {
         await recordAdminActivityEvent({
@@ -367,147 +339,97 @@ function ReportsPage() {
   }
 
   const rowLabel = "completed transactions";
+  const transactionRows: TransactionRow[] = reportData.rows.map((cells, index) => ({
+    key: `${cells[0]}-${index}`,
+    cells,
+  }));
 
   return (
-    <div>
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <span className="grid size-11 shrink-0 place-items-center rounded-xl border border-primary/25 bg-primary/10 text-primary">
-            <BarChart3 className="size-5" aria-hidden="true" />
-          </span>
-          <div>
-            <h1 className="font-display text-2xl tracking-wide uppercase md:text-3xl">
-              Financial Report (Summary)
-            </h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Track completed revenue, service performance, and product sales for the selected
-              period.
-            </p>
-          </div>
-        </div>
-        <div className="w-full sm:w-auto">
+    <AdminPage>
+      <PageHeader
+        title="Financial Report (Summary)"
+        description="Track completed revenue, service performance, and product sales for the selected period."
+        action={
           <Button
             type="button"
             variant="outline"
             disabled={!data.data?.total || isPrinting}
-            className="w-full uppercase sm:w-auto"
+            className="font-display uppercase"
             onClick={() => void printReport()}
           >
             <Printer /> {isPrinting ? "Preparing print..." : "Print report"}
           </Button>
-        </div>
-      </header>
-      {printError && (
-        <p role="alert" className="mb-5 text-sm text-destructive">
-          {printError}
-        </p>
-      )}
+        }
+      />
+      {printError && <InlineAlert>{printError}</InlineAlert>}
 
-      <Card className="mb-5 border-border/70 bg-card/60">
-        <CardContent className="p-4 sm:p-5">
-          <div className="mb-4 flex items-center gap-2">
-            <Filter className="size-4 text-primary" aria-hidden="true" />
-            <h2 className="font-display text-base tracking-wide uppercase">Filters</h2>
-          </div>
-          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.25fr)_auto] lg:items-end">
-            <FilterSelect
-              label="Service category"
-              value={draftFilters.category}
-              onValueChange={(value) => {
+      <ListToolbar>
+        <ToolbarFilters>
+          <Select
+            value={draftFilters.category}
+            onValueChange={(value) =>
+              setDraftFilters((current) => ({ ...current, category: value, serviceName: "all" }))
+            }
+          >
+            <SelectTrigger aria-label="Filter by service category" className="w-full sm:w-44">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All categories</SelectItem>
+              {categories.map((value) => (
+                <SelectItem key={value} value={value} className="capitalize">
+                  {value}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select
+            value={draftFilters.serviceName}
+            onValueChange={(value) =>
+              setDraftFilters((current) => ({ ...current, serviceName: value }))
+            }
+          >
+            <SelectTrigger aria-label="Filter by service" className="w-full sm:w-52">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All services</SelectItem>
+              {serviceOptions.map((item) => (
+                <SelectItem key={item.id} value={item.name}>
+                  {item.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="col-span-2 sm:w-52">
+            <PeriodPicker
+              value={draftFilters.periodPreset}
+              from={draftFilters.from}
+              to={draftFilters.to}
+              error={customDateError}
+              onValueChange={updatePeriod}
+              onRangeChange={(range) =>
                 setDraftFilters((current) => ({
                   ...current,
-                  category: value,
-                  serviceName: "all",
-                }));
-              }}
-              options={[
-                { value: "all", label: "All categories" },
-                ...categories.map((value) => ({ value, label: value })),
-              ]}
+                  periodPreset: "custom",
+                  ...range,
+                }))
+              }
             />
-            <div className="min-w-0 space-y-1.5">
-              <Label>Service</Label>
-              <Select
-                value={draftFilters.serviceName}
-                onValueChange={(value) =>
-                  setDraftFilters((current) => ({ ...current, serviceName: value }))
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All services</SelectItem>
-                  {serviceOptions.map((item) => (
-                    <SelectItem key={item.id} value={item.name}>
-                      {item.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="min-w-0 space-y-1.5">
-              <Label>Period</Label>
-              <PeriodPicker
-                value={draftFilters.periodPreset}
-                from={draftFilters.from}
-                to={draftFilters.to}
-                error={customDateError}
-                onValueChange={updatePeriod}
-                onRangeChange={(range) =>
-                  setDraftFilters((current) => ({
-                    ...current,
-                    periodPreset: "custom",
-                    ...range,
-                  }))
-                }
-              />
-            </div>
-            <div className="flex gap-2 md:col-span-2 lg:col-span-1 lg:self-end">
-              <Button
-                type="button"
-                className="flex-1 whitespace-nowrap lg:flex-none"
-                onClick={applyFilters}
-                disabled={Boolean(customDateError)}
-              >
-                <Filter /> Apply filters
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="flex-1 whitespace-nowrap lg:flex-none"
-                onClick={resetFilters}
-              >
-                <RotateCcw /> Reset
-              </Button>
-            </div>
           </div>
-          <p className="mt-4 rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-sm text-muted-foreground">
-            Only completed appointments are included in revenue. Pending, rejected, cancelled, and
-            rescheduled appointments are excluded from all financial totals.
-          </p>
-          <div className="mt-4 border-t border-border pt-3" aria-live="polite">
-            <p className="text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
-              Applied report scope
-            </p>
-            <dl className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-              {appliedFilters.map((filter) => (
-                <div
-                  key={filter.label}
-                  className="min-w-0 rounded-md border border-border/70 bg-muted/30 px-3 py-2"
-                >
-                  <dt className="text-[10px] font-medium tracking-wider text-muted-foreground uppercase">
-                    {filter.label}
-                  </dt>
-                  <dd className="mt-0.5 truncate text-sm font-medium text-foreground">
-                    {filter.value}
-                  </dd>
-                </div>
-              ))}
-            </dl>
-          </div>
-        </CardContent>
-      </Card>
+          <Button type="button" onClick={applyFilters} disabled={Boolean(customDateError)}>
+            <Filter /> Apply filters
+          </Button>
+          <Button type="button" variant="outline" onClick={resetFilters}>
+            <RotateCcw /> Reset
+          </Button>
+        </ToolbarFilters>
+      </ListToolbar>
+      <p className="mb-6 flex items-start gap-2 text-sm text-muted-foreground">
+        <Info className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+        Only completed appointments count toward revenue. Pending, rejected, cancelled, and
+        rescheduled appointments are left out of every total.
+      </p>
 
       <section aria-labelledby="report-summary-heading" className="mb-6">
         <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
@@ -521,7 +443,9 @@ function ReportsPage() {
                 Report summary
               </h2>
             </div>
-            <p className="mt-1 text-xs text-muted-foreground">{reportScope}</p>
+            <p className="mt-1 text-xs text-muted-foreground" aria-live="polite">
+              {reportScope}
+            </p>
           </div>
           <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2 text-right">
             <p className="text-[10px] font-semibold tracking-wider text-primary uppercase">
@@ -532,51 +456,49 @@ function ReportsPage() {
             </p>
           </div>
         </div>
-        <div className="overflow-x-auto pb-1">
-          <div className="grid min-w-[72rem] grid-cols-6 gap-3">
-            <Stat
-              label="Total Revenue"
-              value={formatPHP(metrics?.total_revenue ?? 0)}
-              detail="Completed service and product revenue"
-              icon={CircleDollarSign}
-              iconClassName="bg-emerald-500/15 text-emerald-400"
-            />
-            <Stat
-              label="Service Revenue"
-              value={formatPHP(metrics?.service_revenue ?? 0)}
-              detail="From completed services"
-              icon={CircleDollarSign}
-              iconClassName="bg-primary/15 text-primary"
-            />
-            <Stat
-              label="Product Revenue"
-              value={formatPHP(metrics?.product_revenue ?? 0)}
-              detail="From products sold during service"
-              icon={CircleDollarSign}
-              iconClassName="bg-accent/15 text-accent"
-            />
-            <Stat
-              label="Completed Transactions"
-              value={String(metrics?.completed_transactions ?? 0)}
-              detail="Revenue-recognized appointments"
-              icon={CheckCircle2}
-              iconClassName="bg-chart-4/15 text-chart-4"
-            />
-            <Stat
-              label="Total Completed Services"
-              value={String(metrics?.total_completed_services ?? 0)}
-              detail="Service entries performed"
-              icon={CalendarDays}
-              iconClassName="bg-primary/15 text-primary"
-            />
-            <Stat
-              label="Total Products Sold"
-              value={String(metrics?.total_products_sold ?? 0)}
-              detail="Units recorded during completed service"
-              icon={CircleDollarSign}
-              iconClassName="bg-accent/15 text-accent"
-            />
-          </div>
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+          <Stat
+            label="Total Revenue"
+            value={formatPHP(metrics?.total_revenue ?? 0)}
+            detail="Completed service and product revenue"
+            icon={CircleDollarSign}
+            iconClassName="bg-emerald-500/15 text-emerald-400"
+          />
+          <Stat
+            label="Service Revenue"
+            value={formatPHP(metrics?.service_revenue ?? 0)}
+            detail="From completed services"
+            icon={CircleDollarSign}
+            iconClassName="bg-primary/15 text-primary"
+          />
+          <Stat
+            label="Product Revenue"
+            value={formatPHP(metrics?.product_revenue ?? 0)}
+            detail="From products sold during service"
+            icon={CircleDollarSign}
+            iconClassName="bg-accent/15 text-accent"
+          />
+          <Stat
+            label="Completed Transactions"
+            value={String(metrics?.completed_transactions ?? 0)}
+            detail="Revenue-recognized appointments"
+            icon={CheckCircle2}
+            iconClassName="bg-chart-4/15 text-chart-4"
+          />
+          <Stat
+            label="Total Completed Services"
+            value={String(metrics?.total_completed_services ?? 0)}
+            detail="Service entries performed"
+            icon={CalendarDays}
+            iconClassName="bg-primary/15 text-primary"
+          />
+          <Stat
+            label="Total Products Sold"
+            value={String(metrics?.total_products_sold ?? 0)}
+            detail="Units recorded during completed service"
+            icon={CircleDollarSign}
+            iconClassName="bg-accent/15 text-accent"
+          />
         </div>
       </section>
 
@@ -590,6 +512,7 @@ function ReportsPage() {
             String(row.completed_count),
             formatPHP(row.revenue),
           ])}
+          loading={data.isLoading}
           emptyMessage="No completed services match this report selection."
           totalLabel="Total service revenue"
           totalValue={formatPHP(metrics?.service_revenue ?? 0)}
@@ -604,171 +527,138 @@ function ReportsPage() {
             formatPHP(row.unit_price),
             formatPHP(row.total_sales),
           ])}
+          loading={data.isLoading}
           emptyMessage="No products were sold in completed transactions for this period."
           totalLabel="Total product revenue"
           totalValue={formatPHP(metrics?.product_revenue ?? 0)}
         />
       </div>
 
-      <Card className="mb-6 border-border/70 bg-card/60">
-        <CardContent className="overflow-x-auto p-0">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-5">
-            <div>
-              <h2 className="font-display text-base tracking-wide uppercase">Revenue over time</h2>
-              <p className="mt-0.5 text-xs text-muted-foreground">
-                Completed transaction revenue by {revenuePeriod} period.
-              </p>
-            </div>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant={revenuePeriod === "daily" ? "default" : "outline"}
-                onClick={() => setRevenuePeriod("daily")}
-              >
-                Daily
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={revenuePeriod === "monthly" ? "default" : "outline"}
-                onClick={() => setRevenuePeriod("monthly")}
-              >
-                Monthly
-              </Button>
-            </div>
-          </div>
-          <Table className="admin-data-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{revenuePeriod === "daily" ? "Date" : "Month"}</TableHead>
-                <TableHead className="text-right">Transactions</TableHead>
-                <TableHead className="text-right">Service Revenue</TableHead>
-                <TableHead className="text-right">Product Revenue</TableHead>
-                <TableHead className="text-right">Total Revenue</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {revenueRows.map((row) => (
-                <TableRow key={row.period}>
-                  <TableCell className="text-sm">
-                    {formatRevenuePeriod(row.period, revenuePeriod)}
-                  </TableCell>
-                  <TableCell className="text-right text-sm">{row.completed_transactions}</TableCell>
-                  <TableCell className="text-right text-sm">
-                    {formatPHP(row.service_revenue)}
-                  </TableCell>
-                  <TableCell className="text-right text-sm">
-                    {formatPHP(row.product_revenue)}
-                  </TableCell>
-                  <TableCell className="text-right text-sm font-medium text-primary">
-                    {formatPHP(row.total_revenue)}
-                  </TableCell>
-                </TableRow>
-              ))}
-              {!data.isLoading && revenueRows.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
-                    No completed revenue is available for this period.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
-
-      <Card className="border-border/70 bg-card/60">
-        <CardContent className="overflow-x-auto p-0">
-          <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border px-4 py-4 sm:px-5">
-            <div className="flex items-center gap-2">
-              <ListFilter className="size-4 text-primary" aria-hidden="true" />
-              <div>
-                <h2 className="font-display text-base tracking-wide uppercase">
-                  Completed Transactions
-                </h2>
-                <p className="mt-0.5 text-xs text-muted-foreground">{reportScope}</p>
+      <ListCard
+        className="mb-6"
+        header={
+          <ListCardTitle
+            title="Revenue over time"
+            description={`Completed transaction revenue by ${revenuePeriod === "daily" ? "day" : "month"}.`}
+            action={
+              <div className="flex gap-2" role="group" aria-label="Revenue period">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={revenuePeriod === "daily" ? "default" : "outline"}
+                  aria-pressed={revenuePeriod === "daily"}
+                  onClick={() => setRevenuePeriod("daily")}
+                >
+                  Daily
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={revenuePeriod === "monthly" ? "default" : "outline"}
+                  aria-pressed={revenuePeriod === "monthly"}
+                  onClick={() => setRevenuePeriod("monthly")}
+                >
+                  Monthly
+                </Button>
               </div>
-            </div>
-            <span className="text-xs text-muted-foreground">
-              Page {data.data?.total ? page + 1 : 0} of{" "}
-              {Math.max(1, Math.ceil((data.data?.total ?? 0) / pageSize))}
-            </span>
-          </div>
-          <Table className="admin-data-table">
-            <TableHeader>
-              <TableRow>
-                {reportData.headers.map((header) => (
-                  <TableHead key={header}>{header}</TableHead>
-                ))}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {reportData.rows.map((row, index) => (
-                <TableRow key={`${row[0]}-${index}`}>
-                  {row.map((cell, cellIndex) => (
-                    <TableCell
-                      key={`${cellIndex}-${cell}`}
-                      data-label={reportData.headers[cellIndex]}
-                      className="text-sm"
-                    >
-                      {reportData.headers[cellIndex] === "Status" ? (
-                        <Badge
-                          variant="outline"
-                          className={cn(
-                            "text-[10px] uppercase",
-                            statusTone(
-                              data.data?.rows[index] && "status" in data.data.rows[index]
-                                ? data.data.rows[index].status
-                                : "",
-                            ),
-                          )}
-                        >
-                          {cell}
-                        </Badge>
-                      ) : reportData.headers[cellIndex] === "Services" ? (
-                        <ReportServicesCell
-                          value={cell}
-                          referenceCode={row[0] ?? "this booking"}
-                          onSeeMore={(services) =>
-                            setServiceListDialog({ referenceCode: row[0] ?? "", services })
-                          }
-                        />
-                      ) : (
-                        cell
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
-              ))}
-              {!data.isLoading && reportData.rows.length === 0 && (
-                <TableRow>
-                  <TableCell
-                    colSpan={reportData.headers.length}
-                    className="py-10 text-center text-sm text-muted-foreground"
-                  >
-                    No {rowLabel} match this report selection.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-          {data.isLoading && (
-            <p className="p-8 text-center text-sm text-muted-foreground">Loading report…</p>
-          )}
-          {data.isError && (
-            <p className="p-8 text-center text-sm text-destructive">
-              Could not load this report. Please try again.
-            </p>
-          )}
+            }
+          />
+        }
+      >
+        <DataList
+          label="Revenue over time"
+          rows={revenueRows}
+          rowKey={(row) => row.period}
+          loading={data.isLoading}
+          loadingRows={3}
+          error={
+            data.isError
+              ? { message: "Could not load revenue.", onRetry: () => void data.refetch() }
+              : null
+          }
+          empty={
+            <ListEmpty
+              icon={BarChart3}
+              title="No completed revenue for this period."
+              description="Revenue appears once appointments in this period are completed."
+            />
+          }
+          columns={[
+            {
+              key: "period",
+              header: revenuePeriod === "daily" ? "Date" : "Month",
+              card: "title",
+              cell: (row) => (
+                <span className="font-medium">
+                  {formatRevenuePeriod(row.period, revenuePeriod)}
+                </span>
+              ),
+            },
+            {
+              key: "transactions",
+              header: "Transactions",
+              className: "w-32 text-right",
+              cell: (row) => <span className="text-sm">{row.completed_transactions}</span>,
+            },
+            {
+              key: "service",
+              header: "Service revenue",
+              className: "w-36 text-right",
+              cell: (row) => <span className="text-sm">{formatPHP(row.service_revenue)}</span>,
+            },
+            {
+              key: "product",
+              header: "Product revenue",
+              className: "w-36 text-right",
+              cell: (row) => <span className="text-sm">{formatPHP(row.product_revenue)}</span>,
+            },
+            {
+              key: "total",
+              header: "Total revenue",
+              className: "w-36 text-right",
+              cell: (row) => (
+                <span className="text-sm font-medium text-primary">
+                  {formatPHP(row.total_revenue)}
+                </span>
+              ),
+            },
+          ]}
+        />
+      </ListCard>
+
+      <ListCard
+        header={<ListCardTitle title="Completed Transactions" description={reportScope} />}
+        footer={
           <PaginationControls
             page={page}
             pageSize={pageSize}
             total={data.data?.total ?? 0}
             onPageChange={setPage}
           />
-        </CardContent>
-      </Card>
+        }
+      >
+        <DataList
+          label="Completed transactions"
+          rows={transactionRows}
+          rowKey={(row) => row.key}
+          loading={data.isLoading}
+          error={
+            data.isError
+              ? { message: "Could not load this report.", onRetry: () => void data.refetch() }
+              : null
+          }
+          empty={
+            <ListEmpty
+              icon={ListFilter}
+              title={`No ${rowLabel} match this report selection.`}
+              description="Try a different period, category, or service."
+            />
+          }
+          columns={transactionColumns(reportData.headers, (services, referenceCode) =>
+            setServiceListDialog({ referenceCode, services }),
+          )}
+        />
+      </ListCard>
 
       <Dialog
         open={serviceListDialog !== null}
@@ -800,7 +690,7 @@ function ReportsPage() {
       </Dialog>
 
       <PrintReport payload={printPayload} />
-    </div>
+    </AdminPage>
   );
 }
 
@@ -843,6 +733,7 @@ function FinancialTableCard({
   description,
   headers,
   rows,
+  loading,
   emptyMessage,
   totalLabel,
   totalValue,
@@ -851,65 +742,146 @@ function FinancialTableCard({
   description: string;
   headers: string[];
   rows: string[][];
+  loading: boolean;
   emptyMessage: string;
   totalLabel: string;
   totalValue: string;
 }) {
+  const items = rows.map((cells, index) => ({ key: `${cells[0]}-${index}`, cells }));
   return (
-    <Card className="border-border/70 bg-card/60">
-      <CardContent className="overflow-x-auto p-0">
-        <div className="border-b border-border px-4 py-4 sm:px-5">
-          <h2 className="font-display text-base tracking-wide uppercase">{title}</h2>
-          <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
+    <ListCard
+      header={<ListCardTitle title={title} description={description} />}
+      footer={
+        <div className="flex items-center justify-between gap-3 border-t border-border/70 bg-muted/40 px-4 py-3 text-sm font-medium sm:px-5">
+          <span>{totalLabel}</span>
+          <span className="text-primary">{totalValue}</span>
         </div>
-        <Table className="admin-data-table">
-          <TableHeader>
-            <TableRow>
-              {headers.map((header) => (
-                <TableHead key={header} className={header === headers[0] ? "" : "text-right"}>
-                  {header}
-                </TableHead>
-              ))}
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {rows.map((row, index) => (
-              <TableRow key={`${row[0]}-${index}`}>
-                {row.map((cell, cellIndex) => (
-                  <TableCell
-                    key={`${cell}-${cellIndex}`}
-                    className={cn("text-sm", cellIndex > 0 && "text-right")}
-                  >
-                    {cell}
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))}
-            {rows.length === 0 && (
-              <TableRow>
-                <TableCell
-                  colSpan={headers.length}
-                  className="py-8 text-center text-sm text-muted-foreground"
-                >
-                  {emptyMessage}
-                </TableCell>
-              </TableRow>
-            )}
-          </TableBody>
-          <tfoot>
-            <TableRow className="border-t border-border bg-muted/40">
-              <TableCell colSpan={headers.length - 1} className="text-right text-sm font-medium">
-                {totalLabel}
-              </TableCell>
-              <TableCell className="text-right text-sm font-medium text-primary">
-                {totalValue}
-              </TableCell>
-            </TableRow>
-          </tfoot>
-        </Table>
-      </CardContent>
-    </Card>
+      }
+    >
+      <DataList
+        label={title}
+        rows={items}
+        rowKey={(item) => item.key}
+        loading={loading}
+        loadingRows={3}
+        empty={<ListEmpty icon={CircleDollarSign} title={emptyMessage} />}
+        columns={headers.map((header, index): DataListColumn<(typeof items)[number]> =>
+          index === 0
+            ? {
+                key: header,
+                header,
+                card: "title",
+                cell: (item) => <span className="font-medium">{item.cells[0]}</span>,
+              }
+            : {
+                key: header,
+                header,
+                className: "w-28 text-right",
+                cell: (item) => <span className="text-sm">{item.cells[index]}</span>,
+              },
+        )}
+      />
+    </ListCard>
   );
+}
+
+type TransactionRow = { key: string; cells: string[] };
+
+/**
+ * Columns for the paginated report rows. Cards show every value; the table
+ * keeps the reference, date, services, and total, and adds the service and
+ * product amounts from `xl` up.
+ */
+function transactionColumns(
+  headers: string[],
+  onSeeMore: (services: string[], referenceCode: string) => void,
+): DataListColumn<TransactionRow>[] {
+  const cellAt = (row: TransactionRow, header: string) => row.cells[headers.indexOf(header)] ?? "";
+  const referenceOf = (row: TransactionRow) => row.cells[0] || "this booking";
+  const servicesCell = (row: TransactionRow) => (
+    <ReportServicesCell
+      value={cellAt(row, "Services")}
+      referenceCode={referenceOf(row)}
+      onSeeMore={(services) => onSeeMore(services, referenceOf(row))}
+    />
+  );
+
+  return headers.flatMap((header, index): DataListColumn<TransactionRow>[] => {
+    const value = (row: TransactionRow) => row.cells[index] ?? "";
+    switch (header) {
+      case "Reference":
+        return [
+          {
+            key: header,
+            header,
+            card: "title",
+            className: "w-32",
+            cell: (row) => <span className="font-mono text-sm font-medium">{value(row)}</span>,
+          },
+        ];
+      case "Date":
+        return [
+          {
+            key: header,
+            header,
+            className: "w-36",
+            cell: (row) => <span className="text-sm">{value(row)}</span>,
+          },
+        ];
+      case "Services":
+        return [
+          {
+            key: header,
+            header,
+            card: "wide",
+            table: false,
+            cell: (row) => <span className="text-sm">{servicesCell(row)}</span>,
+          },
+          {
+            key: "services-and-products",
+            header: headers.includes("Products") ? "Services & products" : "Services",
+            card: false,
+            cell: (row) => {
+              const products = cellAt(row, "Products");
+              return (
+                <span className="text-sm">
+                  {servicesCell(row)}
+                  {products && products !== "-" && (
+                    <span className="mt-0.5 block text-xs text-muted-foreground">{products}</span>
+                  )}
+                </span>
+              );
+            },
+          },
+        ];
+      case "Products":
+        return [
+          {
+            key: header,
+            header,
+            card: "wide",
+            table: false,
+            cell: (row) => <span className="text-sm">{value(row)}</span>,
+          },
+        ];
+      default: {
+        const isTotal = /^total/i.test(header);
+        return [
+          {
+            key: header,
+            header,
+            xlOnly: !isTotal && /amount/i.test(header),
+            className: "w-32 text-right",
+            cell: (row) => (
+              <span className={cn("text-sm", isTotal && "font-medium text-primary")}>
+                {value(row)}
+              </span>
+            ),
+          },
+        ];
+      }
+    }
+  });
 }
 
 function splitServiceNames(value: string) {
@@ -917,36 +889,6 @@ function splitServiceNames(value: string) {
     .split(",")
     .map((service) => service.trim())
     .filter(Boolean);
-}
-
-function FilterSelect({
-  label,
-  value,
-  onValueChange,
-  options,
-}: {
-  label: string;
-  value: string;
-  onValueChange: (value: string) => void;
-  options: ReadonlyArray<{ value: string; label: string }>;
-}) {
-  return (
-    <div className="min-w-0 space-y-1.5">
-      <Label>{label}</Label>
-      <Select value={value} onValueChange={onValueChange}>
-        <SelectTrigger>
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((option) => (
-            <SelectItem key={option.value} value={option.value}>
-              {option.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
 }
 
 function PeriodPicker({
@@ -1117,55 +1059,36 @@ function PeriodPicker({
 }
 
 async function getReportPage(input: {
-  reportKind: ReportKind;
   from: string;
   to: string;
-  status: string;
   category: string;
   serviceName: string;
   limit: number;
   offset: number;
 }) {
-  if (input.reportKind === "financial") {
-    const { data, error } = await supabase.rpc("get_completed_financial_report_page", {
-      p_from: input.from,
-      p_to: input.to,
-      p_category: input.category === "all" ? null : input.category,
-      p_service_name: input.serviceName === "all" ? null : input.serviceName,
-      p_limit: input.limit,
-      p_offset: input.offset,
-    });
-    if (error) throw error;
-    if (!data || typeof data !== "object" || !Array.isArray((data as FinancialReportPage).rows)) {
-      throw new Error("The financial report response was incomplete.");
-    }
-    return data as unknown as FinancialReportPage;
-  }
-
-  const { data, error } = await supabase.rpc("get_admin_report_page", {
-    p_report_kind: input.reportKind,
+  const { data, error } = await supabase.rpc("get_completed_financial_report_page", {
     p_from: input.from,
     p_to: input.to,
-    p_status: input.status === "all" ? null : input.status,
     p_category: input.category === "all" ? null : input.category,
     p_service_name: input.serviceName === "all" ? null : input.serviceName,
     p_limit: input.limit,
     p_offset: input.offset,
   });
   if (error) throw error;
-  if (!data || typeof data !== "object" || !Array.isArray((data as ReportPage).rows)) {
-    throw new Error("The report response was incomplete.");
+  if (!data || typeof data !== "object" || !Array.isArray((data as FinancialReportPage).rows)) {
+    throw new Error("The financial report response was incomplete.");
   }
-  return data as unknown as ReportPage;
+  return data as unknown as FinancialReportPage;
 }
 
+/** Every row of the report, for printing, with the breakdowns from the first page. */
 async function getAllReportRows(
   input: Omit<Parameters<typeof getReportPage>[0], "limit" | "offset">,
 ) {
   const limit = 250;
   let offset = 0;
-  let first: FinancialReportPage | ReportPage | null = null;
-  let rows: Array<FinancialTransactionRow | BookingRow | ServiceRow> = [];
+  let first: FinancialReportPage | null = null;
+  let rows: FinancialTransactionRow[] = [];
   do {
     const current = await getReportPage({ ...input, limit, offset });
     first ??= current;
@@ -1179,226 +1102,75 @@ async function getAllReportRows(
     rows,
     total: first?.total ?? 0,
     metrics: first?.metrics,
-    financial: input.reportKind === "financial" ? (first as FinancialReportPage | null) : undefined,
+    servicePerformance: first?.service_performance ?? [],
+    productSales: first?.product_sales ?? [],
+    dailyRevenue: first?.daily_revenue ?? [],
   };
 }
 
 function makeReportData(
-  reportKind: ReportKind,
-  rows: Array<FinancialTransactionRow | BookingRow | ServiceRow>,
-  metrics?: FinancialMetrics | ReportMetrics,
+  rows: FinancialTransactionRow[],
+  metrics?: FinancialMetrics,
   options: { hasCompleteRows?: boolean } = {},
 ): ReportData {
-  if (reportKind === "financial") {
-    const financialRows = rows as FinancialTransactionRow[];
-    const financialMetrics = metrics as FinancialMetrics | undefined;
-    const serviceAmount = sumMoney(financialRows.map((row) => row.service_amount));
-    const productAmount = sumMoney(financialRows.map((row) => row.product_amount));
-    const totalAmount = sumMoney(financialRows.map((row) => row.total_amount));
-    return {
-      headers: [
-        "Reference",
-        "Date",
-        "Services",
-        "Products",
-        "Service Amount",
-        "Product Amount",
-        "Total Amount",
-      ],
-      rows: financialRows.map((row) => [
-        row.reference_code,
-        formatDateLong(row.transaction_date),
-        row.services || "-",
-        row.products || "-",
-        formatPHP(row.service_amount),
-        formatPHP(row.product_amount),
-        formatPHP(row.total_amount),
-      ]),
-      cards: [
-        {
-          label: "Total revenue",
-          value: formatPHP(
-            options.hasCompleteRows
-              ? totalAmount
-              : (financialMetrics?.total_revenue ?? totalAmount),
-          ),
-          detail: "Completed transactions only",
-          tone: "success",
-        },
-        {
-          label: "Service revenue",
-          value: formatPHP(
-            options.hasCompleteRows
-              ? serviceAmount
-              : (financialMetrics?.service_revenue ?? serviceAmount),
-          ),
-          detail: "Completed service charges",
-          tone: "primary",
-        },
-        {
-          label: "Product revenue",
-          value: formatPHP(
-            options.hasCompleteRows
-              ? productAmount
-              : (financialMetrics?.product_revenue ?? productAmount),
-          ),
-          detail: "Products sold during service",
-          tone: "accent",
-        },
-        {
-          label: "Completed transactions",
-          value: String(
-            options.hasCompleteRows
-              ? financialRows.length
-              : (financialMetrics?.completed_transactions ?? financialRows.length),
-          ),
-          detail: "Revenue-recognized appointments",
-          tone: "chart",
-        },
-      ],
-      totalAmount,
-    };
-  }
-  if (reportKind === "services") {
-    const legacyMetrics = metrics as ReportMetrics | undefined;
-    const serviceRows = rows as ServiceRow[];
-    const completedRows = serviceRows.filter((row) => row.status === "completed");
-    const completeValue = sumMoney(completedRows.map((row) => row.price));
-    const selectedAmount = sumMoney(serviceRows.map((row) => row.price));
-    const totalAmount = options.hasCompleteRows
-      ? selectedAmount
-      : legacyMetrics?.total_value === undefined
-        ? selectedAmount
-        : moneyValue(legacyMetrics.total_value);
-    return {
-      headers: ["Reference", "Customer", "Date", "Status", "Service", "Category", "Value"],
-      rows: serviceRows.map((row) => [
-        row.reference_code,
-        row.customer_name,
-        formatDateLong(row.appointment_date),
-        statusLabel(row.status),
-        row.service_name,
-        row.category,
-        formatPHP(row.price),
-      ]),
-      cards: [
-        {
-          label: "Service entries",
-          value: String(serviceRows.length),
-          detail: "Entries in selected period",
-          tone: "primary",
-        },
-        {
-          label: "Bookings served",
-          value: String(legacyMetrics?.total_bookings ?? 0),
-          detail: "Bookings represented",
-          tone: "chart",
-        },
-        {
-          label: "Completed entries",
-          value: String(
-            options.hasCompleteRows ? completedRows.length : (legacyMetrics?.completed_rows ?? 0),
-          ),
-          detail: "Jobs with status Completed",
-          tone: "success",
-        },
-        {
-          label: "Completed value",
-          value: formatPHP(
-            options.hasCompleteRows ? completeValue : (legacyMetrics?.completed_value ?? 0),
-          ),
-          detail: "Value from completed jobs",
-          tone: "accent",
-        },
-      ],
-      totalAmount,
-    };
-  }
-  const legacyMetrics = metrics as ReportMetrics | undefined;
-  const bookingRows = rows as BookingRow[];
-  const completedBookings = bookingRows.filter((row) => row.status === "completed");
-  const completedValue = sumMoney(completedBookings.map(bookingTotal));
-  const selectedServiceSubtotal = sumMoney(bookingRows.map(bookingServiceSubtotal));
-  const selectedProductSubtotal = sumMoney(bookingRows.map(bookingProductSubtotal));
-  const selectedAmount = sumMoney(bookingRows.map(bookingTotal));
-  const totalAmount = options.hasCompleteRows
-    ? selectedAmount
-    : legacyMetrics?.total_value === undefined
-      ? selectedAmount
-      : moneyValue(legacyMetrics.total_value);
+  const serviceAmount = sumMoney(rows.map((row) => row.service_amount));
+  const productAmount = sumMoney(rows.map((row) => row.product_amount));
+  const totalAmount = sumMoney(rows.map((row) => row.total_amount));
   return {
     headers: [
       "Reference",
-      "Customer",
       "Date",
-      "Status",
       "Services",
       "Products",
-      "Service subtotal",
-      "Product subtotal",
-      "Total",
+      "Service Amount",
+      "Product Amount",
+      "Total Amount",
     ],
-    rows: bookingRows.map((row) => [
+    rows: rows.map((row) => [
       row.reference_code,
-      row.customer_name,
-      formatDateLong(row.appointment_date),
-      statusLabel(row.status),
-      row.service || "—",
-      row.products || "—",
-      formatPHP(bookingServiceSubtotal(row)),
-      formatPHP(bookingProductSubtotal(row)),
-      formatPHP(bookingTotal(row)),
+      formatDateLong(row.transaction_date),
+      row.services || "-",
+      row.products || "-",
+      formatPHP(row.service_amount),
+      formatPHP(row.product_amount),
+      formatPHP(row.total_amount),
     ]),
     cards: [
       {
-        label: "Total bookings",
-        value: String(legacyMetrics?.total_bookings ?? 0),
-        detail: "All bookings in selected period",
+        label: "Total revenue",
+        value: formatPHP(
+          options.hasCompleteRows ? totalAmount : (metrics?.total_revenue ?? totalAmount),
+        ),
+        detail: "Completed transactions only",
+        tone: "success",
+      },
+      {
+        label: "Service revenue",
+        value: formatPHP(
+          options.hasCompleteRows ? serviceAmount : (metrics?.service_revenue ?? serviceAmount),
+        ),
+        detail: "Completed service charges",
         tone: "primary",
       },
       {
-        label: "Service charges",
+        label: "Product revenue",
         value: formatPHP(
-          options.hasCompleteRows
-            ? selectedServiceSubtotal
-            : (legacyMetrics?.service_total ?? selectedServiceSubtotal),
+          options.hasCompleteRows ? productAmount : (metrics?.product_revenue ?? productAmount),
         ),
-        detail: "Service subtotal",
-        tone: "primary",
-      },
-      {
-        label: "Product charges",
-        value: formatPHP(
-          options.hasCompleteRows
-            ? selectedProductSubtotal
-            : (legacyMetrics?.product_total ?? selectedProductSubtotal),
-        ),
-        detail: "Products recorded during service",
+        detail: "Products sold during service",
         tone: "accent",
       },
       {
-        label: "Completed amount",
-        value: formatPHP(
-          options.hasCompleteRows ? completedValue : (legacyMetrics?.completed_value ?? 0),
+        label: "Completed transactions",
+        value: String(
+          options.hasCompleteRows ? rows.length : (metrics?.completed_transactions ?? rows.length),
         ),
-        detail: "Service and product charges for completed jobs",
-        tone: "success",
+        detail: "Revenue-recognized appointments",
+        tone: "chart",
       },
     ],
     totalAmount,
   };
-}
-
-function bookingServiceSubtotal(row: BookingRow) {
-  return moneyValue(row.service_subtotal ?? row.total_estimate);
-}
-
-function bookingProductSubtotal(row: BookingRow) {
-  return moneyValue(row.product_subtotal);
-}
-
-function bookingTotal(row: BookingRow) {
-  return moneyValue(row.total_amount ?? bookingServiceSubtotal(row) + bookingProductSubtotal(row));
 }
 
 function moneyValue(value: number | string | null | undefined) {
@@ -1422,7 +1194,6 @@ function getInitialFilters(today: string): ReportFilters {
     ...range,
     category: "all",
     serviceName: "all",
-    status: "all",
   };
 }
 
@@ -1448,605 +1219,196 @@ function periodRange(preset: Exclude<PeriodPreset, "custom">, today: string) {
   return manilaMonthDateRange(today);
 }
 
-/* Removed file-export implementation. Reports now use the browser print system.
-async function addReportPdfFont(doc: import("jspdf").jsPDF) {
-  const response = await fetch(reportPdfFontUrl);
-  if (!response.ok) throw new Error("Could not load the PDF export font.");
+/** A4 landscape, and the margins on every printed page (millimetres). */
+const PRINT_PAGE_MM = { width: 297, height: 210, top: 12, bottom: 15, side: 11 };
+/** Sheets are a little shorter than the paper so rounding never spills onto an extra page. */
+const PRINT_SHEET_HEIGHT_MM = PRINT_PAGE_MM.height - 1;
+/** Content is never filled to the very edge of a sheet. */
+const PRINT_SHEET_SAFETY_MM = 2;
+const MM_TO_PX = 96 / 25.4;
+/** Minimum space between the last table and the signatures. */
+const SIGN_OFF_GAP_MM = 10;
 
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(offset, offset + chunkSize));
-  }
+/** The part of a report table that is on one sheet. */
+type PrintTablePart = {
+  section: HTMLElement;
+  table: HTMLElement;
+  body: HTMLTableSectionElement;
+  footer: HTMLElement | null;
+  rows: number;
+};
 
-  doc.addFileToVFS(REPORT_PDF_FONT_FILE, binary);
-  doc.addFont(REPORT_PDF_FONT_FILE, REPORT_PDF_FONT, "normal");
-  doc.addFont(REPORT_PDF_FONT_FILE, REPORT_PDF_FONT, "bold");
-}
+/**
+ * Lays the report out on fixed A4 sheets, one per printed page, so the page
+ * breaks are decided here rather than guessed. Rows and blocks are never split,
+ * a section heading stays with its table, and a table's header row repeats on
+ * each sheet it continues on. The signatures go at the bottom of the last sheet.
+ * When there is not enough room below the content, they go on a new sheet,
+ * together with the last row and total of the final table.
+ *
+ * Fills .report-print-sheets; if anything fails, the sheets stay empty and the
+ * report prints as one flowing document instead.
+ */
+function paginateReport(root: HTMLElement) {
+  const sheets = root.querySelector<HTMLElement>(".report-print-sheets");
+  const content = root.querySelector<HTMLElement>(".report-print-flow .report-print-content");
+  const signOff = root.querySelector<HTMLElement>(".report-print-flow .report-print-signoff");
+  if (!sheets || !content || !signOff) return;
+  sheets.replaceChildren();
 
-async function exportPdf(
-  data: ExportData,
-  reportKind: ReportKind,
-  title: string,
-  scope: string,
-  from: string,
-  to: string,
-) {
-  const [{ jsPDF }, { default: autoTable }] = await Promise.all([
-    import("jspdf"),
-    import("jspdf-autotable"),
-  ]);
-  const doc = new jsPDF({ orientation: "landscape", unit: "mm", format: "a4" });
-  await addReportPdfFont(doc);
-  const logo = await getShopLogoDataUrl();
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const margin = 12;
-  const colors = {
-    ink: [55, 43, 31] as [number, number, number],
-    paper: [255, 253, 247] as [number, number, number],
-    muted: [246, 241, 231] as [number, number, number],
-    border: [222, 211, 190] as [number, number, number],
-    primary: [185, 132, 26] as [number, number, number],
-    accent: [201, 88, 26] as [number, number, number],
-    success: [55, 133, 91] as [number, number, number],
-    chart: [75, 94, 155] as [number, number, number],
-    white: [255, 255, 255] as [number, number, number],
-  };
+  const pageWidth = (PRINT_PAGE_MM.width - 2 * PRINT_PAGE_MM.side) * MM_TO_PX;
+  const pageHeight =
+    (PRINT_SHEET_HEIGHT_MM - PRINT_PAGE_MM.top - PRINT_PAGE_MM.bottom - PRINT_SHEET_SAFETY_MM) *
+    MM_TO_PX;
 
-  doc.setFillColor(...colors.paper);
-  doc.rect(0, 0, pageWidth, pageHeight, "F");
+  // Measure everything once at the printed width, off screen.
+  const probe = document.createElement("article");
+  probe.className = "report-print-document";
+  Object.assign(probe.style, {
+    position: "absolute",
+    top: "0",
+    left: "-100000px",
+    width: `${pageWidth}px`,
+    visibility: "hidden",
+  });
+  const flow = content.cloneNode(true) as HTMLElement;
+  const signatures = signOff.cloneNode(true) as HTMLElement;
+  probe.append(flow, signatures);
+  document.body.append(probe);
 
-  const drawHeader = (continuation = false) => {
-    doc.setFillColor(...colors.ink);
-    doc.roundedRect(
-      margin,
-      continuation ? 7 : 10,
-      pageWidth - margin * 2,
-      continuation ? 13 : 30,
-      3,
-      3,
-      "F",
-    );
-    if (continuation) {
-      doc.setFont(REPORT_PDF_FONT, "bold");
-      doc.setFontSize(7);
-      doc.setTextColor(...colors.white);
-      doc.text(`${SHOP_EXPORT_NAME}  ·  ${title.toUpperCase()}`, margin + 5, 15);
-      doc.setDrawColor(...colors.primary);
-      doc.setLineWidth(0.6);
-      doc.line(margin, 21, pageWidth - margin, 21);
-      return;
+  try {
+    const height = (element: Element) => element.getBoundingClientRect().height;
+    const margin = (element: Element, side: "marginTop" | "marginBottom") =>
+      parseFloat(getComputedStyle(element)[side]) || 0;
+
+    let sheet = document.createElement("section");
+    let used = 0;
+    const newSheet = () => {
+      sheet = document.createElement("section");
+      sheet.className = "report-print-document report-print-sheet";
+      sheets.append(sheet);
+      used = 0;
+    };
+    const fits = (extra: number) => used + extra <= pageHeight;
+    newSheet();
+    // The part of the final table on the current sheet, if the report ends in one.
+    let lastTable: { part: PrintTablePart; continueOnNewSheet: () => PrintTablePart } | null = null;
+
+    for (const block of Array.from(flow.children)) {
+      const table = block.querySelector(".report-print-table");
+      const rows = table
+        ? [
+            ...Array.from(table.querySelectorAll(":scope > tbody > tr"), (row) => ({
+              row,
+              inFooter: false,
+            })),
+            ...Array.from(table.querySelectorAll(":scope > tfoot > tr"), (row) => ({
+              row,
+              inFooter: true,
+            })),
+          ]
+        : [];
+      const firstRow = rows[0];
+      const marginTop = margin(block, "marginTop");
+
+      if (!table || !firstRow) {
+        const blockHeight = height(block) + margin(block, "marginBottom");
+        if (used > 0 && !fits(marginTop + blockHeight)) newSheet();
+        const clone = block.cloneNode(true) as HTMLElement;
+        // Space above a block is dropped at the top of a sheet.
+        if (used === 0) clone.style.marginTop = "0";
+        sheet.append(clone);
+        used += (used === 0 ? 0 : marginTop) + blockHeight;
+        lastTable = null;
+        continue;
+      }
+
+      const heading = block.querySelector(":scope > h2");
+      const colgroup = table.querySelector(":scope > colgroup");
+      const thead = table.querySelector(":scope > thead");
+      const headingHeight = heading
+        ? height(heading) + margin(heading, "marginTop") + margin(heading, "marginBottom")
+        : 0;
+      const headerHeight = thead ? height(thead) : 0;
+
+      // The part of this section on one sheet: the heading on the first sheet
+      // only, and the table's column widths and header row on every sheet.
+      const startPart = (withHeading: boolean) => {
+        const section = block.cloneNode(false) as HTMLElement;
+        if (used === 0) section.style.marginTop = "0";
+        if (withHeading && heading) section.append(heading.cloneNode(true));
+        const shell = table.cloneNode(false) as HTMLElement;
+        if (colgroup) shell.append(colgroup.cloneNode(true));
+        if (thead) shell.append(thead.cloneNode(true));
+        const body = shell.appendChild(document.createElement("tbody"));
+        section.append(shell);
+        sheet.append(section);
+        return { section, table: shell, body, footer: null as HTMLElement | null, rows: 0 };
+      };
+
+      // The heading, header row, and first row stay together.
+      if (used > 0 && !fits(marginTop + headingHeight + headerHeight + height(firstRow.row))) {
+        newSheet();
+      }
+      const sectionStart = (used === 0 ? 0 : marginTop) + headingHeight + headerHeight;
+      let part = startPart(true);
+      used += sectionStart;
+
+      for (const { row, inFooter } of rows) {
+        const rowHeight = height(row);
+        if (part.rows > 0 && !fits(rowHeight)) {
+          newSheet();
+          part = startPart(false);
+          used += headerHeight;
+        }
+        if (inFooter) {
+          part.footer ??= part.table.appendChild(document.createElement("tfoot"));
+          part.footer.append(row.cloneNode(true));
+        } else {
+          part.body.append(row.cloneNode(true));
+        }
+        part.rows += 1;
+        used += rowHeight;
+      }
+      lastTable = { part, continueOnNewSheet: () => startPart(false) };
     }
-    // Keep the source logo's 360:202 aspect ratio while giving it a stronger
-    // presence in the header.
-    doc.addImage(logo, "PNG", margin + 4, 13, 42, 23.55);
-    doc.setFont(REPORT_PDF_FONT, "bold");
-    doc.setTextColor(...colors.white);
-    doc.setFontSize(15);
-    doc.text(SHOP_EXPORT_NAME, margin + 51, 21);
-    doc.setFont(REPORT_PDF_FONT, "normal");
-    doc.setFontSize(7.5);
-    doc.text(SHOP.tagline, margin + 51, 27);
-    doc.setFont(REPORT_PDF_FONT, "bold");
-    doc.setFontSize(13);
-    doc.text(title.toUpperCase(), pageWidth - margin - 5, 20, { align: "right" });
-    doc.setFont(REPORT_PDF_FONT, "normal");
-    doc.setFontSize(7.5);
-    doc.text(`Generated: ${formatBusinessTimestamp()}`, pageWidth - margin - 5, 27, {
-      align: "right",
-    });
-  };
 
-  drawHeader();
-  const periodY = 47;
-  doc.setFillColor(...colors.muted);
-  doc.setDrawColor(...colors.border);
-  doc.roundedRect(margin, periodY, pageWidth - margin * 2, 21, 2, 2, "FD");
-  doc.setDrawColor(...colors.primary);
-  doc.setLineWidth(1.1);
-  doc.line(margin + 6, periodY + 4, margin + 6, periodY + 11);
-  doc.line(margin + 3, periodY + 6, margin + 9, periodY + 6);
-  doc.setFont(REPORT_PDF_FONT, "bold");
-  doc.setTextColor(...colors.ink);
-  doc.setFontSize(7);
-  doc.text("REPORT PERIOD", margin + 14, periodY + 6);
-  doc.setFont(REPORT_PDF_FONT, "bold");
-  doc.setFontSize(10.5);
-  doc.text(`${formatDateRange(from, to)}`, margin + 14, periodY + 11.5);
-  doc.setFont(REPORT_PDF_FONT, "normal");
-  doc.setFontSize(5.6);
-  const scopeLines = doc.splitTextToSize(`Filters: ${scope}`, pageWidth - margin * 2 - 28);
-  doc.text(scopeLines, margin + 14, periodY + 16);
-
-  const drawSectionHeading = (label: string, y: number) => {
-    doc.setFont(REPORT_PDF_FONT, "bold");
-    doc.setFontSize(9);
-    doc.setTextColor(...colors.ink);
-    doc.text(label.toUpperCase(), margin + 10, y);
-    doc.setDrawColor(...colors.primary);
-    doc.setLineWidth(0.45);
-    doc.line(margin + 52, y - 1, pageWidth - margin, y - 1);
-  };
-
-  drawSectionHeading("Report summary", 75);
-  const summaryColumns = [margin + 10, pageWidth / 2 + 2];
-  const summaryRows = [
-    [data.cards[0], data.cards[1]],
-    [data.cards[2], data.cards[3]],
-  ];
-  summaryRows.forEach((row, rowIndex) => {
-    row.forEach((card, columnIndex) => {
-      if (!card) return;
-      const x = summaryColumns[columnIndex]!;
-      const y = 84 + rowIndex * 10;
-      doc.setTextColor(...colors.ink);
-      doc.setFont(REPORT_PDF_FONT, "bold");
-      doc.setFontSize(8.5);
-      doc.text(`${card.label}:`, x, y);
-      doc.setFont(REPORT_PDF_FONT, "normal");
-      doc.text(card.value, x + doc.getTextWidth(`${card.label}: `), y);
-    });
-  });
-
-  drawSectionHeading(
-    reportKind === "services" ? "Service entries" : "Bookings for selected period",
-    107,
-  );
-  autoTable(doc, {
-    startY: 111,
-    head: [data.headers],
-    body: data.rows,
-    foot: [
-      [
-        {
-          content: "TOTAL AMOUNT",
-          colSpan: data.headers.length - 1,
-          styles: { halign: "right" },
-        },
-        { content: formatPHP(data.totalAmount), styles: { halign: "right" } },
-      ],
-    ],
-    showFoot: "lastPage",
-    theme: "grid",
-    margin: { left: margin, right: margin, top: 27, bottom: 34 },
-    styles: {
-      font: REPORT_PDF_FONT,
-      fontSize: 7.2,
-      cellPadding: 2.1,
-      textColor: colors.ink,
-      lineColor: colors.border,
-      lineWidth: 0.2,
-      valign: "middle",
-    },
-    headStyles: {
-      fillColor: colors.ink,
-      textColor: colors.white,
-      fontStyle: "bold",
-      fontSize: 7.2,
-      cellPadding: 2.7,
-    },
-    footStyles: {
-      fillColor: colors.muted,
-      textColor: colors.ink,
-      fontStyle: "bold",
-      fontSize: 8,
-      cellPadding: 2.7,
-    },
-    alternateRowStyles: { fillColor: colors.paper },
-    columnStyles:
-      reportKind === "services"
-        ? {
-            0: { cellWidth: 29 },
-            1: { cellWidth: 38 },
-            2: { cellWidth: 40 },
-            3: { cellWidth: 27 },
-            4: { cellWidth: 42 },
-            5: { cellWidth: 34 },
-            6: { cellWidth: 35, halign: "right" },
-          }
-        : {
-            0: { cellWidth: 35 },
-            1: { cellWidth: 43 },
-            2: { cellWidth: 51 },
-            3: { cellWidth: 54, overflow: "linebreak" },
-            4: { cellWidth: 29, halign: "center" },
-            5: { cellWidth: 55, halign: "right", overflow: "linebreak" },
-          },
-    didParseCell: (hook) => {
-      const statusIndex = data.headers.indexOf("Status");
-      if (hook.section === "foot") {
-        hook.cell.styles.halign = "right";
+    if (!fits(SIGN_OFF_GAP_MM * MM_TO_PX + height(signatures))) {
+      newSheet();
+      // The signatures never sit alone on a page: the final table's last row
+      // and total move down with them.
+      if (lastTable) {
+        const { part } = lastTable;
+        const bodyRows = Array.from(part.body.rows);
+        const lastRow = bodyRows.at(-1);
+        if (bodyRows.length > 1 && lastRow) {
+          const moved = lastTable.continueOnNewSheet();
+          moved.body.append(lastRow);
+          if (part.footer) moved.table.append(part.footer);
+        } else {
+          part.section.style.marginTop = "0";
+          sheet.append(part.section);
+        }
       }
-      if (hook.section === "body" && hook.column.index === statusIndex) {
-        hook.cell.styles.fontStyle = "bold";
-        hook.cell.styles.halign = "center";
-        const status = String(hook.cell.raw ?? "").toLowerCase();
-        if (status.includes("completed")) hook.cell.styles.textColor = colors.success;
-        else if (
-          status.includes("cancelled") ||
-          status.includes("rejected") ||
-          status.includes("no show")
-        )
-          hook.cell.styles.textColor = [177, 56, 43];
-        else if (status.includes("confirmed")) hook.cell.styles.textColor = colors.chart;
-        else if (status.includes("pending") || status.includes("rescheduled"))
-          hook.cell.styles.textColor = colors.accent;
-      }
-    },
-    didDrawPage: (hook) => {
-      if (hook.pageNumber > 1) drawHeader(true);
-    },
-  });
-  const finalY =
-    (doc as typeof doc & { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? 112;
-  doc.setPage(doc.getNumberOfPages());
-  const signatureTop = pageHeight - 24;
-  // The total is the final table row, directly beneath the Amount column. Keep
-  // the sign-off area on its own continuation page if the table leaves too
-  // little room for it.
-  if (finalY + 18 > signatureTop) {
-    doc.addPage();
-    drawHeader(true);
+    }
+    sheet.append(signOff.cloneNode(true));
+  } catch (error) {
+    console.error("Could not lay out the report pages:", error);
+    sheets.replaceChildren();
+  } finally {
+    probe.remove();
   }
-
-  doc.setFont(REPORT_PDF_FONT, "normal");
-  doc.setFontSize(7);
-  doc.text("Prepared By", margin + 2, signatureTop);
-  doc.setDrawColor(...colors.border);
-  doc.line(margin + 2, signatureTop + 14, margin + 72, signatureTop + 14);
-  doc.text("Approved By", pageWidth - margin - 72, signatureTop);
-  doc.setFont(REPORT_PDF_FONT, "bold");
-  doc.text(SHOP_OWNER_NAME, pageWidth - margin - 36, signatureTop + 6, { align: "center" });
-  doc.setFont(REPORT_PDF_FONT, "normal");
-  doc.text("Shop Owner", pageWidth - margin - 36, signatureTop + 10, { align: "center" });
-  doc.line(pageWidth - margin - 72, signatureTop + 14, pageWidth - margin, signatureTop + 14);
-  doc.save(`fake-rider-${fileName(reportKind)}-${from}-to-${to}.pdf`);
 }
-
-async function exportDocx(
-  data: ExportData,
-  reportKind: ReportKind,
-  title: string,
-  scope: string,
-  from: string,
-  to: string,
-) {
-  const {
-    AlignmentType,
-    BorderStyle,
-    Document,
-    ImageRun,
-    Packer,
-    PageOrientation,
-    Paragraph,
-    Table,
-    TableCell,
-    TableLayoutType,
-    TableRow,
-    TextRun,
-    WidthType,
-  } = await import("docx");
-  const logoData = dataUrlToUint8Array(await getShopLogoDataUrl());
-  const border = { style: BorderStyle.SINGLE, color: "DED3BE", size: 5 };
-  const tableBorders = {
-    top: border,
-    bottom: border,
-    left: border,
-    right: border,
-    insideHorizontal: border,
-    insideVertical: border,
-  };
-  const text = (value: string, options: Record<string, unknown> = {}) =>
-    new TextRun({ text: value, font: "Arial", size: 17, ...options });
-  const headerRow = new TableRow({
-    tableHeader: true,
-    children: data.headers.map(
-      (header, index) =>
-        new TableCell({
-          shading: { fill: "372B1F" },
-          margins: { top: 90, bottom: 90, left: 90, right: 90 },
-          children: [
-            new Paragraph({
-              alignment:
-                index === data.headers.length - 1 ? AlignmentType.RIGHT : AlignmentType.LEFT,
-              children: [text(header, { bold: true, color: "FFFFFF", size: 16 })],
-            }),
-          ],
-        }),
-    ),
-  });
-  const rows = data.rows.map(
-    (row, rowIndex) =>
-      new TableRow({
-        children: row.map(
-          (cell, cellIndex) =>
-            new TableCell({
-              shading: rowIndex % 2 === 1 ? { fill: "FFFDF7" } : { fill: "FFFFFF" },
-              margins: { top: 75, bottom: 75, left: 90, right: 90 },
-              children: [
-                new Paragraph({
-                  alignment:
-                    cellIndex === row.length - 1 ? AlignmentType.RIGHT : AlignmentType.LEFT,
-                  children: [
-                    text(cell, { color: "372B1F", bold: data.headers[cellIndex] === "Status" }),
-                  ],
-                }),
-              ],
-            }),
-        ),
-      }),
-  );
-  const totalRow = new TableRow({
-    children: [
-      new TableCell({
-        columnSpan: data.headers.length - 1,
-        shading: { fill: "F6F1E7" },
-        margins: { top: 90, bottom: 90, left: 90, right: 90 },
-        children: [
-          new Paragraph({
-            alignment: AlignmentType.RIGHT,
-            children: [text("TOTAL AMOUNT", { bold: true, size: 16, color: "372B1F" })],
-          }),
-        ],
-      }),
-      new TableCell({
-        shading: { fill: "F6F1E7" },
-        margins: { top: 90, bottom: 90, left: 90, right: 90 },
-        children: [
-          new Paragraph({
-            alignment: AlignmentType.RIGHT,
-            children: [
-              text(formatPHP(data.totalAmount), { bold: true, size: 16, color: "B9841A" }),
-            ],
-          }),
-        ],
-      }),
-    ],
-  });
-  const exportColumnWidths =
-    reportKind === "services"
-      ? [1859, 2434, 2562, 1729, 2690, 2177, 2243]
-      : [2207, 2712, 3217, 3280, 1847, 2441];
-  const noBorders = {
-    top: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
-    bottom: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
-    left: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
-    right: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
-    insideHorizontal: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
-    insideVertical: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
-  };
-  const summaryCell = (card: ExportSummaryCard) =>
-    new TableCell({
-      margins: { top: 60, bottom: 60, left: 90, right: 90 },
-      children: [
-        new Paragraph({
-          children: [
-            text(`${card.label}: `, { bold: true, size: 15, color: "372B1F" }),
-            text(card.value, { size: 15, color: "372B1F" }),
-          ],
-        }),
-      ],
-    });
-  const summaryCards = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    columnWidths: [7852, 7852],
-    borders: noBorders,
-    rows: [
-      new TableRow({ children: [summaryCell(data.cards[0]!), summaryCell(data.cards[1]!)] }),
-      new TableRow({ children: [summaryCell(data.cards[2]!), summaryCell(data.cards[3]!)] }),
-    ],
-  });
-  const periodTable = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders: tableBorders,
-    rows: [
-      new TableRow({
-        children: [
-          new TableCell({
-            shading: { fill: "F6F1E7" },
-            margins: { top: 100, bottom: 100, left: 130, right: 130 },
-            children: [
-              new Paragraph({
-                children: [text("REPORT PERIOD", { bold: true, size: 14, color: "B9841A" })],
-              }),
-              new Paragraph({
-                children: [
-                  text(formatDateRange(from, to), { bold: true, size: 22, color: "372B1F" }),
-                ],
-              }),
-              new Paragraph({
-                children: [text(`Filters: ${scope}`, { size: 13, color: "6A5C4B" })],
-              }),
-            ],
-          }),
-        ],
-      }),
-    ],
-  });
-  const sectionHeading = (label: string) =>
-    new Paragraph({
-      spacing: { before: 180, after: 80 },
-      border: { bottom: { style: BorderStyle.SINGLE, color: "B9841A", size: 7, space: 1 } },
-      children: [text(label.toUpperCase(), { bold: true, size: 17, color: "372B1F" })],
-    });
-  const signatureTable = new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
-    borders: {
-      top: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
-      bottom: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
-      left: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
-      right: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
-      insideVertical: { style: BorderStyle.NONE, color: "FFFFFF", size: 0 },
-    },
-    rows: [
-      new TableRow({
-        children: [
-          new TableCell({
-            children: [
-              new Paragraph({ children: [text("Prepared By", { size: 14, color: "6A5C4B" })] }),
-              new Paragraph({
-                border: {
-                  bottom: { style: BorderStyle.SINGLE, color: "DED3BE", size: 5, space: 1 },
-                },
-                children: [text(" ", { size: 12 })],
-              }),
-            ],
-          }),
-          new TableCell({
-            children: [
-              new Paragraph({
-                alignment: AlignmentType.RIGHT,
-                children: [text("Approved By", { size: 14, color: "6A5C4B" })],
-              }),
-              new Paragraph({
-                alignment: AlignmentType.RIGHT,
-                children: [text(SHOP_OWNER_NAME, { bold: true, size: 15, color: "372B1F" })],
-              }),
-              new Paragraph({
-                alignment: AlignmentType.RIGHT,
-                children: [text("Shop Owner", { size: 13, color: "6A5C4B" })],
-              }),
-              new Paragraph({
-                border: {
-                  bottom: { style: BorderStyle.SINGLE, color: "DED3BE", size: 5, space: 1 },
-                },
-                children: [text(" ", { size: 12 })],
-              }),
-            ],
-          }),
-        ],
-      }),
-    ],
-  });
-  const document = new Document({
-    sections: [
-      {
-        properties: {
-          page: {
-            size: { width: 16838, height: 11906, orientation: PageOrientation.LANDSCAPE },
-            margin: { top: 567, right: 567, bottom: 567, left: 567 },
-          },
-        },
-        children: [
-          new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            columnWidths: [10300, 5400],
-            borders: {
-              top: { style: BorderStyle.SINGLE, color: "372B1F", size: 12 },
-              bottom: { style: BorderStyle.SINGLE, color: "372B1F", size: 12 },
-              left: { style: BorderStyle.SINGLE, color: "372B1F", size: 12 },
-              right: { style: BorderStyle.SINGLE, color: "372B1F", size: 12 },
-              insideVertical: { style: BorderStyle.SINGLE, color: "372B1F", size: 2 },
-            },
-            rows: [
-              new TableRow({
-                children: [
-                  new TableCell({
-                    shading: { fill: "372B1F" },
-                    margins: { top: 100, bottom: 100, left: 130, right: 130 },
-                    children: [
-                      new Paragraph({
-                        children: [
-                          new ImageRun({
-                            data: logoData,
-                            type: "png",
-                            // 360:202 source ratio; larger without distortion.
-                            transformation: { width: 105, height: 59 },
-                          }),
-                        ],
-                      }),
-                      new Paragraph({
-                        children: [
-                          text(SHOP_EXPORT_NAME, { bold: true, size: 22, color: "FFFFFF" }),
-                        ],
-                      }),
-                      new Paragraph({
-                        children: [text(SHOP.tagline, { size: 13, color: "F6F1E7" })],
-                      }),
-                    ],
-                  }),
-                  new TableCell({
-                    shading: { fill: "372B1F" },
-                    margins: { top: 100, bottom: 100, left: 130, right: 130 },
-                    children: [
-                      new Paragraph({
-                        alignment: AlignmentType.RIGHT,
-                        children: [
-                          text(title.toUpperCase(), { bold: true, size: 24, color: "FFFFFF" }),
-                        ],
-                      }),
-                      new Paragraph({
-                        alignment: AlignmentType.RIGHT,
-                        children: [
-                          text(`Generated: ${formatBusinessTimestamp()}`, {
-                            size: 14,
-                            color: "F6F1E7",
-                          }),
-                        ],
-                      }),
-                    ],
-                  }),
-                ],
-              }),
-            ],
-          }),
-          periodTable,
-          sectionHeading("Report summary"),
-          summaryCards,
-          sectionHeading(
-            reportKind === "services" ? "Service entries" : "Bookings for selected period",
-          ),
-          new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
-            columnWidths: exportColumnWidths,
-            layout: TableLayoutType.FIXED,
-            borders: tableBorders,
-            rows: [headerRow, ...rows, totalRow],
-          }),
-          new Paragraph({
-            spacing: { before: 260, after: 120 },
-            children: [text(" ", { size: 10 })],
-          }),
-          signatureTable,
-        ],
-      },
-    ],
-  });
-  const file = await Packer.toBlob(document);
-  downloadBlob(
-    file,
-    `fake-rider-${fileName(reportKind)}-${from}-to-${to}.docx`,
-    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  );
-}
-
-function dataUrlToUint8Array(dataUrl: string) {
-  const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  return bytes;
-}
-
-function downloadBlob(contents: BlobPart, filename: string, type: string) {
-  const url = URL.createObjectURL(new Blob([contents], { type }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-function fileName(reportKind: ReportKind) {
-  return reportKind === "services" ? "service-activity-report" : "booking-report";
-}
-*/
 
 const REPORT_PRINT_STYLES = `
   .report-print-root { display: none; }
 
-  @page { size: A4 landscape; margin: 12mm 11mm 15mm; }
+  /*
+   * A zero page margin stops the browser from printing its own header (page
+   * title) and footer (URL, page numbers). The .report-print-page table puts
+   * the margins back: its header and footer rows repeat on every page.
+   */
+  @page { size: A4 landscape; margin: 0; }
 
   @media print {
     html,
@@ -2069,276 +1431,286 @@ const REPORT_PRINT_STYLES = `
       padding: 0 !important;
       overflow: visible !important;
       background: #fff;
-      color: #1f2937;
-      font-family: Arial, Helvetica, sans-serif;
     }
-    .report-print-document {
-      width: 100% !important;
-      min-width: 0 !important;
-      max-width: none !important;
-      margin: 0 !important;
-      padding: 0 !important;
-      overflow: visible !important;
-    }
-    .report-print-header,
-    .report-print-meta,
-    .report-print-summary,
-    .report-print-footer {
-      break-inside: avoid-page;
-      page-break-inside: avoid;
-    }
-    .report-print-header {
-      display: grid;
-      grid-template-columns: 26mm minmax(0, 1fr) 36mm;
-      align-items: center;
-      gap: 6mm;
-    }
-    .report-print-logo { width: 24mm; max-width: 100%; height: auto; object-fit: contain; }
-    .report-print-heading { min-width: 0; text-align: center; }
-    .report-print-heading p { margin: 0; font-size: 8pt; letter-spacing: .08em; text-transform: uppercase; }
-    .report-print-heading p:nth-child(2) { margin-top: 1mm; font-size: 7pt; letter-spacing: .03em; text-transform: none; }
-    .report-print-heading h1 { margin: 3mm 0 2mm; font-size: 18pt; font-weight: 700; letter-spacing: .04em; overflow-wrap: anywhere; text-transform: uppercase; }
-    .report-print-heading p:last-child { font-size: 7pt; font-weight: 700; }
-    .report-print-generated { min-width: 0; margin: 0; overflow-wrap: anywhere; text-align: right; font-size: 7pt; line-height: 1.45; color: #4b5563; }
-    .report-print-rule { height: 1.25pt; margin: 5mm 0 4mm; background: #0f5b49; }
-    .report-print-meta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8mm; font-size: 8pt; }
-    .report-print-meta div:last-child { text-align: right; }
-    .report-print-meta span,
-    .report-print-summary span { display: block; color: #4b5563; font-size: 7pt; text-transform: uppercase; letter-spacing: .04em; }
-    .report-print-meta strong { display: block; margin-top: 1mm; overflow-wrap: anywhere; font-size: 9pt; font-weight: 600; }
-    .report-print-section { min-width: 0; margin-top: 6mm; break-inside: auto; page-break-inside: auto; }
-    .report-print-section h2 { margin: 0 0 3mm; break-after: avoid-page; page-break-after: avoid; font-size: 11pt; font-weight: 700; }
-    .report-print-summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); border-top: .75pt solid #9ca3af; border-bottom: .75pt solid #9ca3af; }
-    .report-print-summary-grid > div { min-height: 17mm; padding: 3mm; border-right: .75pt solid #d1d5db; }
-    .report-print-summary-grid > div:last-child { border-right: 0; }
-    .report-print-summary-grid strong { display: block; margin-top: 1.5mm; font-size: 12pt; }
-    .report-print-summary-grid small { display: block; margin-top: 1mm; color: #4b5563; font-size: 7pt; }
-    .report-print-summary-table { width: 100%; border-collapse: collapse; font-size: 8pt; }
-    .report-print-summary-table th,
-    .report-print-summary-table td { border: .75pt solid #6b7280; padding: 2.25mm 2mm; }
-    .report-print-summary-table th { background: #e5e7eb; font-size: 7pt; text-align: left; text-transform: uppercase; }
-    .report-print-summary-table th:last-child,
-    .report-print-summary-table td:last-child { text-align: right; }
-    .report-print-summary-table tbody tr:last-child td { font-weight: 700; background: #f3f4f6; }
-    .report-print-table { width: 100%; max-width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7.5pt; }
-    .report-print-table thead { display: table-header-group; break-inside: avoid-page; background: #e5e7eb; }
-    .report-print-table th,
-    .report-print-table td { box-sizing: border-box; border: .75pt solid #6b7280; padding: 2.25mm 2mm; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
-    .report-print-table th { font-size: 7pt; text-align: left; font-weight: 700; }
-    .report-print-table th:last-child,
-    .report-print-table td:last-child { text-align: right; }
-    .report-print-table tr { break-inside: avoid-page; page-break-inside: avoid; }
-    .report-print-table tbody tr:nth-child(even) { background: #f9fafb; }
-    .report-print-table tfoot { display: table-row-group; break-inside: avoid-page; font-weight: 700; background: #f3f4f6; }
-    .report-print-table tfoot td:first-child { text-transform: uppercase; }
-    .report-print-footer { display: grid; grid-template-columns: 1fr 1fr; gap: 30mm; margin-top: 16mm; font-size: 8pt; }
-    .report-print-footer > div:last-child { text-align: right; }
-    .report-print-footer span,
-    .report-print-footer small { display: block; color: #4b5563; }
-    .report-print-footer strong { display: block; margin-top: 6mm; }
-    .report-print-footer div > div { margin-top: 2mm; border-bottom: .75pt solid #374151; }
-    .report-print-timestamp { margin: 9mm 0 0; text-align: center; color: #6b7280; font-size: 7pt; }
   }
+
+  /* Layout and typography. These apply outside print too, so the report can
+     be measured before printing (see paginateReport). */
+  .report-print-page { width: 100%; border-collapse: collapse; border: 0; }
+  .report-print-page > thead > tr > td { height: ${PRINT_PAGE_MM.top}mm; padding: 0; border: 0; }
+  .report-print-page > tfoot > tr > td { height: ${PRINT_PAGE_MM.bottom}mm; padding: 0; border: 0; }
+  .report-print-page > tbody > tr > td { padding: 0 ${PRINT_PAGE_MM.side}mm; border: 0; vertical-align: top; }
+  .report-print-document {
+    width: 100%;
+    min-width: 0;
+    color: #1f2937;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+
+  /* One sheet per printed page, laid out by paginateReport. Once the sheets
+     are there, the flowing copy of the report is not printed. */
+  .report-print-sheets:not(:empty) + .report-print-flow { display: none !important; }
+  .report-print-sheet {
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    width: ${PRINT_PAGE_MM.width}mm;
+    height: ${PRINT_SHEET_HEIGHT_MM}mm;
+    padding: ${PRINT_PAGE_MM.top}mm ${PRINT_PAGE_MM.side}mm ${PRINT_PAGE_MM.bottom}mm;
+    break-after: page;
+    page-break-after: always;
+  }
+  .report-print-sheet:last-child { break-after: auto; page-break-after: auto; }
+  .report-print-sheet > * { flex: none; }
+  .report-print-sheet > .report-print-signoff { margin-top: auto; padding-top: ${SIGN_OFF_GAP_MM}mm; }
+  .report-print-flow .report-print-signoff { margin-top: ${SIGN_OFF_GAP_MM}mm; }
+  .report-print-header,
+  .report-print-meta,
+  .report-print-summary,
+  .report-print-signoff {
+    break-inside: avoid-page;
+    page-break-inside: avoid;
+  }
+  .report-print-header {
+    display: grid;
+    grid-template-columns: 26mm minmax(0, 1fr) 36mm;
+    align-items: center;
+    gap: 6mm;
+  }
+  .report-print-logo { display: block; width: 24mm; max-width: 100%; height: auto; aspect-ratio: 360 / 202; object-fit: contain; }
+  .report-print-heading { min-width: 0; text-align: center; }
+  .report-print-heading p { margin: 0; font-size: 8pt; letter-spacing: .08em; text-transform: uppercase; }
+  .report-print-heading p:nth-child(2) { margin-top: 1mm; font-size: 7pt; letter-spacing: .03em; text-transform: none; }
+  .report-print-heading h1 { margin: 3mm 0 2mm; font-size: 18pt; font-weight: 700; letter-spacing: .04em; overflow-wrap: anywhere; text-transform: uppercase; }
+  .report-print-heading p:last-child { font-size: 7pt; font-weight: 700; }
+  .report-print-generated { min-width: 0; margin: 0; overflow-wrap: anywhere; text-align: right; font-size: 7pt; line-height: 1.45; color: #4b5563; }
+  .report-print-rule { height: 1.25pt; margin: 5mm 0 4mm; background: #0f5b49; }
+  .report-print-meta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8mm; font-size: 8pt; }
+  .report-print-meta div:last-child { text-align: right; }
+  .report-print-meta span,
+  .report-print-summary span { display: block; color: #4b5563; font-size: 7pt; text-transform: uppercase; letter-spacing: .04em; }
+  .report-print-meta strong { display: block; margin-top: 1mm; overflow-wrap: anywhere; font-size: 9pt; font-weight: 600; }
+  .report-print-section { min-width: 0; margin-top: 6mm; break-inside: auto; page-break-inside: auto; }
+  .report-print-section h2 { margin: 0 0 3mm; break-after: avoid-page; page-break-after: avoid; font-size: 11pt; font-weight: 700; }
+  .report-print-summary-table { width: 100%; border-collapse: collapse; font-size: 8pt; }
+  .report-print-summary-table th,
+  .report-print-summary-table td { border: .75pt solid #6b7280; padding: 2.25mm 2mm; }
+  .report-print-summary-table th { background: #e5e7eb; font-size: 7pt; text-align: left; text-transform: uppercase; }
+  .report-print-summary-table th:last-child,
+  .report-print-summary-table td:last-child { text-align: right; }
+  .report-print-summary-table tbody tr:last-child td { font-weight: 700; background: #f3f4f6; }
+  .report-print-table { width: 100%; max-width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 7.5pt; }
+  .report-print-table thead { display: table-header-group; break-inside: avoid-page; background: #e5e7eb; }
+  .report-print-table th,
+  .report-print-table td { box-sizing: border-box; border: .75pt solid #6b7280; padding: 2.25mm 2mm; vertical-align: top; overflow-wrap: anywhere; word-break: break-word; }
+  .report-print-table th { font-size: 7pt; text-align: left; font-weight: 700; }
+  .report-print-table th:last-child,
+  .report-print-table td:last-child { text-align: right; }
+  .report-print-table tr { break-inside: avoid-page; page-break-inside: avoid; }
+  .report-print-table tbody tr:nth-child(even) { background: #f9fafb; }
+  .report-print-table tfoot { display: table-row-group; break-inside: avoid-page; font-weight: 700; background: #f3f4f6; }
+  .report-print-table tfoot td:first-child { text-transform: uppercase; }
+  .report-print-footer { display: grid; grid-template-columns: 1fr 1fr; gap: 30mm; font-size: 8pt; }
+  .report-print-footer > div:last-child { text-align: right; }
+  .report-print-footer span,
+  .report-print-footer small { display: block; color: #4b5563; }
+  .report-print-footer strong { display: block; margin-top: 6mm; }
+  .report-print-footer div > div { margin-top: 2mm; border-bottom: .75pt solid #374151; }
+  .report-print-timestamp { margin: 6mm 0 0; text-align: center; color: #6b7280; font-size: 7pt; }
 `;
 
 function PrintReport({ payload }: { payload: PrintPayload | null }) {
   if (!payload || typeof document === "undefined") return null;
 
-  const financial = payload.financial;
-  const serviceCompleted = financial
-    ? financial.servicePerformance.reduce((total, row) => total + row.completed_count, 0)
-    : 0;
-  const serviceRevenue = financial
-    ? sumMoney(financial.servicePerformance.map((row) => row.revenue))
-    : 0;
-  const productsSold = financial
-    ? financial.productSales.reduce((total, row) => total + row.quantity_sold, 0)
-    : 0;
-  const productRevenue = financial
-    ? sumMoney(financial.productSales.map((row) => row.total_sales))
-    : 0;
-  const dailyRevenue = financial?.dailyRevenue ?? [];
+  const { financial } = payload;
+  const serviceCompleted = financial.servicePerformance.reduce(
+    (total, row) => total + row.completed_count,
+    0,
+  );
+  const serviceRevenue = sumMoney(financial.servicePerformance.map((row) => row.revenue));
+  const productsSold = financial.productSales.reduce((total, row) => total + row.quantity_sold, 0);
+  const productRevenue = sumMoney(financial.productSales.map((row) => row.total_sales));
+  const dailyRevenue = financial.dailyRevenue;
   const dailyRevenueTotals = revenueTotals(dailyRevenue);
-
-  const tableTitle =
-    payload.reportKind === "financial"
-      ? "Completed transactions"
-      : payload.reportKind === "services"
-        ? "Service entries"
-        : "Financial details for selected period";
 
   return createPortal(
     <div className="report-print-root">
       <style>{REPORT_PRINT_STYLES}</style>
-      <article className="report-print-document">
-        <header className="report-print-header">
-          <img src={exportLogoUrl} alt="" className="report-print-logo" />
-          <div className="report-print-heading">
-            <p>{SHOP_EXPORT_NAME}</p>
-            <p>{SHOP.tagline}</p>
-            <h1>{payload.title}</h1>
-            <p>Reporting summary</p>
-          </div>
-          <p className="report-print-generated">
-            Generated
-            <br />
-            {payload.generatedAt}
-          </p>
-        </header>
-        <div className="report-print-rule" />
-        <section className="report-print-meta">
-          <div>
-            <span>Coverage</span>
-            <strong>{payload.period}</strong>
-          </div>
-          <div>
-            <span>Report scope</span>
-            <strong>{payload.scope}</strong>
-          </div>
-        </section>
-        <section className="report-print-section report-print-summary">
-          <h2>{financial ? "A. Financial summary" : "Report summary"}</h2>
-          {financial ? (
-            <table className="report-print-summary-table">
-              <thead>
-                <tr>
-                  <th>Description</th>
-                  <th>Amount</th>
-                </tr>
-              </thead>
-              <tbody>
-                {payload.data.cards.map((card) => (
-                  <tr key={card.label}>
-                    <td>{card.label}</td>
-                    <td>{card.value}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          ) : (
-            <div className="report-print-summary-grid">
-              {payload.data.cards.map((card) => (
-                <div key={card.label}>
-                  <span>{card.label}</span>
-                  <strong>{card.value}</strong>
-                  <small>{card.detail}</small>
+      <div className="report-print-sheets" />
+      {/* Printed only if the report could not be laid out on sheets. */}
+      <table className="report-print-page report-print-flow">
+        <thead>
+          <tr>
+            <td />
+          </tr>
+        </thead>
+        <tfoot>
+          <tr>
+            <td />
+          </tr>
+        </tfoot>
+        <tbody>
+          <tr>
+            <td>
+              <article className="report-print-document">
+                <div className="report-print-content">
+                  <header className="report-print-header">
+                    <img src={exportLogoUrl} alt="" className="report-print-logo" />
+                    <div className="report-print-heading">
+                      <p>{SHOP_EXPORT_NAME}</p>
+                      <p>{SHOP.tagline}</p>
+                      <h1>{payload.title}</h1>
+                      <p>Reporting summary</p>
+                    </div>
+                    <p className="report-print-generated">
+                      Generated
+                      <br />
+                      {payload.generatedAt}
+                    </p>
+                  </header>
+                  <div className="report-print-rule" />
+                  <section className="report-print-meta">
+                    <div>
+                      <span>Coverage</span>
+                      <strong>{payload.period}</strong>
+                    </div>
+                    <div>
+                      <span>Report scope</span>
+                      <strong>{payload.scope}</strong>
+                    </div>
+                  </section>
+                  <section className="report-print-section report-print-summary">
+                    <h2>A. Financial summary</h2>
+                    <table className="report-print-summary-table">
+                      <thead>
+                        <tr>
+                          <th>Description</th>
+                          <th>Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {payload.data.cards.map((card) => (
+                          <tr key={card.label}>
+                            <td>{card.label}</td>
+                            <td>{card.value}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </section>
+                  <PrintSimpleTable
+                    title="B. Service revenue breakdown"
+                    headers={["Service", "Completed", "Revenue"]}
+                    columnWidths={["58%", "18%", "24%"]}
+                    rows={financial.servicePerformance.map((row) => [
+                      row.service_name,
+                      String(row.completed_count),
+                      formatPHP(row.revenue),
+                    ])}
+                    footerRow={[
+                      "Total service revenue",
+                      String(serviceCompleted),
+                      formatPHP(serviceRevenue),
+                    ]}
+                    emptyMessage="No completed services match this report selection."
+                  />
+                  <PrintSimpleTable
+                    title="C. Product sales breakdown"
+                    headers={["Product", "Qty Sold", "Unit Price", "Total Sales"]}
+                    columnWidths={["42%", "18%", "20%", "20%"]}
+                    rows={financial.productSales.map((row) => [
+                      row.product_name,
+                      String(row.quantity_sold),
+                      formatPHP(row.unit_price),
+                      formatPHP(row.total_sales),
+                    ])}
+                    footerRow={[
+                      "Total product revenue",
+                      String(productsSold),
+                      "",
+                      formatPHP(productRevenue),
+                    ]}
+                    emptyMessage="No products were sold in completed transactions for this period."
+                  />
+                  <PrintSimpleTable
+                    title="D. Daily revenue"
+                    headers={[
+                      "Date",
+                      "Transactions",
+                      "Service Revenue",
+                      "Product Revenue",
+                      "Total Revenue",
+                    ]}
+                    columnWidths={["26%", "14%", "20%", "20%", "20%"]}
+                    rows={dailyRevenue.map((row) => [
+                      formatRevenuePeriod(row.period, "daily"),
+                      String(row.completed_transactions),
+                      formatPHP(row.service_revenue),
+                      formatPHP(row.product_revenue),
+                      formatPHP(row.total_revenue),
+                    ])}
+                    footerRow={[
+                      "Total daily revenue",
+                      String(dailyRevenueTotals.transactions),
+                      formatPHP(dailyRevenueTotals.serviceRevenue),
+                      formatPHP(dailyRevenueTotals.productRevenue),
+                      formatPHP(dailyRevenueTotals.totalRevenue),
+                    ]}
+                    emptyMessage="No completed revenue is available for this period."
+                  />
+                  <section className="report-print-section">
+                    <h2>E. Completed transactions</h2>
+                    <table className="report-print-table">
+                      <colgroup>
+                        {["10%", "13%", "23%", "16%", "12%", "13%", "13%"].map((width, index) => (
+                          <col key={`${width}-${index}`} style={{ width }} />
+                        ))}
+                      </colgroup>
+                      <thead>
+                        <tr>
+                          {payload.data.headers.map((header) => (
+                            <th key={header}>{header}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {payload.data.rows.map((row, index) => (
+                          <tr key={`${row.join("-")}-${index}`}>
+                            {row.map((cell, cellIndex) => (
+                              <td key={`${cell}-${cellIndex}`}>{cell}</td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot>
+                        <tr>
+                          <td colSpan={payload.data.headers.length - 1}>Total amount</td>
+                          <td>{formatPHP(payload.data.totalAmount)}</td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </section>
                 </div>
-              ))}
-            </div>
-          )}
-        </section>
-        {financial && (
-          <>
-            <PrintSimpleTable
-              title="B. Service revenue breakdown"
-              headers={["Service", "Completed", "Revenue"]}
-              columnWidths={["58%", "18%", "24%"]}
-              rows={financial.servicePerformance.map((row) => [
-                row.service_name,
-                String(row.completed_count),
-                formatPHP(row.revenue),
-              ])}
-              footerRow={[
-                "Total service revenue",
-                String(serviceCompleted),
-                formatPHP(serviceRevenue),
-              ]}
-              emptyMessage="No completed services match this report selection."
-            />
-            <PrintSimpleTable
-              title="C. Product sales breakdown"
-              headers={["Product", "Qty Sold", "Unit Price", "Total Sales"]}
-              columnWidths={["42%", "18%", "20%", "20%"]}
-              rows={financial.productSales.map((row) => [
-                row.product_name,
-                String(row.quantity_sold),
-                formatPHP(row.unit_price),
-                formatPHP(row.total_sales),
-              ])}
-              footerRow={[
-                "Total product revenue",
-                String(productsSold),
-                "",
-                formatPHP(productRevenue),
-              ]}
-              emptyMessage="No products were sold in completed transactions for this period."
-            />
-            <PrintSimpleTable
-              title="D. Daily revenue"
-              headers={[
-                "Date",
-                "Transactions",
-                "Service Revenue",
-                "Product Revenue",
-                "Total Revenue",
-              ]}
-              columnWidths={["26%", "14%", "20%", "20%", "20%"]}
-              rows={dailyRevenue.map((row) => [
-                formatRevenuePeriod(row.period, "daily"),
-                String(row.completed_transactions),
-                formatPHP(row.service_revenue),
-                formatPHP(row.product_revenue),
-                formatPHP(row.total_revenue),
-              ])}
-              footerRow={[
-                "Total daily revenue",
-                String(dailyRevenueTotals.transactions),
-                formatPHP(dailyRevenueTotals.serviceRevenue),
-                formatPHP(dailyRevenueTotals.productRevenue),
-                formatPHP(dailyRevenueTotals.totalRevenue),
-              ]}
-              emptyMessage="No completed revenue is available for this period."
-            />
-          </>
-        )}
-        <section className="report-print-section">
-          <h2>{financial ? `E. ${tableTitle}` : tableTitle}</h2>
-          <table className="report-print-table">
-            {financial && (
-              <colgroup>
-                {["10%", "13%", "23%", "16%", "12%", "13%", "13%"].map((width, index) => (
-                  <col key={`${width}-${index}`} style={{ width }} />
-                ))}
-              </colgroup>
-            )}
-            <thead>
-              <tr>
-                {payload.data.headers.map((header) => (
-                  <th key={header}>{header}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {payload.data.rows.map((row, index) => (
-                <tr key={`${row.join("-")}-${index}`}>
-                  {row.map((cell, cellIndex) => (
-                    <td key={`${cell}-${cellIndex}`}>{cell}</td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-            <tfoot>
-              <tr>
-                <td colSpan={payload.data.headers.length - 1}>Total amount</td>
-                <td>{formatPHP(payload.data.totalAmount)}</td>
-              </tr>
-            </tfoot>
-          </table>
-        </section>
-        <footer className="report-print-footer">
-          <div>
-            <span>Prepared by</span>
-            <div />
-          </div>
-          <div>
-            <span>Approved by</span>
-            <strong>{SHOP_OWNER_NAME}</strong>
-            <small>Shop Owner</small>
-            <div />
-          </div>
-        </footer>
-        <p className="report-print-timestamp">Generated on {payload.generatedAt}</p>
-      </article>
+                <div className="report-print-signoff">
+                  <footer className="report-print-footer">
+                    <div>
+                      <span>Prepared by</span>
+                      <div />
+                    </div>
+                    <div>
+                      <span>Approved by</span>
+                      <strong>{SHOP_OWNER_NAME}</strong>
+                      <small>Shop Owner</small>
+                      <div />
+                    </div>
+                  </footer>
+                  <p className="report-print-timestamp">Generated on {payload.generatedAt}</p>
+                </div>
+              </article>
+            </td>
+          </tr>
+        </tbody>
+      </table>
     </div>,
     document.body,
   );

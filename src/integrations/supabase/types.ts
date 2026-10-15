@@ -506,6 +506,53 @@ export type Database = {
           },
         ];
       };
+      appointment_action_verifications: {
+        Row: {
+          action: string;
+          appointment_id: string;
+          attempt_count: number;
+          code_hash: string;
+          created_at: string;
+          expires_at: string;
+          id: string;
+          token_expires_at: string | null;
+          token_hash: string | null;
+          verified_at: string | null;
+        };
+        Insert: {
+          action: string;
+          appointment_id: string;
+          attempt_count?: number;
+          code_hash: string;
+          created_at?: string;
+          expires_at: string;
+          id?: string;
+          token_expires_at?: string | null;
+          token_hash?: string | null;
+          verified_at?: string | null;
+        };
+        Update: {
+          action?: string;
+          appointment_id?: string;
+          attempt_count?: number;
+          code_hash?: string;
+          created_at?: string;
+          expires_at?: string;
+          id?: string;
+          token_expires_at?: string | null;
+          token_hash?: string | null;
+          verified_at?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "appointment_action_verifications_appointment_id_fkey";
+            columns: ["appointment_id"];
+            isOneToOne: false;
+            referencedRelation: "appointments";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       appointment_reference_recovery_challenges: {
         Row: {
           attempt_count: number;
@@ -1278,6 +1325,16 @@ export type Database = {
         Args: {
           p_code_hash: string;
           p_email: string;
+        };
+        Returns: string;
+      };
+      verify_appointment_action_code: {
+        Args: {
+          p_action: string;
+          p_appointment_id: string;
+          p_code_hash: string;
+          p_token_hash: string;
+          p_token_ttl_seconds: number;
         };
         Returns: string;
       };

@@ -1,11 +1,23 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, Pencil, RotateCcw } from "lucide-react";
+import { Package, Pencil, Plus } from "lucide-react";
 import { forwardRef, useImperativeHandle, useMemo, useState } from "react";
 
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
+import {
+  ActiveStatusBadge,
+  ArchiveMenuItem,
+  DataList,
+  InlineAlert,
+  ListCard,
+  ListEmpty,
+  ListToolbar,
+  MoreActionsMenu,
+  ResetFiltersButton,
+  ToolbarFilters,
+  ToolbarSearch,
+} from "@/components/admin/data-list";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import {
   Dialog,
@@ -24,17 +36,9 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
-import { activeStatusTone, formatPHP } from "@/lib/shop";
+import { formatPHP } from "@/lib/shop";
 
 type Product = {
   id: string;
@@ -82,6 +86,7 @@ export const ProductManager = forwardRef<ProductManagerHandle, { category: "part
     const [isCustomBrand, setIsCustomBrand] = useState(false);
     const [filterBrand, setFilterBrand] = useState(ALL_BRANDS);
     const [filterStock, setFilterStock] = useState<"all" | "in_stock" | "out">("all");
+    const [search, setSearch] = useState("");
     const [imageSource, setImageSource] = useState<"url" | "local">("url");
     const [uploadedFile, setUploadedFile] = useState<File | null>(null);
     const [uploadPreview, setUploadPreview] = useState<string | null>(null);
@@ -115,16 +120,27 @@ export const ProductManager = forwardRef<ProductManagerHandle, { category: "part
       [items.data],
     );
 
+    const searchTerm = search.trim().toLocaleLowerCase();
     const filteredItems = useMemo(
       () =>
         (items.data ?? []).filter(
           (item) =>
+            (!searchTerm ||
+              `${item.name} ${item.brand ?? ""} ${item.description ?? ""}`
+                .toLocaleLowerCase()
+                .includes(searchTerm)) &&
             (filterBrand === ALL_BRANDS || item.brand === filterBrand) &&
             (filterStock === "all" ||
               (filterStock === "in_stock" ? item.in_stock : !item.in_stock)),
         ),
-      [filterBrand, filterStock, items.data],
+      [filterBrand, filterStock, items.data, searchTerm],
     );
+    const hasFilters = Boolean(searchTerm) || filterBrand !== ALL_BRANDS || filterStock !== "all";
+    function resetFilters() {
+      setSearch("");
+      setFilterBrand(ALL_BRANDS);
+      setFilterStock("all");
+    }
 
     const save = useMutation({
       mutationFn: async (): Promise<Product> => {
@@ -270,11 +286,20 @@ export const ProductManager = forwardRef<ProductManagerHandle, { category: "part
 
     return (
       <>
-        <div className="mb-4 flex flex-wrap items-end gap-4">
-          <div className="space-y-1.5">
-            <Label className="text-sm">Brand</Label>
+        {actionError && <InlineAlert>{actionError}</InlineAlert>}
+
+        <ListToolbar
+          summary={items.data && `Showing ${filteredItems.length} of ${items.data.length} items`}
+        >
+          <ToolbarSearch
+            value={search}
+            onChange={setSearch}
+            placeholder="Search items, brands, or details"
+            label="Search shop items by name, brand, or details"
+          />
+          <ToolbarFilters>
             <Select value={filterBrand} onValueChange={setFilterBrand}>
-              <SelectTrigger className="w-full sm:w-48">
+              <SelectTrigger aria-label="Filter by brand" className="w-full sm:w-44">
                 <SelectValue placeholder="All brands" />
               </SelectTrigger>
               <SelectContent>
@@ -286,14 +311,11 @@ export const ProductManager = forwardRef<ProductManagerHandle, { category: "part
                 ))}
               </SelectContent>
             </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label className="text-sm">Stock</Label>
             <Select
               value={filterStock}
               onValueChange={(value) => setFilterStock(value as "all" | "in_stock" | "out")}
             >
-              <SelectTrigger className="w-full sm:w-40">
+              <SelectTrigger aria-label="Filter by stock" className="w-full sm:w-40">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -302,27 +324,9 @@ export const ProductManager = forwardRef<ProductManagerHandle, { category: "part
                 <SelectItem value="out">Out of stock</SelectItem>
               </SelectContent>
             </Select>
-          </div>
-          {(filterBrand !== ALL_BRANDS || filterStock !== "all") && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="self-end whitespace-nowrap"
-              onClick={() => {
-                setFilterBrand(ALL_BRANDS);
-                setFilterStock("all");
-              }}
-            >
-              <RotateCcw /> Reset
-            </Button>
-          )}
-        </div>
-
-        {actionError && (
-          <p role="alert" className="mb-4 text-sm text-destructive">
-            {actionError}
-          </p>
-        )}
+            {hasFilters && <ResetFiltersButton onClick={resetFilters} />}
+          </ToolbarFilters>
+        </ListToolbar>
 
         <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && closeEditor()}>
           <DialogContent>
@@ -569,92 +573,103 @@ export const ProductManager = forwardRef<ProductManagerHandle, { category: "part
           </DialogContent>
         </Dialog>
 
-        <Card className="border-border/70 bg-card/60">
-          <CardContent className="overflow-x-auto p-0">
-            <Table className="admin-data-table">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Item</TableHead>
-                  <TableHead>Brand</TableHead>
-                  <TableHead>Price</TableHead>
-                  <TableHead>Status</TableHead>
-                  <TableHead>Featured</TableHead>
-                  <TableHead className="text-center">Stock quantity</TableHead>
-                  <TableHead className="text-center">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredItems.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell data-label="Item">
-                      <span className="block text-sm">{item.name}</span>
-                      <span className="text-xs capitalize text-muted-foreground">
-                        {item.category}
-                      </span>
-                    </TableCell>
-                    <TableCell data-label="Brand" className="text-sm">
-                      {item.brand ?? "-"}
-                    </TableCell>
-                    <TableCell data-label="Price" className="text-sm text-primary">
-                      {formatPHP(item.price)}
-                    </TableCell>
-                    <TableCell data-label="Status">
-                      <Badge
-                        variant="outline"
-                        className={`uppercase ${activeStatusTone(item.is_active)}`}
-                      >
-                        {item.is_active ? "Active" : "Inactive"}
+        <ListCard>
+          <DataList
+            label="Shop items"
+            rows={filteredItems}
+            rowKey={(item) => item.id}
+            loading={items.isLoading}
+            error={
+              items.isError
+                ? { message: "Could not load shop items.", onRetry: () => void items.refetch() }
+                : null
+            }
+            empty={
+              <ListEmpty
+                icon={Package}
+                title={hasFilters ? "No items match your filters." : "No items yet."}
+                description={
+                  hasFilters
+                    ? "Try a different search, brand, or stock filter."
+                    : "Add parts and accessories to show them in the public shop."
+                }
+                action={
+                  hasFilters ? (
+                    <ResetFiltersButton onClick={resetFilters} />
+                  ) : (
+                    <Button size="sm" onClick={openNew}>
+                      <Plus /> Add item
+                    </Button>
+                  )
+                }
+              />
+            }
+            columns={[
+              {
+                key: "item",
+                header: "Item",
+                card: "title",
+                cell: (item) => (
+                  <>
+                    <p className="font-medium">{item.name}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      <span className="capitalize">{item.category}</span>
+                      {item.brand ? ` · ${item.brand}` : ""}
+                    </p>
+                  </>
+                ),
+              },
+              {
+                key: "price",
+                header: "Price",
+                className: "w-32 text-right",
+                cell: (item) => (
+                  <span className="text-sm text-primary">{formatPHP(item.price)}</span>
+                ),
+              },
+              {
+                key: "stock",
+                header: "Stock",
+                className: "w-32 text-right",
+                cell: (item) => (
+                  <span className="text-sm">
+                    <span className="font-mono">{item.stock_quantity.toLocaleString()}</span>
+                    {!item.in_stock && (
+                      <span className="block text-xs text-muted-foreground">Out of stock</span>
+                    )}
+                  </span>
+                ),
+              },
+              {
+                key: "status",
+                header: "Status",
+                card: "badge",
+                className: "w-32 text-center",
+                cell: (item) => (
+                  <span className="inline-flex flex-wrap justify-center gap-1.5">
+                    <ActiveStatusBadge active={item.is_active} />
+                    {item.is_featured && (
+                      <Badge className="bg-primary text-primary-foreground uppercase">
+                        Featured
                       </Badge>
-                    </TableCell>
-                    <TableCell data-label="Featured">
-                      {item.is_featured ? (
-                        <Badge className="bg-primary uppercase text-primary-foreground">
-                          Featured
-                        </Badge>
-                      ) : (
-                        <span className="text-sm text-muted-foreground">-</span>
-                      )}
-                    </TableCell>
-                    <TableCell
-                      data-label="Stock quantity"
-                      className="text-center font-mono text-sm"
-                    >
-                      {item.stock_quantity.toLocaleString()}
-                    </TableCell>
-                    <TableCell
-                      data-label="Actions"
-                      className="space-x-1 whitespace-nowrap text-center"
-                    >
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label={`Edit ${item.name}`}
-                        onClick={() => openEdit(item)}
-                      >
-                        <Pencil className="size-4" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label={`Archive ${item.name}`}
-                        onClick={() => setArchiveTarget(item.id)}
-                      >
-                        <Archive className="size-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            {items.isError ? (
-              <p className="p-8 text-center text-sm text-destructive">
-                Could not load shop products. Please try again.
-              </p>
-            ) : !items.isLoading && filteredItems.length === 0 ? (
-              <p className="p-8 text-center text-sm text-muted-foreground">Nothing here yet.</p>
-            ) : null}
-          </CardContent>
-        </Card>
+                    )}
+                  </span>
+                ),
+              },
+            ]}
+            actionsClassName="w-36"
+            actions={(item) => (
+              <>
+                <Button size="sm" variant="outline" onClick={() => openEdit(item)}>
+                  <Pencil /> Edit
+                </Button>
+                <MoreActionsMenu itemLabel={item.name}>
+                  <ArchiveMenuItem onSelect={() => setArchiveTarget(item.id)} />
+                </MoreActionsMenu>
+              </>
+            )}
+          />
+        </ListCard>
 
         <ArchiveConfirmationDialog
           open={Boolean(archiveTarget)}

@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { useRef } from "react";
 
+import { AdminPage } from "@/components/admin/data-list";
 import { PageHeader } from "@/components/admin/page-header";
 import {
   MotorcycleCatalogManager,
@@ -17,7 +18,7 @@ function MotorcyclesAdmin() {
   const motorcycleCatalogRef = useRef<MotorcycleCatalogManagerHandle>(null);
 
   return (
-    <div>
+    <AdminPage>
       <PageHeader
         title="Motorcycle Catalog"
         description="Manage motorcycle brands and models shown in the booking form."
@@ -26,11 +27,11 @@ function MotorcyclesAdmin() {
             className="font-display uppercase"
             onClick={() => motorcycleCatalogRef.current?.openNew()}
           >
-            <Plus /> Add item
+            <Plus /> Add motorcycle
           </Button>
         }
       />
       <MotorcycleCatalogManager ref={motorcycleCatalogRef} />
-    </div>
+    </AdminPage>
   );
 }

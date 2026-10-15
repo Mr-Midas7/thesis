@@ -6,17 +6,27 @@ import {
   CalendarRange,
   ChevronDown,
   RotateCcw,
-  Search,
   SlidersHorizontal,
   Trash2,
 } from "lucide-react";
 import { useDeferredValue, useEffect, useRef, useState } from "react";
 import type { DateRange } from "react-day-picker";
 
+import {
+  AdminPage,
+  DataList,
+  InlineAlert,
+  ListCard,
+  ListEmpty,
+  ListToolbar,
+  ResetFiltersButton,
+  ToolbarFilters,
+  ToolbarSearch,
+} from "@/components/admin/data-list";
+import { PageHeader } from "@/components/admin/page-header";
 import { PaginationControls } from "@/components/admin/pagination-controls";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { Calendar } from "@/components/ui/calendar";
 import {
   AlertDialog,
@@ -28,7 +38,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { Input } from "@/components/ui/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
@@ -37,18 +46,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { supabase } from "@/integrations/supabase/client";
 import {
   calendarRangeToIso,
+  formatShortDate,
   isoDateToCalendarDate,
   manilaMonthDateRange,
   manilaWeekDateRange,
@@ -56,6 +58,8 @@ import {
   startOfNextManilaDay,
 } from "@/lib/admin-date-range";
 import {
+  COMPLETED_APPOINTMENT_KEPT,
+  decodeBlockReason,
   formatDateLong,
   formatPHP,
   formatTime,
@@ -473,7 +477,11 @@ function ArchivePage() {
     },
     onError: (err: Error) => {
       console.error("Delete failed:", err);
-      setActionError("Could not permanently delete this item. Please try again.");
+      setActionError(
+        err.message.includes("Completed appointments")
+          ? COMPLETED_APPOINTMENT_KEPT
+          : "Could not permanently delete this item. Please try again.",
+      );
     },
   });
 
@@ -570,79 +578,75 @@ function ArchivePage() {
     setPage(0);
   };
 
+  const hasAppliedFilters =
+    Boolean(filters.term.trim()) || filters.datePeriod !== "all" || filters.status !== "all";
+
+  const rowActions = (target: ArchiveActionTarget, kept = false) => (
+    <ArchiveRowActions
+      label={target.label}
+      onRestore={() => confirmRestore(target)}
+      onDelete={() => confirmDelete(target)}
+      kept={kept}
+    />
+  );
+  const loadError = (
+    query: { isError: boolean; refetch: () => unknown },
+    label: string,
+  ): { message: string; onRetry: () => void } | null =>
+    query.isError
+      ? { message: `Could not load archived ${label}.`, onRetry: () => void query.refetch() }
+      : null;
+  const emptyState = (label: string) => (
+    <ListEmpty
+      icon={Archive}
+      title={
+        hasAppliedFilters ? `No archived ${label} match your filters.` : `No archived ${label}.`
+      }
+      description={
+        hasAppliedFilters
+          ? "Try a different search or date range."
+          : "Archived records stay here for 30 days before they are deleted automatically."
+      }
+      action={hasAppliedFilters ? <ResetFiltersButton onClick={resetFilters} /> : undefined}
+    />
+  );
+
   return (
-    <div>
-      <header className="mb-6 flex items-start gap-3">
-        <span className="grid size-11 shrink-0 place-items-center rounded-xl border border-primary/25 bg-primary/10 text-primary">
-          <Archive className="size-5" aria-hidden="true" />
-        </span>
-        <div>
-          <h1 className="font-display text-2xl tracking-wide uppercase md:text-3xl">Archive</h1>
-          <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Archived bookings, services, products, crew, schedule blocks, and blocked numbers.
-            Restore records or delete them permanently. Archived records are automatically deleted
-            after 30 days.
-          </p>
-        </div>
-      </header>
-      {actionError && (
-        <p role="alert" className="mb-5 text-sm text-destructive">
-          {actionError}
-        </p>
-      )}
+    <AdminPage>
+      <PageHeader
+        title="Archive"
+        description="Restore archived bookings, services, products, crew, schedule blocks, and blocked numbers, or delete them permanently. Archived records are deleted automatically after 30 days, except completed appointments, which are kept for financial records."
+      />
+      {actionError && <InlineAlert>{actionError}</InlineAlert>}
 
-      <Card className="mb-5 border-border/70 bg-card/60">
-        <CardContent className="p-4 sm:p-5">
-          <div className="mb-4 flex items-center gap-2">
-            <SlidersHorizontal className="size-4 text-primary" aria-hidden="true" />
-            <h2 className="font-display text-base tracking-wide uppercase">Filter archive</h2>
-          </div>
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(12rem,1fr)_9rem_13rem_9rem_auto] xl:items-end">
-            <div className="min-w-0 space-y-1.5">
-              <label htmlFor="archive-search" className="text-xs font-medium text-muted-foreground">
-                Search
-              </label>
-              <div className="relative">
-                <Search
-                  className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
-                  aria-hidden="true"
-                />
-                <Input
-                  id="archive-search"
-                  value={draftFilters.term}
-                  onChange={(event) =>
-                    setDraftFilters((current) => ({ ...current, term: event.target.value }))
-                  }
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") applyFilters();
-                  }}
-                  placeholder="Search name, customer, or reference"
-                  className="pl-9"
-                />
-              </div>
-            </div>
+      <Tabs value={activeTab} onValueChange={setArchiveType}>
+        <TabsList className="mb-4">
+          {ARCHIVE_TABS.map((tab) => (
+            <TabsTrigger key={tab.value} value={tab.value} className="gap-1.5">
+              {tab.label}
+              <span className="rounded-full bg-foreground/10 px-1.5 text-xs tabular-nums">
+                {archiveCounts[tab.value]}
+              </span>
+            </TabsTrigger>
+          ))}
+        </TabsList>
 
-            <div className="min-w-0 space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Type</label>
-              <Select value={activeTab} onValueChange={setArchiveType}>
-                <SelectTrigger aria-label="Archive record type">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {ARCHIVE_TABS.map((tab) => (
-                    <SelectItem key={tab.value} value={tab.value}>
-                      {tab.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div className="min-w-0 space-y-1.5">
-              <label className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
-                <CalendarRange className="size-3.5" aria-hidden="true" />
-                Date range
-              </label>
+        <ListToolbar
+          summary={
+            activeArchive &&
+            `${activeArchive.total} archived ${activeArchive.total === 1 ? "record" : "records"}${hasAppliedFilters ? " match your filters" : ""}`
+          }
+        >
+          <ToolbarSearch
+            id="archive-search"
+            value={draftFilters.term}
+            onChange={(term) => setDraftFilters((current) => ({ ...current, term }))}
+            onEnter={applyFilters}
+            placeholder="Search name, customer, or reference"
+            label="Search archived records"
+          />
+          <ToolbarFilters>
+            <div className="col-span-2 sm:w-56">
               <ArchiveDateRangeFilter
                 period={draftFilters.datePeriod}
                 dateFrom={draftFilters.dateFrom}
@@ -660,17 +664,17 @@ function ArchivePage() {
                 }
               />
             </div>
-
-            <div className="min-w-0 space-y-1.5">
-              <label className="text-xs font-medium text-muted-foreground">Status</label>
+            {activeTab === "appointments" && (
               <Select
                 value={draftFilters.status}
                 onValueChange={(value) =>
                   setDraftFilters((current) => ({ ...current, status: value }))
                 }
-                disabled={activeTab !== "appointments"}
               >
-                <SelectTrigger aria-label="Appointment status">
+                <SelectTrigger
+                  aria-label="Filter by appointment status"
+                  className="col-span-2 w-full sm:w-40"
+                >
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -682,483 +686,345 @@ function ArchivePage() {
                   ))}
                 </SelectContent>
               </Select>
-            </div>
+            )}
+            <Button type="button" onClick={applyFilters}>
+              <SlidersHorizontal /> Apply filters
+            </Button>
+            <Button type="button" variant="outline" onClick={resetFilters}>
+              <RotateCcw /> Reset
+            </Button>
+          </ToolbarFilters>
+        </ListToolbar>
 
-            <div className="flex gap-2 md:col-span-2 xl:col-span-1 xl:items-end">
-              <Button type="button" className="flex-1 xl:flex-none" onClick={applyFilters}>
-                <SlidersHorizontal /> Apply filters
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="flex-1 xl:flex-none"
-                onClick={resetFilters}
-              >
-                <RotateCcw /> Reset
-              </Button>
-            </div>
-          </div>
-          {activeTab !== "appointments" && (
-            <p className="mt-3 text-xs text-muted-foreground">
-              Status filtering is available for archived appointments.
-            </p>
-          )}
-        </CardContent>
-      </Card>
-
-      <Tabs value={activeTab} onValueChange={setArchiveType} className="space-y-4">
-        <TabsList className="flex h-auto w-full flex-wrap justify-start gap-2 bg-transparent p-0">
-          {ARCHIVE_TABS.map((tab) => (
-            <TabsTrigger
-              key={tab.value}
-              value={tab.value}
-              className="min-h-9 bg-muted px-3 data-[state=active]:bg-background"
-            >
-              {tab.label} ({archiveCounts[tab.value]})
-            </TabsTrigger>
-          ))}
-        </TabsList>
-
-        <Card className="border-border/70 bg-card/60">
+        <ListCard
+          footer={
+            <PaginationControls
+              page={page}
+              pageSize={pageSize}
+              total={activeArchive?.total ?? 0}
+              onPageChange={setPage}
+            />
+          }
+        >
           <TabsContent value="appointments" className="mt-0">
-            <CardContent className="overflow-x-auto p-0">
-              <Table className="admin-data-table">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Reference</TableHead>
-                    <TableHead>Customer</TableHead>
-                    <TableHead>Schedule</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Estimate</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {appointmentRows.map((a) => (
-                    <TableRow key={a.id}>
-                      <TableCell data-label="Reference" className="font-mono text-xs">
-                        {a.reference_code}
-                      </TableCell>
-                      <TableCell data-label="Customer" className="text-sm">
-                        {a.customer_name}
-                        <span className="block text-xs text-muted-foreground">
-                          {a.moto_brand} {a.moto_model} · {a.plate_number}
-                        </span>
-                      </TableCell>
-                      <TableCell data-label="Schedule" className="text-xs">
-                        {formatDateLong(a.appointment_date)}
-                        <span className="block text-muted-foreground">
-                          {formatTime(String(a.start_time).slice(0, 5))}
-                        </span>
-                      </TableCell>
-                      <TableCell data-label="Status">
-                        <Badge
-                          variant="outline"
-                          className={cn("text-[10px] uppercase", statusTone(a.status))}
-                        >
-                          {statusLabel(a.status)}
-                        </Badge>
-                      </TableCell>
-                      <TableCell data-label="Estimate" className="text-sm">
-                        {formatPHP(a.total_estimate)}
-                      </TableCell>
-                      <TableCell data-label="Actions" className="text-right">
-                        <ArchiveRowActions
-                          onRestore={() =>
-                            confirmRestore({
-                              id: a.id,
-                              type: "appointment",
-                              label: a.reference_code,
-                            })
-                          }
-                          onDelete={() =>
-                            confirmDelete({
-                              id: a.id,
-                              type: "appointment",
-                              label: a.reference_code,
-                            })
-                          }
-                        />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {appointmentRows.length === 0 && (
-                    <TableRow>
-                      <TableCell
-                        colSpan={6}
-                        className="py-10 text-center text-sm text-muted-foreground"
-                      >
-                        {archived.isLoading ? "Loading archive..." : "Nothing archived yet."}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
+            <DataList
+              label="Archived appointments"
+              rows={appointmentRows}
+              rowKey={(a) => a.id}
+              loading={archived.isLoading}
+              error={loadError(archived, "appointments")}
+              empty={emptyState("appointments")}
+              columns={[
+                {
+                  key: "customer",
+                  header: "Customer",
+                  card: "title",
+                  cell: (a) => (
+                    <>
+                      <p className="font-medium">{a.customer_name}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        <span className="font-mono">{a.reference_code}</span> · {a.moto_brand}{" "}
+                        {a.moto_model} · {a.plate_number}
+                      </p>
+                    </>
+                  ),
+                },
+                {
+                  key: "schedule",
+                  header: "Schedule",
+                  className: "w-40",
+                  cell: (a) => (
+                    <span className="text-sm">
+                      {formatDateLong(a.appointment_date)}
+                      <span className="block text-xs text-muted-foreground">
+                        {formatTime(String(a.start_time).slice(0, 5))}
+                      </span>
+                    </span>
+                  ),
+                },
+                {
+                  key: "estimate",
+                  header: "Estimate",
+                  xlOnly: true,
+                  className: "w-28 text-right",
+                  cell: (a) => <span className="text-sm">{formatPHP(a.total_estimate)}</span>,
+                },
+                {
+                  key: "status",
+                  header: "Status",
+                  card: "badge",
+                  className: "w-28 text-center",
+                  cell: (a) => (
+                    <Badge variant="outline" className={cn("uppercase", statusTone(a.status))}>
+                      {statusLabel(a.status)}
+                    </Badge>
+                  ),
+                },
+              ]}
+              actionsClassName="w-56"
+              actions={(a) =>
+                rowActions(
+                  { id: a.id, type: "appointment", label: a.reference_code },
+                  a.status === "completed",
+                )
+              }
+            />
           </TabsContent>
 
           <TabsContent value="services" className="mt-0">
-            <CardContent className="overflow-x-auto p-0">
-              <Table className="admin-data-table">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Service</TableHead>
-                    <TableHead>Duration</TableHead>
-                    <TableHead>Price</TableHead>
-                    <TableHead>Service details</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {serviceRows.map((s) => (
-                    <TableRow key={s.id}>
-                      <TableCell data-label="Service" className="text-sm font-medium">
-                        {s.name}
-                      </TableCell>
-                      <TableCell data-label="Duration" className="text-sm">
-                        {s.duration_minutes} mins
-                      </TableCell>
-                      <TableCell data-label="Price" className="text-sm text-primary">
-                        {formatPHP(s.price)}
-                      </TableCell>
-                      <TableCell
-                        data-label="Service details"
-                        className="min-w-0 text-xs text-muted-foreground"
-                      >
+            <DataList
+              label="Archived services"
+              rows={serviceRows}
+              rowKey={(s) => s.id}
+              loading={archivedServices.isLoading}
+              error={loadError(archivedServices, "services")}
+              empty={emptyState("services")}
+              columns={[
+                {
+                  key: "service",
+                  header: "Service",
+                  card: "title",
+                  cell: (s) => (
+                    <>
+                      <p className="font-medium">{s.name}</p>
+                      <div className="mt-1 text-xs text-muted-foreground">
                         <ArchiveServiceDetails
                           serviceId={s.id}
                           serviceName={s.name}
                           description={s.description}
                         />
-                      </TableCell>
-                      <TableCell
-                        data-label="Actions"
-                        className="align-middle text-right md:w-[10.75rem]"
-                      >
-                        <ArchiveRowActions
-                          className="flex-nowrap"
-                          onRestore={() =>
-                            confirmRestore({ id: s.id, type: "service", label: s.name })
-                          }
-                          onDelete={() =>
-                            confirmDelete({ id: s.id, type: "service", label: s.name })
-                          }
-                        />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {serviceRows.length === 0 && (
-                    <TableRow>
-                      <TableCell
-                        colSpan={5}
-                        className="py-10 text-center text-sm text-muted-foreground"
-                      >
-                        {archivedServices.isLoading
-                          ? "Loading archive..."
-                          : "No archived services."}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
+                      </div>
+                    </>
+                  ),
+                },
+                {
+                  key: "price",
+                  header: "Price",
+                  className: "w-28 text-right",
+                  cell: (s) => <span className="text-sm text-primary">{formatPHP(s.price)}</span>,
+                },
+                {
+                  key: "duration",
+                  header: "Duration",
+                  className: "w-28",
+                  cell: (s) => <span className="text-sm">{s.duration_minutes} min</span>,
+                },
+              ]}
+              actionsClassName="w-56"
+              actions={(s) => rowActions({ id: s.id, type: "service", label: s.name })}
+            />
           </TabsContent>
 
           <TabsContent value="products" className="mt-0">
-            <CardContent className="overflow-x-auto p-0">
-              <Table className="admin-data-table">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Item</TableHead>
-                    <TableHead>Brand</TableHead>
-                    <TableHead>Price</TableHead>
-                    <TableHead>Category</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {productRows.map((p) => (
-                    <TableRow key={p.id}>
-                      <TableCell data-label="Item">
-                        <span className="block text-sm">{p.name}</span>
-                        <span className="text-xs text-muted-foreground capitalize">
-                          {p.category}
-                        </span>
-                      </TableCell>
-                      <TableCell data-label="Brand" className="text-sm">
-                        {p.brand ?? "-"}
-                      </TableCell>
-                      <TableCell data-label="Price" className="text-sm text-primary">
-                        {formatPHP(p.price)}
-                      </TableCell>
-                      <TableCell data-label="Category" className="text-sm capitalize">
-                        {p.category}
-                      </TableCell>
-                      <TableCell data-label="Actions" className="text-right">
-                        <ArchiveRowActions
-                          onRestore={() =>
-                            confirmRestore({ id: p.id, type: "product", label: p.name })
-                          }
-                          onDelete={() =>
-                            confirmDelete({ id: p.id, type: "product", label: p.name })
-                          }
-                        />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {productRows.length === 0 && (
-                    <TableRow>
-                      <TableCell
-                        colSpan={5}
-                        className="py-10 text-center text-sm text-muted-foreground"
-                      >
-                        {archivedProducts.isLoading
-                          ? "Loading archive..."
-                          : "No archived products."}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
+            <DataList
+              label="Archived products"
+              rows={productRows}
+              rowKey={(p) => p.id}
+              loading={archivedProducts.isLoading}
+              error={loadError(archivedProducts, "products")}
+              empty={emptyState("products")}
+              columns={[
+                {
+                  key: "item",
+                  header: "Item",
+                  card: "title",
+                  cell: (p) => (
+                    <>
+                      <p className="font-medium">{p.name}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        <span className="capitalize">{p.category}</span>
+                        {p.brand ? ` · ${p.brand}` : ""}
+                      </p>
+                    </>
+                  ),
+                },
+                {
+                  key: "price",
+                  header: "Price",
+                  className: "w-28 text-right",
+                  cell: (p) => <span className="text-sm text-primary">{formatPHP(p.price)}</span>,
+                },
+              ]}
+              actionsClassName="w-56"
+              actions={(p) => rowActions({ id: p.id, type: "product", label: p.name })}
+            />
           </TabsContent>
 
           <TabsContent value="motorcycles" className="mt-0">
-            <CardContent className="overflow-x-auto p-0">
-              <Table className="admin-data-table">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Model</TableHead>
-                    <TableHead>Brand</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {motorcycleRows.map((p) => (
-                    <TableRow key={p.id}>
-                      <TableCell data-label="Model" className="text-sm font-medium">
-                        {p.model}
-                      </TableCell>
-                      <TableCell data-label="Brand" className="text-sm">
-                        {p.brand ?? "-"}
-                      </TableCell>
-                      <TableCell data-label="Actions" className="text-right">
-                        <ArchiveRowActions
-                          onRestore={() =>
-                            confirmRestore({
-                              id: p.id,
-                              type: "motorcycle",
-                              label: `${p.brand ?? ""} ${p.model}`.trim(),
-                            })
-                          }
-                          onDelete={() =>
-                            confirmDelete({
-                              id: p.id,
-                              type: "motorcycle",
-                              label: `${p.brand ?? ""} ${p.model}`.trim(),
-                            })
-                          }
-                        />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {motorcycleRows.length === 0 && (
-                    <TableRow>
-                      <TableCell
-                        colSpan={3}
-                        className="py-10 text-center text-sm text-muted-foreground"
-                      >
-                        {archivedMotorcycles.isLoading
-                          ? "Loading archive..."
-                          : "No archived motorcycles."}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
+            <DataList
+              label="Archived motorcycles"
+              rows={motorcycleRows}
+              rowKey={(m) => m.id}
+              loading={archivedMotorcycles.isLoading}
+              error={loadError(archivedMotorcycles, "motorcycles")}
+              empty={emptyState("motorcycles")}
+              columns={[
+                {
+                  key: "model",
+                  header: "Model",
+                  card: "title",
+                  cell: (m) => (
+                    <>
+                      <p className="font-medium">{m.model}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {m.brand ?? "No brand"}
+                      </p>
+                    </>
+                  ),
+                },
+                {
+                  key: "engine",
+                  header: "Engine",
+                  className: "w-28 text-right",
+                  cell: (m) =>
+                    m.engine_cc === null ? (
+                      <span className="text-sm text-muted-foreground">Not set</span>
+                    ) : (
+                      <span className="text-sm">{m.engine_cc}cc</span>
+                    ),
+                },
+              ]}
+              actionsClassName="w-56"
+              actions={(m) =>
+                rowActions({
+                  id: m.id,
+                  type: "motorcycle",
+                  label: `${m.brand ?? ""} ${m.model}`.trim(),
+                })
+              }
+            />
           </TabsContent>
 
           <TabsContent value="crew" className="mt-0">
-            <CardContent className="overflow-x-auto p-0">
-              <Table className="admin-data-table">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Role</TableHead>
-                    <TableHead>Phone</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {crewRows.map((c) => (
-                    <TableRow key={c.id}>
-                      <TableCell data-label="Name" className="text-sm">
-                        {c.name}
-                      </TableCell>
-                      <TableCell data-label="Role" className="text-sm">
-                        {c.role}
-                      </TableCell>
-                      <TableCell data-label="Phone" className="text-sm">
-                        {c.phone ? toLocalPhilippineMobile(c.phone) : "-"}
-                      </TableCell>
-                      <TableCell data-label="Actions" className="text-right">
-                        <ArchiveRowActions
-                          onRestore={() =>
-                            confirmRestore({ id: c.id, type: "crew", label: c.name })
-                          }
-                          onDelete={() => confirmDelete({ id: c.id, type: "crew", label: c.name })}
-                        />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {crewRows.length === 0 && (
-                    <TableRow>
-                      <TableCell
-                        colSpan={4}
-                        className="py-10 text-center text-sm text-muted-foreground"
-                      >
-                        {archivedCrew.isLoading
-                          ? "Loading archive..."
-                          : "No archived crew members."}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
+            <DataList
+              label="Archived crew members"
+              rows={crewRows}
+              rowKey={(c) => c.id}
+              loading={archivedCrew.isLoading}
+              error={loadError(archivedCrew, "crew members")}
+              empty={emptyState("crew members")}
+              columns={[
+                {
+                  key: "name",
+                  header: "Name",
+                  card: "title",
+                  cell: (c) => (
+                    <>
+                      <p className="font-medium">{c.name}</p>
+                      <p className="mt-0.5 text-xs text-muted-foreground">{c.role}</p>
+                    </>
+                  ),
+                },
+                {
+                  key: "phone",
+                  header: "Phone",
+                  className: "w-40",
+                  cell: (c) =>
+                    c.phone ? (
+                      <span className="text-sm">{toLocalPhilippineMobile(c.phone)}</span>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">Not set</span>
+                    ),
+                },
+              ]}
+              actionsClassName="w-56"
+              actions={(c) => rowActions({ id: c.id, type: "crew", label: c.name })}
+            />
           </TabsContent>
 
           <TabsContent value="blocks" className="mt-0">
-            <CardContent className="overflow-x-auto p-0">
-              <Table className="admin-data-table">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Date</TableHead>
-                    <TableHead>Slot</TableHead>
-                    <TableHead>Reason</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {blockRows.map((b) => (
-                    <TableRow key={b.id}>
-                      <TableCell data-label="Date" className="text-sm">
-                        {formatDateLong(b.block_date)}
-                      </TableCell>
-                      <TableCell data-label="Slot" className="text-sm">
-                        {b.start_time ? formatTime(String(b.start_time).slice(0, 5)) : "Whole day"}
-                      </TableCell>
-                      <TableCell data-label="Reason" className="text-sm text-muted-foreground">
-                        {b.reason ?? "-"}
-                      </TableCell>
-                      <TableCell data-label="Actions" className="text-right">
-                        <ArchiveRowActions
-                          onRestore={() =>
-                            confirmRestore({
-                              id: b.id,
-                              type: "block",
-                              label: b.reason?.trim() || formatDateLong(b.block_date),
-                            })
-                          }
-                          onDelete={() =>
-                            confirmDelete({
-                              id: b.id,
-                              type: "block",
-                              label: b.reason?.trim() || formatDateLong(b.block_date),
-                            })
-                          }
-                        />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {blockRows.length === 0 && (
-                    <TableRow>
-                      <TableCell
-                        colSpan={4}
-                        className="py-10 text-center text-sm text-muted-foreground"
-                      >
-                        {archivedBlocks.isLoading
-                          ? "Loading archive..."
-                          : "No archived schedule blocks."}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
+            <DataList
+              label="Archived schedule blocks"
+              rows={blockRows}
+              rowKey={(b) => b.id}
+              loading={archivedBlocks.isLoading}
+              error={loadError(archivedBlocks, "schedule blocks")}
+              empty={emptyState("schedule blocks")}
+              columns={[
+                {
+                  key: "date",
+                  header: "Date",
+                  card: "title",
+                  className: "w-48",
+                  cell: (b) => <span className="font-medium">{formatDateLong(b.block_date)}</span>,
+                },
+                {
+                  key: "slot",
+                  header: "Time",
+                  className: "w-40",
+                  cell: (b) => <span className="text-sm">{archivedBlockSlotLabel(b)}</span>,
+                },
+                {
+                  key: "reason",
+                  header: "Reason",
+                  card: "wide",
+                  cell: (b) => (
+                    <span className="text-sm text-muted-foreground">
+                      {decodeBlockReason(b.reason).userReason || "No reason given"}
+                    </span>
+                  ),
+                },
+              ]}
+              actionsClassName="w-56"
+              actions={(b) =>
+                rowActions({
+                  id: b.id,
+                  type: "block",
+                  label:
+                    decodeBlockReason(b.reason).userReason.trim() || formatDateLong(b.block_date),
+                })
+              }
+            />
           </TabsContent>
 
           <TabsContent value="blocked-numbers" className="mt-0">
-            <CardContent className="overflow-x-auto p-0">
-              <Table className="admin-data-table">
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Phone</TableHead>
-                    <TableHead>Reason</TableHead>
-                    <TableHead>Blocked on</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {blockedNumberRows.map((blockedNumber) => (
-                    <TableRow key={blockedNumber.id}>
-                      <TableCell data-label="Phone" className="font-mono text-sm">
-                        {toLocalPhilippineMobile(blockedNumber.phone)}
-                      </TableCell>
-                      <TableCell data-label="Reason" className="text-sm text-muted-foreground">
-                        {blockedNumber.reason ?? "-"}
-                      </TableCell>
-                      <TableCell data-label="Blocked on" className="text-sm">
-                        {new Date(blockedNumber.created_at).toLocaleDateString("en-PH", {
-                          year: "numeric",
-                          month: "short",
-                          day: "numeric",
-                        })}
-                      </TableCell>
-                      <TableCell data-label="Actions" className="text-right">
-                        <ArchiveRowActions
-                          onRestore={() =>
-                            confirmRestore({
-                              id: blockedNumber.id,
-                              type: "blockedNumber",
-                              label: toLocalPhilippineMobile(blockedNumber.phone),
-                            })
-                          }
-                          onDelete={() =>
-                            confirmDelete({
-                              id: blockedNumber.id,
-                              type: "blockedNumber",
-                              label: toLocalPhilippineMobile(blockedNumber.phone),
-                            })
-                          }
-                        />
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {blockedNumberRows.length === 0 && (
-                    <TableRow>
-                      <TableCell
-                        colSpan={4}
-                        className="py-10 text-center text-sm text-muted-foreground"
-                      >
-                        {archivedBlockedNumbers.isLoading
-                          ? "Loading archive..."
-                          : "No archived blocked numbers."}
-                      </TableCell>
-                    </TableRow>
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
+            <DataList
+              label="Archived blocked numbers"
+              rows={blockedNumberRows}
+              rowKey={(n) => n.id}
+              loading={archivedBlockedNumbers.isLoading}
+              error={loadError(archivedBlockedNumbers, "blocked numbers")}
+              empty={emptyState("blocked numbers")}
+              columns={[
+                {
+                  key: "phone",
+                  header: "Phone",
+                  card: "title",
+                  className: "w-44",
+                  cell: (n) => (
+                    <span className="font-mono text-sm font-medium">
+                      {toLocalPhilippineMobile(n.phone)}
+                    </span>
+                  ),
+                },
+                {
+                  key: "reason",
+                  header: "Reason",
+                  card: "wide",
+                  cell: (n) => (
+                    <span className="text-sm text-muted-foreground">
+                      {n.reason || "No reason given"}
+                    </span>
+                  ),
+                },
+                {
+                  key: "created",
+                  header: "Blocked on",
+                  className: "w-36",
+                  cell: (n) => <span className="text-sm">{formatShortDate(n.created_at)}</span>,
+                },
+              ]}
+              actionsClassName="w-56"
+              actions={(n) =>
+                rowActions({
+                  id: n.id,
+                  type: "blockedNumber",
+                  label: toLocalPhilippineMobile(n.phone),
+                })
+              }
+            />
           </TabsContent>
-          <PaginationControls
-            page={page}
-            pageSize={pageSize}
-            total={activeArchive?.total ?? 0}
-            onPageChange={setPage}
-          />
-        </Card>
+        </ListCard>
       </Tabs>
 
       <AlertDialog open={!!restoreTarget} onOpenChange={(open) => !open && setRestoreTarget(null)}>
@@ -1202,7 +1068,7 @@ function ArchivePage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </AdminPage>
   );
 }
 
@@ -1428,25 +1294,47 @@ function formatDateRange(from: string, to: string) {
     : `${fromLabel} – ${format(toDate, "MMM d, yyyy")}`;
 }
 
+/** Restore and Delete. Records that are kept (completed appointments) have no Delete. */
 function ArchiveRowActions({
+  label,
   onRestore,
   onDelete,
-  className,
+  kept,
 }: {
+  label: string;
   onRestore: () => void;
   onDelete: () => void;
-  className?: string;
+  kept: boolean;
 }) {
   return (
-    <div className={cn("flex flex-wrap justify-end gap-2", className)}>
-      <Button size="sm" variant="outline" onClick={onRestore}>
+    <>
+      <Button size="sm" variant="outline" onClick={onRestore} aria-label={`Restore ${label}`}>
         <RotateCcw /> Restore
       </Button>
-      <Button size="sm" variant="destructive" onClick={onDelete}>
-        <Trash2 /> Delete
-      </Button>
-    </div>
+      {kept ? (
+        <span className="w-20 text-left text-[11px] leading-tight text-muted-foreground">
+          Kept for financial records
+        </span>
+      ) : (
+        <Button
+          size="sm"
+          variant="destructive"
+          onClick={onDelete}
+          aria-label={`Permanently delete ${label}`}
+        >
+          <Trash2 /> Delete
+        </Button>
+      )}
+    </>
   );
+}
+
+/** "Whole day", or the archived block’s time range. */
+function archivedBlockSlotLabel(block: { start_time: string | null; reason: string | null }) {
+  if (!block.start_time) return "Whole day";
+  const start = formatTime(String(block.start_time).slice(0, 5));
+  const { endTime } = decodeBlockReason(block.reason);
+  return endTime ? `${start} – ${formatTime(endTime.slice(0, 5))}` : start;
 }
 
 function ArchiveServiceDetails({

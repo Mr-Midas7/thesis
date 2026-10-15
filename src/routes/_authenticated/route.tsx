@@ -8,9 +8,8 @@ export const Route = createFileRoute("/_authenticated")({
     const { data, error } = await supabase.auth.getUser();
     if (error || !data.user) throw redirect({ to: "/auth" });
 
-    const { data: hasActiveAdminSession, error: sessionError } = await supabase.rpc(
-      "validate_admin_session",
-    );
+    const { data: hasActiveAdminSession, error: sessionError } =
+      await supabase.rpc("validate_admin_session");
     if (sessionError || !hasActiveAdminSession) {
       await supabase.auth.signOut({ scope: "local" });
       throw redirect({ to: "/auth" });

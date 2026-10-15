@@ -1,10 +1,29 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { format } from "date-fns";
-import { CalendarRange, ChevronDown, Filter, Loader2, Plus, RotateCcw } from "lucide-react";
+import {
+  CalendarRange,
+  CalendarSearch,
+  ChevronDown,
+  Filter,
+  Loader2,
+  Plus,
+  RotateCcw,
+  Trash2,
+} from "lucide-react";
 import { useMemo, useState } from "react";
 import type { DateRange } from "react-day-picker";
 
+import {
+  AdminPage,
+  DataList,
+  InlineAlert,
+  ListCard,
+  ListCardTitle,
+  ListEmpty,
+  ListToolbar,
+  ToolbarFilters,
+} from "@/components/admin/data-list";
 import { PageHeader } from "@/components/admin/page-header";
 import {
   AlertDialog,
@@ -18,7 +37,6 @@ import {
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import {
   Dialog,
@@ -27,7 +45,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
@@ -37,14 +54,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import {
   calendarDateToIso,
@@ -54,7 +63,7 @@ import {
   manilaWeekDateRange,
   normalizeIsoDateRange,
 } from "@/lib/admin-date-range";
-import { formatDateLong, manilaNow, shopTimeOptions } from "@/lib/shop";
+import { formatDateLong, formatTime, manilaNow, shopTimeOptions } from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/admin/availability")({
@@ -68,7 +77,7 @@ const SHIFT_PRESETS = {
 } as const;
 
 const PRESET_LABELS: Record<string, string> = {};
-for (const [key, preset] of Object.entries(SHIFT_PRESETS)) {
+for (const preset of Object.values(SHIFT_PRESETS)) {
   PRESET_LABELS[`${preset.start}|${preset.end}`] = preset.label;
 }
 
@@ -286,6 +295,22 @@ function AvailabilityDateRangeValue({ label, value }: { label: string; value: Da
   );
 }
 
+/** "This week · All crew members · All roles", for the results header. */
+function assignmentFilterSummary(filter: AssignmentFilter, crew: CrewMember[]) {
+  const period =
+    filter.period === "custom"
+      ? availabilityDatePeriodLabel(filter.period, filter.customStart, filter.customEnd)
+      : filter.period === "monthly"
+        ? "This month"
+        : "This week";
+  const member =
+    filter.crewId === "all"
+      ? "All crew members"
+      : (crew.find((item) => item.id === filter.crewId)?.name ?? "Selected crew member");
+  const role = filter.role === "all" ? "All roles" : filter.role;
+  return [period, member, role].join(" · ");
+}
+
 function availabilityDatePeriodLabel(
   period: AssignmentFilter["period"],
   dateFrom: string,
@@ -384,7 +409,7 @@ function AvailabilityPage() {
       );
       if (error) throw error;
     },
-    onSuccess: (_, payload) => {
+    onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["crew-schedules-all"] });
     },
     onError: (err: Error) => {
@@ -571,189 +596,183 @@ function AvailabilityPage() {
     }
   };
 
+  const openAssignDialog = () => {
+    setAssignMechanic("");
+    setAssignShift("whole-day");
+    setCustomStart("");
+    setCustomEnd("");
+    setAssignDates([]);
+    setDialogOpen(true);
+  };
+
   return (
-    <div>
+    <AdminPage>
       <PageHeader
         title="Crew Scheduling"
         description="Find and manage crew assignments by crew member, role, and period."
         action={
-          <Button
-            className="font-display uppercase"
-            onClick={() => {
-              setAssignMechanic("");
-              setAssignShift("whole-day");
-              setCustomStart("");
-              setCustomEnd("");
-              setAssignDates([]);
-              setDialogOpen(true);
-            }}
-          >
+          <Button className="font-display uppercase" onClick={openAssignDialog}>
             <Plus /> Assign crew
           </Button>
         }
       />
-      {actionError && (
-        <p role="alert" className="mb-4 text-sm text-destructive">
-          {actionError}
-        </p>
+      {actionError && <InlineAlert>{actionError}</InlineAlert>}
+
+      <ListToolbar
+        summary={
+          filteredAssignments &&
+          `${filteredAssignments.length} ${filteredAssignments.length === 1 ? "assignment" : "assignments"}`
+        }
+      >
+        <ToolbarFilters>
+          <Select value={filterCrewId} onValueChange={setFilterCrewId}>
+            <SelectTrigger aria-label="Filter by crew member" className="w-full sm:w-48">
+              <SelectValue placeholder="All crew members" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All crew members</SelectItem>
+              {(crew.data ?? []).map((member) => (
+                <SelectItem key={member.id} value={member.id}>
+                  {member.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <Select value={filterRole} onValueChange={setFilterRole}>
+            <SelectTrigger aria-label="Filter by role" className="w-full sm:w-40">
+              <SelectValue placeholder="All roles" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All roles</SelectItem>
+              {roleOptions.map((role) => (
+                <SelectItem key={role} value={role}>
+                  {role}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="col-span-2 sm:w-56">
+            <AvailabilityDateRangeFilter
+              period={filterPeriod}
+              dateFrom={customPeriodStart}
+              dateTo={customPeriodEnd}
+              onPeriodChange={setFilterPeriod}
+              onCustomDateRangeChange={(dateFrom, dateTo) => {
+                setCustomPeriodStart(dateFrom);
+                setCustomPeriodEnd(dateTo);
+                setFilterErrors({});
+              }}
+            />
+          </div>
+          <Button type="button" onClick={applyAssignmentFilter}>
+            <Filter /> Apply filters
+          </Button>
+          <Button type="button" variant="outline" onClick={clearAssignmentFilter}>
+            <RotateCcw /> Reset
+          </Button>
+        </ToolbarFilters>
+      </ListToolbar>
+      {filterPeriod === "custom" && (
+        <FieldError
+          message={filterErrors.customStart ?? filterErrors.customEnd}
+          className="-mt-2 mb-4"
+        />
       )}
 
-      <Card className="border-border/70 bg-card/60">
-        <CardHeader>
-          <CardTitle className="font-display text-lg tracking-wide uppercase">
-            Crew Schedule Search
-          </CardTitle>
-        </CardHeader>
-        <CardContent className="p-4">
-          <div className="grid gap-4 rounded-lg border border-border/70 bg-background/20 p-4 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="space-y-1.5">
-              <Label>Crew member</Label>
-              <Select value={filterCrewId} onValueChange={setFilterCrewId}>
-                <SelectTrigger>
-                  <SelectValue placeholder="All crew members" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All crew members</SelectItem>
-                  {(crew.data ?? []).map((member) => (
-                    <SelectItem key={member.id} value={member.id}>
-                      {member.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Role</Label>
-              <Select value={filterRole} onValueChange={setFilterRole}>
-                <SelectTrigger>
-                  <SelectValue placeholder="All roles" />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All roles</SelectItem>
-                  {roleOptions.map((role) => (
-                    <SelectItem key={role} value={role}>
-                      {role}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Date range</Label>
-              <AvailabilityDateRangeFilter
-                period={filterPeriod}
-                dateFrom={customPeriodStart}
-                dateTo={customPeriodEnd}
-                onPeriodChange={setFilterPeriod}
-                onCustomDateRangeChange={(dateFrom, dateTo) => {
-                  setCustomPeriodStart(dateFrom);
-                  setCustomPeriodEnd(dateTo);
-                  setFilterErrors({});
-                }}
+      <ListCard
+        header={
+          <ListCardTitle
+            title="Crew assignments"
+            description={
+              appliedFilter
+                ? assignmentFilterSummary(appliedFilter, crew.data ?? [])
+                : "Choose your crew, role, and period, then apply the filters."
+            }
+          />
+        }
+      >
+        {filteredAssignments === null ? (
+          <ListEmpty
+            icon={CalendarSearch}
+            title="No search yet"
+            description="Choose your crew, role, and period, then apply the filters to see assignments."
+          />
+        ) : (
+          <DataList
+            label="Crew assignments"
+            rows={filteredAssignments}
+            rowKey={(w) => w.id}
+            loading={schedules.isLoading}
+            error={
+              schedules.isError
+                ? {
+                    message: "Could not load crew schedules.",
+                    onRetry: () => void schedules.refetch(),
+                  }
+                : null
+            }
+            empty={
+              <ListEmpty
+                icon={CalendarSearch}
+                title="No crew assignments match these filters."
+                description="Try another crew member, role, or period, or assign crew to these days."
+                action={
+                  <Button size="sm" onClick={openAssignDialog}>
+                    <Plus /> Assign crew
+                  </Button>
+                }
               />
-            </div>
-            <div className="flex gap-2 xl:self-end">
-              <Button
-                type="button"
-                className="flex-1 whitespace-nowrap xl:flex-none"
-                onClick={applyAssignmentFilter}
-              >
-                <Filter /> Apply filters
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                className="flex-1 whitespace-nowrap xl:flex-none"
-                onClick={clearAssignmentFilter}
-              >
-                <RotateCcw /> Reset
-              </Button>
-            </div>
-            {filterPeriod === "custom" && (
-              <div className="sm:col-span-2">
-                <FieldError message={filterErrors.customStart ?? filterErrors.customEnd} />
-              </div>
-            )}
-          </div>
-
-          <div className="mt-5">
-            {/* Day info panel — slides in from the left */}
-            <div className="overflow-hidden">
-              {filteredAssignments !== null ? (
-                <div
-                  key={JSON.stringify(appliedFilter)}
-                  className="animate-in fade-in slide-in-from-bottom-2 duration-200"
+            }
+            columns={[
+              {
+                key: "date",
+                header: "Date",
+                card: "title",
+                className: "w-52",
+                cell: (w) => <span className="font-medium">{formatDateLong(w.schedule_date)}</span>,
+              },
+              {
+                key: "name",
+                header: "Mechanic",
+                cell: (w) => (
+                  <span className="text-sm">
+                    {w.name}
+                    <span className="block text-xs text-muted-foreground">{w.role}</span>
+                  </span>
+                ),
+              },
+              {
+                key: "shift",
+                header: "Shift",
+                card: "wide",
+                className: "w-56",
+                cell: (w) => (
+                  <span className="text-sm">
+                    {w.start_time && w.end_time
+                      ? (PRESET_LABELS[`${w.start_time}|${w.end_time}`] ??
+                        `${formatTime(w.start_time)} – ${formatTime(w.end_time)}`)
+                      : "Not set"}
+                  </span>
+                ),
+              },
+            ]}
+            actionsClassName="w-32"
+            actions={(w) =>
+              w.is_date_assignment ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => setDeleteTarget(w.id)}
+                  aria-label={`Remove ${w.name}'s assignment on ${formatDateLong(w.schedule_date)}`}
                 >
-                  <Card className="border-border/70 bg-card/40">
-                    <CardHeader>
-                      <CardTitle className="font-display text-sm uppercase">
-                        Crew assignments
-                      </CardTitle>
-                    </CardHeader>
-                    <CardContent className="p-4">
-                      {filteredAssignments.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">
-                          No crew assignments match this filter.
-                        </p>
-                      ) : (
-                        <Table className="admin-data-table">
-                          <TableHeader>
-                            <TableRow>
-                              <TableHead>Mechanic</TableHead>
-                              <TableHead>Role</TableHead>
-                              <TableHead>Date</TableHead>
-                              <TableHead>Shift</TableHead>
-                              <TableHead className="text-right">Action</TableHead>
-                            </TableRow>
-                          </TableHeader>
-                          <TableBody>
-                            {filteredAssignments.map((w) => (
-                              <TableRow key={w.id}>
-                                <TableCell data-label="Mechanic" className="text-sm">
-                                  {w.name}
-                                </TableCell>
-                                <TableCell data-label="Role" className="text-sm">
-                                  {w.role}
-                                </TableCell>
-                                <TableCell data-label="Date" className="text-sm">
-                                  {formatDateLong(w.schedule_date)}
-                                </TableCell>
-                                <TableCell data-label="Shift" className="text-xs">
-                                  {w.start_time && w.end_time
-                                    ? (PRESET_LABELS[`${w.start_time}|${w.end_time}`] ??
-                                      `${w.start_time} - ${w.end_time}`)
-                                    : "-"}
-                                </TableCell>
-                                <TableCell data-label="Action" className="text-right">
-                                  {w.is_date_assignment && (
-                                    <button
-                                      type="button"
-                                      onClick={() => setDeleteTarget(w.id)}
-                                      className="rounded px-2 py-1 text-xs text-destructive hover:underline"
-                                    >
-                                      Remove assignment
-                                    </button>
-                                  )}
-                                </TableCell>
-                              </TableRow>
-                            ))}
-                          </TableBody>
-                        </Table>
-                      )}
-                    </CardContent>
-                  </Card>
-                </div>
-              ) : (
-                <div className="flex min-h-[120px] w-full items-center justify-center">
-                  <p className="text-sm text-muted-foreground">
-                    Choose your crew, role, and period, then apply the filter.
-                  </p>
-                </div>
-              )}
-            </div>
-          </div>
-        </CardContent>
-      </Card>
+                  <Trash2 /> Remove
+                </Button>
+              ) : null
+            }
+          />
+        )}
+      </ListCard>
 
       <AlertDialog
         open={Boolean(deleteTarget)}
@@ -922,6 +941,6 @@ function AvailabilityPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </AdminPage>
   );
 }

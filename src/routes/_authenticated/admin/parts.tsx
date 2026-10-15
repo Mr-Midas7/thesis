@@ -2,6 +2,7 @@ import { createFileRoute } from "@tanstack/react-router";
 import { Plus } from "lucide-react";
 import { useRef } from "react";
 
+import { AdminPage } from "@/components/admin/data-list";
 import { PageHeader } from "@/components/admin/page-header";
 import { ProductManager, ProductManagerHandle } from "@/components/admin/product-manager";
 import { Button } from "@/components/ui/button";
@@ -14,7 +15,7 @@ function PartsAdmin() {
   const productManagerRef = useRef<ProductManagerHandle>(null);
 
   return (
-    <div>
+    <AdminPage>
       <PageHeader
         title="Parts & Accessories"
         description="Items shown in the public shop showcase."
@@ -28,6 +29,6 @@ function PartsAdmin() {
         }
       />
       <ProductManager ref={productManagerRef} category="part" />
-    </div>
+    </AdminPage>
   );
 }

@@ -473,7 +473,7 @@ export function SettingsPage() {
       />
 
       <Tabs value={tab} onValueChange={(value) => setTab(value as SettingsTab)}>
-        <TabsList className="grid h-auto w-full grid-cols-2 overflow-visible bg-secondary/50 p-1 md:inline-flex md:w-auto">
+        <TabsList className="grid w-full grid-cols-2 md:inline-flex md:w-auto">
           <TabsTrigger value="shop" className="w-full gap-2 md:w-auto">
             <Store className="h-4 w-4" /> Shop information
           </TabsTrigger>

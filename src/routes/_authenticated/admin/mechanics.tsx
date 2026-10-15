@@ -1,13 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Archive, Pencil, Plus, RotateCcw } from "lucide-react";
+import { Pencil, Plus, UserCheck } from "lucide-react";
 import { useState } from "react";
 
-import { PageHeader } from "@/components/admin/page-header";
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
-import { Badge } from "@/components/ui/badge";
+import {
+  ActiveStatusBadge,
+  AdminPage,
+  ArchiveMenuItem,
+  DataList,
+  InlineAlert,
+  ListCard,
+  ListEmpty,
+  ListToolbar,
+  MoreActionsMenu,
+  ResetFiltersButton,
+  ToolbarFilters,
+  ToolbarSearch,
+} from "@/components/admin/data-list";
+import { PageHeader } from "@/components/admin/page-header";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import {
   Dialog,
@@ -26,17 +38,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import {
-  activeStatusTone,
   PHONE_VALIDATION_MESSAGE,
   normalizePhilippineMobile,
   sanitizePhilippineMobileInput,
@@ -134,11 +137,6 @@ function MechanicsPage() {
     },
   });
 
-  const getStatus = (member: CrewMember) => ({
-    label: member.is_active ? "Active" : "Inactive",
-    tone: activeStatusTone(member.is_active),
-  });
-
   const handleSave = async () => {
     if (form.name.trim().length < 2) {
       setFormErrors({ name: "Enter a mechanic name with at least 2 characters." });
@@ -178,161 +176,163 @@ function MechanicsPage() {
     qc.invalidateQueries({ queryKey: ["crew-all"] });
   };
 
+  const searchTerm = filterName.trim().toLocaleLowerCase();
+  const filteredCrew = (crew.data ?? []).filter(
+    (c) =>
+      (!searchTerm ||
+        `${c.name} ${c.role} ${c.phone ? toLocalPhilippineMobile(c.phone) : ""}`
+          .toLocaleLowerCase()
+          .includes(searchTerm)) &&
+      (filterStatus === "all" || (filterStatus === "active" ? c.is_active : !c.is_active)),
+  );
+  const activeCount = (crew.data ?? []).filter((c) => c.is_active).length;
+  const hasFilters = Boolean(searchTerm) || filterStatus !== "all";
+  const resetFilters = () => {
+    setFilterName("");
+    setFilterStatus("all");
+  };
+  const openNew = () => {
+    setEditing(null);
+    setForm({ ...blank });
+    setFormErrors({});
+    setOpen(true);
+  };
+  const openEdit = (c: CrewMember) => {
+    setEditing(c);
+    setForm({
+      name: c.name,
+      role: c.role,
+      phone: c.phone ? toLocalPhilippineMobile(c.phone) : "",
+      is_active: c.is_active,
+    });
+    setFormErrors({});
+    setOpen(true);
+  };
+
   return (
-    <div>
+    <AdminPage>
       <PageHeader
         title="Mechanics"
         description="Manage mechanics and view their current work status."
         action={
-          <Button
-            className="font-display uppercase"
-            onClick={() => {
-              setEditing(null);
-              setForm({ ...blank });
-              setFormErrors({});
-              setOpen(true);
-            }}
-          >
+          <Button className="font-display uppercase" onClick={openNew}>
             <Plus /> Add mechanic
           </Button>
         }
       />
-      {archiveError && (
-        <p role="alert" className="mb-4 text-sm text-destructive">
-          {archiveError}
-        </p>
-      )}
+      {archiveError && <InlineAlert>{archiveError}</InlineAlert>}
 
-      <div className="mb-4 flex flex-wrap items-end gap-4">
-        <div className="space-y-1.5">
-          <Label className="text-sm">Name</Label>
-          <Input
-            value={filterName}
-            onChange={(e) => setFilterName(e.target.value)}
-            placeholder="Search by name..."
-            className="w-full sm:w-48"
-          />
-        </div>
-
-        <div className="space-y-1.5">
-          <Label className="text-sm">Status</Label>
+      <ListToolbar
+        summary={crew.data && `Showing ${filteredCrew.length} of ${crew.data.length} mechanics`}
+      >
+        <ToolbarSearch
+          value={filterName}
+          onChange={setFilterName}
+          placeholder="Search name, role, or phone"
+          label="Search mechanics by name, role, or phone"
+        />
+        <ToolbarFilters>
           <Select
             value={filterStatus}
             onValueChange={(value) => setFilterStatus(value as "all" | "active" | "inactive")}
           >
-            <SelectTrigger className="w-full sm:w-40">
+            <SelectTrigger aria-label="Filter by status" className="w-full sm:w-40">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All</SelectItem>
-              <SelectItem value="active">Active</SelectItem>
-              <SelectItem value="inactive">Inactive</SelectItem>
+              <SelectItem value="all">All statuses</SelectItem>
+              <SelectItem value="active">Active ({activeCount})</SelectItem>
+              <SelectItem value="inactive">
+                Inactive ({(crew.data?.length ?? 0) - activeCount})
+              </SelectItem>
             </SelectContent>
           </Select>
-        </div>
+          {hasFilters && <ResetFiltersButton onClick={resetFilters} />}
+        </ToolbarFilters>
+      </ListToolbar>
 
-        {(filterName || filterStatus !== "all") && (
-          <Button
-            size="sm"
-            variant="outline"
-            className="self-end whitespace-nowrap"
-            onClick={() => {
-              setFilterName("");
-              setFilterStatus("all");
-            }}
-          >
-            <RotateCcw /> Reset
-          </Button>
-        )}
-      </div>
-
-      <Card className="max-w-6xl border-border/70 bg-card/60">
-        <CardContent className="overflow-x-auto p-0">
-          <Table className="admin-data-table admin-balanced-table">
-            <colgroup>
-              <col style={{ width: "27%" }} />
-              <col style={{ width: "27%" }} />
-              <col style={{ width: "22%" }} />
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "15%" }} />
-            </colgroup>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Name</TableHead>
-                <TableHead>Role</TableHead>
-                <TableHead>Phone</TableHead>
-                <TableHead className="text-center">Status</TableHead>
-                <TableHead className="text-center">Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {crew.data
-                ?.filter((c) => c.name.toLowerCase().includes(filterName.toLowerCase()))
-                .filter(
-                  (c) =>
-                    filterStatus === "all" ||
-                    (filterStatus === "active" ? c.is_active : !c.is_active),
+      <ListCard>
+        <DataList
+          label="Mechanics"
+          rows={filteredCrew}
+          rowKey={(c) => c.id}
+          loading={crew.isLoading}
+          error={
+            crew.isError
+              ? { message: "Could not load mechanics.", onRetry: () => void crew.refetch() }
+              : null
+          }
+          empty={
+            <ListEmpty
+              icon={UserCheck}
+              title={hasFilters ? "No mechanics match your filters." : "No mechanics yet."}
+              description={
+                hasFilters
+                  ? "Try a different search or status."
+                  : "Add your crew so you can assign them to appointments."
+              }
+              action={
+                hasFilters ? (
+                  <ResetFiltersButton onClick={resetFilters} />
+                ) : (
+                  <Button size="sm" onClick={openNew}>
+                    <Plus /> Add mechanic
+                  </Button>
                 )
-                .map((c) => {
-                  const status = getStatus(c);
-                  return (
-                    <TableRow key={c.id}>
-                      <TableCell data-label="Name" className="text-sm">
-                        {c.name}
-                      </TableCell>
-                      <TableCell data-label="Role" className="text-sm">
-                        {c.role}
-                      </TableCell>
-                      <TableCell data-label="Phone" className="text-sm">
-                        {c.phone ? toLocalPhilippineMobile(c.phone) : "-"}
-                      </TableCell>
-                      <TableCell data-label="Status" className="text-center">
-                        <Badge variant="outline" className={`text-[10px] uppercase ${status.tone}`}>
-                          {status.label}
-                        </Badge>
-                      </TableCell>
-                      <TableCell data-label="Actions" className="space-x-1 text-center">
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => {
-                            setEditing(c);
-                            setForm({
-                              name: c.name,
-                              role: c.role,
-                              phone: c.phone ? toLocalPhilippineMobile(c.phone) : "",
-                              is_active: c.is_active,
-                            });
-                            setFormErrors({});
-                            setOpen(true);
-                          }}
-                        >
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                        <Button
-                          size="sm"
-                          variant="ghost"
-                          disabled={archive.isPending}
-                          onClick={() => setArchiveTarget(c.id)}
-                        >
-                          <Archive className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })}
-            </TableBody>
-          </Table>
-          {crew.data
-            ?.filter((c) => c.name.toLowerCase().includes(filterName.toLowerCase()))
-            .filter(
-              (c) =>
-                filterStatus === "all" || (filterStatus === "active" ? c.is_active : !c.is_active),
-            ).length === 0 && (
-            <p className="p-8 text-center text-sm text-muted-foreground">No mechanics found.</p>
+              }
+            />
+          }
+          columns={[
+            {
+              key: "name",
+              header: "Name",
+              card: "title",
+              cell: (c) => <span className="font-medium">{c.name}</span>,
+            },
+            {
+              key: "role",
+              header: "Role",
+              className: "w-32",
+              cell: (c) => <span className="text-sm">{c.role}</span>,
+            },
+            {
+              key: "phone",
+              header: "Phone",
+              className: "w-36",
+              cell: (c) => (
+                <span className="text-sm">
+                  {c.phone ? (
+                    toLocalPhilippineMobile(c.phone)
+                  ) : (
+                    <span className="text-muted-foreground">Not set</span>
+                  )}
+                </span>
+              ),
+            },
+            {
+              key: "status",
+              header: "Status",
+              card: "badge",
+              className: "w-28 text-center",
+              cell: (c) => <ActiveStatusBadge active={c.is_active} />,
+            },
+          ]}
+          actionsClassName="w-36"
+          actions={(c) => (
+            <>
+              <Button size="sm" variant="outline" onClick={() => openEdit(c)}>
+                <Pencil /> Edit
+              </Button>
+              <MoreActionsMenu itemLabel={c.name}>
+                <ArchiveMenuItem
+                  disabled={archive.isPending}
+                  onSelect={() => setArchiveTarget(c.id)}
+                />
+              </MoreActionsMenu>
+            </>
           )}
-        </CardContent>
-      </Card>
+        />
+      </ListCard>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
@@ -423,6 +423,6 @@ function MechanicsPage() {
           setArchiveTarget(null);
         }}
       />
-    </div>
+    </AdminPage>
   );
 }

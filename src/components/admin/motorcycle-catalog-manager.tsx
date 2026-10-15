@@ -1,8 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, Eye, Pencil, RotateCcw } from "lucide-react";
+import { Bike, Eye, Pencil, Plus } from "lucide-react";
 import { forwardRef, useImperativeHandle, useMemo, useState } from "react";
 
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
+import {
+  ActiveStatusBadge,
+  ArchiveMenuItem,
+  DataList,
+  InlineAlert,
+  ListCard,
+  ListEmpty,
+  ListToolbar,
+  MoreActionsMenu,
+  ResetFiltersButton,
+  ToolbarFilters,
+  ToolbarSearch,
+} from "@/components/admin/data-list";
+import { PaginationControls } from "@/components/admin/pagination-controls";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -14,7 +28,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { FieldError } from "@/components/ui/field-error";
 import {
   Dialog,
@@ -33,14 +47,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 
 type MotorcycleCatalogItem = {
@@ -62,6 +68,10 @@ const blank = {
 };
 
 const ALL_BRANDS = "__all_brands__";
+const PAGE_SIZE = 25;
+
+type CategoryFilter = "all" | "small_bike" | "big_bike" | "needs_cc";
+type StatusFilter = "all" | "active" | "inactive";
 
 export interface MotorcycleCatalogManagerHandle {
   openNew: () => void;
@@ -79,6 +89,9 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
     >({});
     const [filterBrand, setFilterBrand] = useState(ALL_BRANDS);
     const [modelSearch, setModelSearch] = useState("");
+    const [filterCategory, setFilterCategory] = useState<CategoryFilter>("all");
+    const [filterStatus, setFilterStatus] = useState<StatusFilter>("all");
+    const [page, setPage] = useState(0);
     const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
     const [saveConfirmationOpen, setSaveConfirmationOpen] = useState(false);
     const [actionError, setActionError] = useState<string | null>(null);
@@ -116,6 +129,11 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
       const filtered = (catalog.data ?? []).filter(
         (item) =>
           (filterBrand === ALL_BRANDS || item.brand === filterBrand) &&
+          (filterCategory === "all" ||
+            (filterCategory === "needs_cc"
+              ? item.cc_category !== "small_bike" && item.cc_category !== "big_bike"
+              : item.cc_category === filterCategory)) &&
+          (filterStatus === "all" || (filterStatus === "active") === item.is_active) &&
           modelSearchTerms.every((term) => item.model.toLocaleLowerCase().includes(term)),
       );
       return filtered.sort(
@@ -124,7 +142,25 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
             sensitivity: "base",
           }) || left.model.localeCompare(right.model, undefined, { sensitivity: "base" }),
       );
-    }, [catalog.data, filterBrand, modelSearchTerms]);
+    }, [catalog.data, filterBrand, filterCategory, filterStatus, modelSearchTerms]);
+
+    const hasFilters =
+      filterBrand !== ALL_BRANDS ||
+      filterCategory !== "all" ||
+      filterStatus !== "all" ||
+      modelSearchTerms.length > 0;
+    // Hundreds of models: show them a page at a time.
+    const lastPage = Math.max(0, Math.ceil(filteredItems.length / PAGE_SIZE) - 1);
+    const currentPage = Math.min(page, lastPage);
+    const pageItems = filteredItems.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE);
+
+    function resetFilters() {
+      setFilterBrand(ALL_BRANDS);
+      setFilterCategory("all");
+      setFilterStatus("all");
+      setModelSearch("");
+      setPage(0);
+    }
 
     const save = useMutation({
       mutationFn: async (): Promise<MotorcycleCatalogItem> => {
@@ -262,11 +298,32 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
 
     return (
       <>
-        <div className="mb-4 flex flex-wrap items-end gap-4">
-          <div className="space-y-1.5">
-            <Label className="text-sm">Brand</Label>
-            <Select value={filterBrand} onValueChange={setFilterBrand}>
-              <SelectTrigger className="w-full sm:w-48">
+        {actionError && <InlineAlert>{actionError}</InlineAlert>}
+
+        <ListToolbar
+          summary={
+            catalog.data && `Showing ${filteredItems.length} of ${catalog.data.length} motorcycles`
+          }
+        >
+          <ToolbarSearch
+            id="catalog-model-search"
+            value={modelSearch}
+            onChange={(value) => {
+              setModelSearch(value);
+              setPage(0);
+            }}
+            placeholder="Search models"
+            label="Search motorcycles by model"
+          />
+          <ToolbarFilters>
+            <Select
+              value={filterBrand}
+              onValueChange={(value) => {
+                setFilterBrand(value);
+                setPage(0);
+              }}
+            >
+              <SelectTrigger aria-label="Filter by brand" className="w-full sm:w-40">
                 <SelectValue placeholder="All brands" />
               </SelectTrigger>
               <SelectContent>
@@ -278,39 +335,42 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
                 ))}
               </SelectContent>
             </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="catalog-model-search" className="text-sm">
-              Model
-            </Label>
-            <Input
-              id="catalog-model-search"
-              value={modelSearch}
-              onChange={(event) => setModelSearch(event.target.value)}
-              placeholder="Search models..."
-              className="w-full sm:w-56"
-            />
-          </div>
-          {(filterBrand !== ALL_BRANDS || modelSearch.trim()) && (
-            <Button
-              size="sm"
-              variant="outline"
-              className="self-end whitespace-nowrap"
-              onClick={() => {
-                setFilterBrand(ALL_BRANDS);
-                setModelSearch("");
+            <Select
+              value={filterCategory}
+              onValueChange={(value) => {
+                setFilterCategory(value as CategoryFilter);
+                setPage(0);
               }}
             >
-              <RotateCcw /> Reset
-            </Button>
-          )}
-        </div>
-
-        {actionError && (
-          <p role="alert" className="mb-4 text-sm text-destructive">
-            {actionError}
-          </p>
-        )}
+              <SelectTrigger aria-label="Filter by bike size" className="w-full sm:w-40">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All bike sizes</SelectItem>
+                <SelectItem value="small_bike">Small Bike</SelectItem>
+                <SelectItem value="big_bike">Large Bike</SelectItem>
+                <SelectItem value="needs_cc">Needs CC</SelectItem>
+              </SelectContent>
+            </Select>
+            <Select
+              value={filterStatus}
+              onValueChange={(value) => {
+                setFilterStatus(value as StatusFilter);
+                setPage(0);
+              }}
+            >
+              <SelectTrigger aria-label="Filter by status" className="w-full sm:w-36">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="active">Active</SelectItem>
+                <SelectItem value="inactive">Inactive</SelectItem>
+              </SelectContent>
+            </Select>
+            {hasFilters && <ResetFiltersButton onClick={resetFilters} />}
+          </ToolbarFilters>
+        </ListToolbar>
 
         <Dialog open={open} onOpenChange={(nextOpen) => !nextOpen && closeEditor()}>
           <DialogContent>
@@ -447,87 +507,121 @@ export const MotorcycleCatalogManager = forwardRef<MotorcycleCatalogManagerHandl
           </DialogContent>
         </Dialog>
 
-        <Card className="max-w-7xl border-border/70 bg-card/60">
-          <CardContent className="overflow-x-auto p-0">
-            <Table className="admin-data-table admin-balanced-table">
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Date Created</TableHead>
-                  <TableHead>Brand</TableHead>
-                  <TableHead>Model</TableHead>
-                  <TableHead className="text-center">Status</TableHead>
-                  <TableHead className="text-center">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {filteredItems.map((item) => (
-                  <TableRow key={item.id}>
-                    <TableCell
-                      data-label="Created on"
-                      className="whitespace-nowrap text-xs text-muted-foreground"
-                    >
-                      {formatCreatedOn(item.created_at)}
-                    </TableCell>
-                    <TableCell data-label="Brand" className="text-sm">
-                      {item.brand ?? "-"}
-                    </TableCell>
-                    <TableCell data-label="Model" className="text-sm">
-                      {modelLabel(item.brand, item.model)}
-                    </TableCell>
-                    <TableCell data-label="Status" className="text-center">
-                      <span
-                        className={
-                          item.is_active
-                            ? "text-sm font-medium text-emerald-600 dark:text-emerald-300"
-                            : "text-sm font-medium text-muted-foreground"
-                        }
-                      >
-                        {item.is_active ? "Active" : "Inactive"}
-                      </span>
-                    </TableCell>
-                    <TableCell
-                      data-label="Actions"
-                      className="space-x-1 whitespace-nowrap text-center"
-                    >
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label={`View ${item.brand ?? ""} ${item.model}`.trim()}
-                        onClick={() => setViewing(item)}
-                      >
-                        <Eye className="size-4" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label={`Edit ${item.brand ?? ""} ${item.model}`.trim()}
-                        onClick={() => openEdit(item)}
-                      >
-                        <Pencil className="size-4" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label={`Archive ${item.brand ?? ""} ${item.model}`.trim()}
-                        onClick={() => setArchiveTarget(item.id)}
-                      >
-                        <Archive className="size-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            {!catalog.isLoading && filteredItems.length === 0 && (
-              <p className="p-8 text-center text-sm text-muted-foreground">Nothing here yet.</p>
-            )}
-            {catalog.isError && (
-              <p className="p-8 text-center text-sm text-destructive">
-                Could not load the motorcycle catalog. Please try again.
-              </p>
-            )}
-          </CardContent>
-        </Card>
+        <ListCard
+          footer={
+            <PaginationControls
+              page={currentPage}
+              pageSize={PAGE_SIZE}
+              total={filteredItems.length}
+              onPageChange={setPage}
+            />
+          }
+        >
+          <DataList
+            label="Motorcycle catalog"
+            rows={pageItems}
+            rowKey={(item) => item.id}
+            loading={catalog.isLoading}
+            error={
+              catalog.isError
+                ? {
+                    message: "Could not load the motorcycle catalog.",
+                    onRetry: () => void catalog.refetch(),
+                  }
+                : null
+            }
+            empty={
+              <ListEmpty
+                icon={Bike}
+                title={hasFilters ? "No motorcycles match your filters." : "No motorcycles yet."}
+                description={
+                  hasFilters
+                    ? "Try a different model, brand, bike size, or status."
+                    : "Add the models customers can choose when they book."
+                }
+                action={
+                  hasFilters ? (
+                    <ResetFiltersButton onClick={resetFilters} />
+                  ) : (
+                    <Button size="sm" onClick={openNew}>
+                      <Plus /> Add motorcycle
+                    </Button>
+                  )
+                }
+              />
+            }
+            columns={[
+              {
+                key: "model",
+                header: "Model",
+                card: "title",
+                cell: (item) => (
+                  <>
+                    <p className="font-medium">{modelLabel(item.brand, item.model)}</p>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {item.brand ?? "No brand"}
+                    </p>
+                  </>
+                ),
+              },
+              {
+                key: "engine",
+                header: "Engine",
+                className: "w-28 text-right",
+                cell: (item) =>
+                  item.engine_cc === null ? (
+                    <span className="text-sm text-muted-foreground">Not set</span>
+                  ) : (
+                    <span className="text-sm">{item.engine_cc}cc</span>
+                  ),
+              },
+              {
+                key: "size",
+                header: "Bike size",
+                className: "w-32",
+                cell: (item) => (
+                  <span className="text-sm">{ccCategoryLabel(item.cc_category)}</span>
+                ),
+              },
+              {
+                key: "created",
+                header: "Added",
+                xlOnly: true,
+                className: "w-32",
+                cell: (item) => (
+                  <span className="text-sm text-muted-foreground">
+                    {formatCreatedOn(item.created_at)}
+                  </span>
+                ),
+              },
+              {
+                key: "status",
+                header: "Status",
+                card: "badge",
+                className: "w-28 text-center",
+                cell: (item) => <ActiveStatusBadge active={item.is_active} />,
+              },
+            ]}
+            actionsClassName="w-36"
+            actions={(item) => {
+              const name = `${item.brand ?? ""} ${modelLabel(item.brand, item.model)}`.trim();
+              return (
+                <>
+                  <Button size="sm" variant="outline" onClick={() => openEdit(item)}>
+                    <Pencil /> Edit
+                  </Button>
+                  <MoreActionsMenu itemLabel={name}>
+                    <DropdownMenuItem onSelect={() => setViewing(item)}>
+                      <Eye /> View details
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <ArchiveMenuItem onSelect={() => setArchiveTarget(item.id)} />
+                  </MoreActionsMenu>
+                </>
+              );
+            }}
+          />
+        </ListCard>
         <AlertDialog open={saveConfirmationOpen} onOpenChange={setSaveConfirmationOpen}>
           <AlertDialogContent>
             <AlertDialogHeader>

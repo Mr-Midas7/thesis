@@ -58,3 +58,13 @@ export function startOfNextManilaDay(date: string) {
 export function startOfManilaDay(date: string) {
   return `${date}T00:00:00+08:00`;
 }
+
+/** Short Manila date, e.g. "Oct 14, 2026". */
+export function formatShortDate(value: string) {
+  return new Intl.DateTimeFormat("en-PH", {
+    timeZone: "Asia/Manila",
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(value));
+}

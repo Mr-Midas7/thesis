@@ -1,12 +1,22 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { format } from "date-fns";
-import { CalendarRange, ChevronDown, Download, FileText, RefreshCw, Search } from "lucide-react";
+import { CalendarRange, ChevronDown, Download, FileText, History, RefreshCw } from "lucide-react";
 import type { DateRange } from "react-day-picker";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
+import {
+  AdminPage,
+  DataList,
+  InlineAlert,
+  ListCard,
+  ListEmpty,
+  ListToolbar,
+  ResetFiltersButton,
+  ToolbarFilters,
+  ToolbarSearch,
+} from "@/components/admin/data-list";
 import { PageHeader } from "@/components/admin/page-header";
-import { ActiveFilterChips } from "@/components/admin/active-filter-chips";
 import { PaginationControls } from "@/components/admin/pagination-controls";
 import {
   AlertDialog,
@@ -21,15 +31,12 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
@@ -38,14 +45,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import {
   calendarRangeToIso,
@@ -187,37 +186,11 @@ function ActivityLogPage() {
   });
 
   const rows = logs.data?.rows ?? [];
-  const activeFilters = [
-    ...(search.trim()
-      ? [{ label: "Search", value: search.trim(), onClear: () => setSearch("") }]
-      : []),
-
-    ...(action !== "all"
-      ? [{ label: "Action", value: action, onClear: () => setAction("all") }]
-      : []),
-    ...(resource !== "all"
-      ? [{ label: "Category", value: resource, onClear: () => setResource("all") }]
-      : []),
-    ...(activityPeriod !== "all"
-      ? [
-          {
-            label: "Activity date",
-            value: activityPeriodLabel(activityPeriod, activityCustomDateRange),
-            onClear: () => {
-              setActivityPeriod("all");
-              setActivityCustomDateRange(undefined);
-            },
-          },
-        ]
-      : []),
-  ];
   const filterDescription = useMemo(() => {
     const total = logs.data?.total ?? 0;
-    if (!hasFilters) {
-      return `Showing ${rows.length} of ${total} activity records retained for the last 50 days.`;
-    }
-    return `Showing ${rows.length} of ${total} activity records matching the selected filters.`;
-  }, [hasFilters, logs.data?.total, rows.length]);
+    const noun = total === 1 ? "record" : "records";
+    return hasFilters ? `${total} matching ${noun}` : `${total} ${noun} from the last 50 days`;
+  }, [hasFilters, logs.data?.total]);
 
   useEffect(() => {
     setPage(0);
@@ -491,7 +464,7 @@ function ActivityLogPage() {
   }
 
   return (
-    <div>
+    <AdminPage>
       <PageHeader
         title="Activity Log"
         description="Admin changes and sign-in events are retained for 50 days with record IDs and request IP addresses."
@@ -522,164 +495,182 @@ function ActivityLogPage() {
         }
       />
 
-      {exportError && (
-        <p role="alert" className="mb-4 text-sm text-destructive">
-          {exportError}
-        </p>
-      )}
+      {exportError && <InlineAlert>{exportError}</InlineAlert>}
 
-      <Card className="mb-6 border-border/70 bg-card/60">
-        <CardContent className="grid gap-4 p-5 lg:grid-cols-[minmax(15rem,2fr)_minmax(9rem,1fr)_minmax(10rem,1.1fr)_minmax(11rem,1.25fr)]">
-          <div className="min-w-0 space-y-1.5">
-            <Label htmlFor="activity-search">Search</Label>
-            <div className="relative">
-              <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-              <Input
-                id="activity-search"
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                className="pl-9"
-                placeholder="Search activity, record, user, or IP address"
-              />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label>Action</Label>
-            <Select value={action} onValueChange={setAction}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All actions</SelectItem>
-                {actionOptions.map((option) => (
-                  <SelectItem key={option} value={option} className="capitalize">
-                    {option}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label>Category</Label>
-            <Select value={resource} onValueChange={setResource}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All categories</SelectItem>
-                {resourceOptions.map((option) => (
-                  <SelectItem key={option} value={option}>
-                    {option}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-          <div className="min-w-0 space-y-1.5">
-            <Label>Activity date</Label>
-            <ActivityPeriodFilter
-              period={activityPeriod}
-              customDateRange={activityCustomDateRange}
-              onPeriodChange={setActivityPeriod}
-              onCustomDateRangeChange={setActivityCustomDateRange}
-              className="w-full justify-between"
-            />
-          </div>
-        </CardContent>
-      </Card>
-      <ActiveFilterChips filters={activeFilters} onReset={clearFilters} />
-
-      <Card className="border-border/70 bg-card/60">
-        <CardContent className="overflow-x-auto p-0">
-          <div className="border-b border-border px-5 py-3 text-sm text-muted-foreground">
-            {filterDescription}
-          </div>
-          <Table className="admin-data-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Date & time</TableHead>
-                <TableHead>User</TableHead>
-                <TableHead>Action</TableHead>
-                <TableHead>Category</TableHead>
-                <TableHead>Record ID</TableHead>
-                <TableHead>IP address</TableHead>
-                <TableHead>Changed fields</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {rows.map((row) => (
-                <TableRow key={row.id}>
-                  <TableCell data-label="Date & time" className="whitespace-nowrap text-sm">
-                    {formatActivityDate(row.activity_date)}
-                    <span className="block text-xs text-muted-foreground">
-                      {formatActivityTime(row.activity_time)}
-                    </span>
-                  </TableCell>
-                  <TableCell data-label="User" className="text-sm">
-                    {row.actor_email ?? "Unknown admin"}
-                  </TableCell>
-                  <TableCell data-label="Action">
-                    <span className="block text-sm">{row.summary}</span>
-                    <span className="text-xs text-muted-foreground">{row.target_label}</span>
-                  </TableCell>
-                  <TableCell data-label="Category">
-                    <Badge variant="outline" className="capitalize">
-                      {row.resource_type}
-                    </Badge>
-                  </TableCell>
-                  <TableCell
-                    data-label="Record ID"
-                    className="max-w-52 break-all font-mono text-xs"
-                  >
-                    {row.record_id ?? "—"}
-                  </TableCell>
-                  <TableCell data-label="IP address" className="font-mono text-xs">
-                    {row.ip_address ?? "Unavailable"}
-                  </TableCell>
-                  <TableCell data-label="Changed fields" className="min-w-44">
-                    {row.changed_fields.length > 0 ? (
-                      <div className="flex flex-wrap gap-1">
-                        {row.changed_fields.map((field) => (
-                          <Badge key={field} variant="secondary" className="font-normal">
-                            {field.replace(/_/g, " ")}
-                          </Badge>
-                        ))}
-                      </div>
-                    ) : (
-                      <span className="text-sm text-muted-foreground">—</span>
-                    )}
-                  </TableCell>
-                </TableRow>
+      <ListToolbar summary={logs.data && filterDescription}>
+        <ToolbarSearch
+          id="activity-search"
+          value={search}
+          onChange={setSearch}
+          placeholder="Search activity, user, record, or IP"
+          label="Search activity by summary, user, record, or IP address"
+        />
+        <ToolbarFilters>
+          <Select value={action} onValueChange={setAction}>
+            <SelectTrigger aria-label="Filter by action" className="w-full sm:w-40">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All actions</SelectItem>
+              {actionOptions.map((option) => (
+                <SelectItem key={option} value={option} className="capitalize">
+                  {option}
+                </SelectItem>
               ))}
-              {!logs.isLoading && rows.length === 0 && (
-                <TableRow>
-                  <TableCell
-                    colSpan={7}
-                    className="py-10 text-center text-sm text-muted-foreground"
-                  >
-                    No activity records match these filters.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-          {logs.isLoading && (
-            <p className="p-8 text-center text-sm text-muted-foreground">Loading activity…</p>
-          )}
-          {logs.isError && (
-            <p className="p-8 text-center text-sm text-destructive">
-              Could not load the activity log. Refresh and try again.
-            </p>
-          )}
+            </SelectContent>
+          </Select>
+          <Select value={resource} onValueChange={setResource}>
+            <SelectTrigger aria-label="Filter by category" className="w-full sm:w-48">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All categories</SelectItem>
+              {resourceOptions.map((option) => (
+                <SelectItem key={option} value={option}>
+                  {option}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <ActivityPeriodFilter
+            period={activityPeriod}
+            customDateRange={activityCustomDateRange}
+            onPeriodChange={setActivityPeriod}
+            onCustomDateRangeChange={setActivityCustomDateRange}
+            className="col-span-2 w-full justify-between sm:w-auto"
+          />
+          {hasFilters && <ResetFiltersButton onClick={clearFilters} />}
+        </ToolbarFilters>
+      </ListToolbar>
+
+      <ListCard
+        footer={
           <PaginationControls
             page={page}
             pageSize={pageSize}
             total={logs.data?.total ?? 0}
             onPageChange={setPage}
           />
-        </CardContent>
-      </Card>
+        }
+      >
+        <DataList
+          label="Activity records"
+          rows={rows}
+          rowKey={(row) => row.id}
+          loading={logs.isLoading}
+          error={
+            logs.isError
+              ? { message: "Could not load the activity log.", onRetry: () => void logs.refetch() }
+              : null
+          }
+          empty={
+            <ListEmpty
+              icon={History}
+              title={
+                hasFilters
+                  ? "No activity matches your filters."
+                  : "No activity in the last 50 days."
+              }
+              description={
+                hasFilters
+                  ? "Try a different search, action, category, or date."
+                  : "Admin changes and sign-ins will appear here."
+              }
+              action={hasFilters ? <ResetFiltersButton onClick={clearFilters} /> : undefined}
+            />
+          }
+          columns={[
+            {
+              key: "when",
+              header: "When",
+              className: "w-36",
+              cell: (row) => (
+                <span className="text-sm">
+                  {formatActivityDate(row.activity_date)}
+                  <span className="block text-xs text-muted-foreground">
+                    {formatActivityTime(row.activity_time)}
+                  </span>
+                </span>
+              ),
+            },
+            {
+              key: "activity",
+              header: "Activity",
+              card: "title",
+              cell: (row) => (
+                <>
+                  <p className="text-sm font-medium">{row.summary}</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    {row.target_label}
+                    <span className="block">by {row.actor_email ?? "Unknown admin"}</span>
+                  </p>
+                </>
+              ),
+            },
+            {
+              key: "category",
+              header: "Category",
+              card: "badge",
+              className: "w-40",
+              cell: (row) => (
+                <Badge variant="outline" className="max-w-full text-left whitespace-normal">
+                  {row.resource_type}
+                </Badge>
+              ),
+            },
+            {
+              key: "fields",
+              header: "Changed fields",
+              card: "wide",
+              xlOnly: true,
+              className: "w-56",
+              cell: (row) =>
+                row.changed_fields.length > 0 ? (
+                  <span className="flex flex-wrap gap-1">
+                    {row.changed_fields.map((field) => (
+                      <Badge key={field} variant="secondary" className="font-normal">
+                        {field.replace(/_/g, " ")}
+                      </Badge>
+                    ))}
+                  </span>
+                ) : (
+                  <span className="text-sm text-muted-foreground">None</span>
+                ),
+            },
+            {
+              key: "record",
+              header: "Record ID",
+              table: false,
+              cell: (row) => (
+                <span className="font-mono text-xs break-all">{row.record_id ?? "None"}</span>
+              ),
+            },
+            {
+              key: "ip",
+              header: "IP address",
+              table: false,
+              cell: (row) => (
+                <span className="font-mono text-xs">{row.ip_address ?? "Unavailable"}</span>
+              ),
+            },
+            {
+              key: "source",
+              header: "Record & IP",
+              card: false,
+              xlOnly: true,
+              className: "w-52",
+              cell: (row) => (
+                <span className="font-mono text-xs break-all">
+                  {row.record_id ?? "No record ID"}
+                  <span className="block text-muted-foreground">
+                    {row.ip_address ?? "IP unavailable"}
+                  </span>
+                </span>
+              ),
+            },
+          ]}
+        />
+      </ListCard>
 
       <AlertDialog
         open={pendingExport !== null}
@@ -704,7 +695,7 @@ function ActivityLogPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </div>
+    </AdminPage>
   );
 }
 

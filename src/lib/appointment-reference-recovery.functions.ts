@@ -2,6 +2,8 @@ import { createServerFn } from "@tanstack/react-start";
 import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
 
+import type { EmailTransport } from "./email.server";
+
 const recoveryEmailSchema = z
   .string()
   .trim()
@@ -18,13 +20,19 @@ const verifyRecoverySchema = z.object({
     .regex(/^\d{6}$/, "Enter the 6-digit verification code."),
 });
 
-type ResendConfig = { apiKey: string; from: string };
 type RateLimitResult = "allowed" | "limited" | "unavailable";
 
-function resendConfig(): ResendConfig | null {
-  const apiKey = process.env["RESEND_API_KEY"]?.trim();
-  const from = process.env["RESEND_FROM_EMAIL"]?.trim();
-  return apiKey && from ? { apiKey, from } : null;
+/** The configured mail transport, or null (with the reason logged) when email is not set up. */
+async function recoveryEmailTransport(): Promise<EmailTransport | null> {
+  const { emailTransport } = await import("./email.server");
+  const configured = emailTransport();
+  if ("error" in configured) {
+    console.error("[Reference recovery] email configuration unavailable", {
+      reason: configured.error,
+    });
+    return null;
+  }
+  return configured.transport;
 }
 
 function clientIp() {
@@ -87,16 +95,14 @@ function makeVerificationCode() {
   return String(code).padStart(6, "0");
 }
 
-async function sendEmail(config: ResendConfig, recipient: string, subject: string, text: string) {
-  const response = await fetch("https://api.resend.com/emails", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ from: config.from, to: [recipient], subject, text }),
-  });
-  if (!response.ok) throw new Error(`Email provider returned ${response.status}.`);
+async function sendEmail(
+  transport: EmailTransport,
+  recipient: string,
+  subject: string,
+  text: string,
+) {
+  const { sendEmail: sendWithTransport } = await import("./email.server");
+  await sendWithTransport(transport, { to: recipient, subject, text });
 }
 
 const sentCodeMessage =
@@ -116,7 +122,7 @@ export const requestReferenceRecoveryCode = createServerFn({ method: "POST" })
       };
     }
 
-    const config = resendConfig();
+    const config = await recoveryEmailTransport();
     if (!config) {
       return {
         ok: false as const,
@@ -195,7 +201,7 @@ export const verifyReferenceRecoveryCode = createServerFn({ method: "POST" })
       };
     }
 
-    const config = resendConfig();
+    const config = await recoveryEmailTransport();
     if (!config) {
       return {
         ok: false as const,

@@ -1,10 +1,22 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Plus, Archive, Pencil } from "lucide-react";
+import { CalendarX, Pencil, Plus } from "lucide-react";
 import { useState } from "react";
 
-import { PageHeader } from "@/components/admin/page-header";
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
+import {
+  AdminPage,
+  ArchiveMenuItem,
+  DataList,
+  InlineAlert,
+  ListCard,
+  ListEmpty,
+  ListToolbar,
+  MoreActionsMenu,
+  ResetFiltersButton,
+  ToolbarSearch,
+} from "@/components/admin/data-list";
+import { PageHeader } from "@/components/admin/page-header";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -34,14 +46,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { supabase } from "@/integrations/supabase/client";
 import {
   decodeBlockReason,
@@ -76,6 +80,7 @@ function ScheduleBlocks() {
     Partial<Record<"date" | "start" | "end", string | undefined>>
   >({});
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
   const blocks = useQuery({
     queryKey: ["schedule-blocks"],
@@ -121,18 +126,13 @@ function ScheduleBlocks() {
           .update(payload)
           .eq("id", editingId);
         if (error) throw error;
-        return "updated" as const;
+        return;
       }
 
-      {
-        const { error } = await supabase.from("schedule_blocks").insert({
-          ...payload,
-        });
-        if (error) throw error;
-        return "created" as const;
-      }
+      const { error } = await supabase.from("schedule_blocks").insert({ ...payload });
+      if (error) throw error;
     },
-    onSuccess: (result) => {
+    onSuccess: () => {
       resetForm();
       qc.invalidateQueries({ queryKey: ["schedule-blocks"] });
     },
@@ -222,17 +222,22 @@ function ScheduleBlocks() {
     setFormErrors({});
   }
 
+  const searchTerm = search.trim().toLocaleLowerCase();
+  const filteredBlocks = (blocks.data ?? []).filter(
+    (b) =>
+      !searchTerm ||
+      `${formatDateLong(b.block_date)} ${b.block_date} ${decodeBlockReason(b.reason).userReason}`
+        .toLocaleLowerCase()
+        .includes(searchTerm),
+  );
+
   return (
-    <div>
+    <AdminPage>
       <PageHeader
         title="Schedule Blocks"
         description="Close whole days or custom time ranges (holidays, out-of-town, maintenance)."
       />
-      {archiveError && (
-        <p role="alert" className="mb-4 text-sm text-destructive">
-          {archiveError}
-        </p>
-      )}
+      {archiveError && <InlineAlert>{archiveError}</InlineAlert>}
 
       <Card className="mb-6 border-border/70 bg-card/60">
         <CardContent className="grid gap-4 p-5 sm:grid-cols-4 sm:items-end">
@@ -486,76 +491,86 @@ function ScheduleBlocks() {
         </DialogContent>
       </Dialog>
 
-      <Card className="w-full border-border/70 bg-card/60">
-        <CardContent className="overflow-x-auto p-0">
-          <Table className="admin-data-table admin-balanced-table">
-            <colgroup>
-              <col style={{ width: "25%" }} />
-              <col style={{ width: "25%" }} />
-              <col style={{ width: "25%" }} />
-              <col style={{ width: "25%" }} />
-            </colgroup>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Date</TableHead>
-                <TableHead>Slot</TableHead>
-                <TableHead>Reason</TableHead>
-                <TableHead className="text-center">Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {blocks.data?.map((b) => {
-                const { endTime, userReason } = decodeBlockReason(b.reason);
-                return (
-                  <TableRow key={b.id}>
-                    <TableCell data-label="Date" className="text-sm">
-                      {formatDateLong(b.block_date)}
-                    </TableCell>
-                    <TableCell data-label="Slot" className="text-sm">
-                      {!b.start_time
-                        ? "Whole day"
-                        : endTime
-                          ? `${formatTime(String(b.start_time).slice(0, 5))} – ${formatTime(endTime.slice(0, 5))}`
-                          : formatTime(String(b.start_time).slice(0, 5))}
-                    </TableCell>
-                    <TableCell
-                      data-label="Reason"
-                      className="break-words text-sm text-muted-foreground"
-                    >
-                      {userReason || "-"}
-                    </TableCell>
-                    <TableCell
-                      data-label="Action"
-                      className="space-x-1 whitespace-nowrap text-center"
-                    >
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        onClick={() => startEditing(b)}
-                        aria-label={`Edit schedule block for ${formatDateLong(b.block_date)}`}
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        disabled={archive.isPending}
-                        onClick={() => setArchiveTarget(b.id)}
-                        aria-label={`Archive schedule block for ${formatDateLong(b.block_date)}`}
-                      >
-                        <Archive className="h-4 w-4" />
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
-          {blocks.data?.length === 0 && (
-            <p className="p-8 text-center text-sm text-muted-foreground">No blocked schedules.</p>
+      <ListToolbar
+        summary={
+          blocks.data && `Showing ${filteredBlocks.length} of ${blocks.data.length} schedule blocks`
+        }
+      >
+        <ToolbarSearch
+          value={search}
+          onChange={setSearch}
+          placeholder="Search date or reason"
+          label="Search schedule blocks by date or reason"
+        />
+      </ListToolbar>
+
+      <ListCard>
+        <DataList
+          label="Schedule blocks"
+          rows={filteredBlocks}
+          rowKey={(b) => b.id}
+          loading={blocks.isLoading}
+          error={
+            blocks.isError
+              ? {
+                  message: "Could not load schedule blocks.",
+                  onRetry: () => void blocks.refetch(),
+                }
+              : null
+          }
+          empty={
+            <ListEmpty
+              icon={CalendarX}
+              title={search ? "No schedule blocks match your search." : "No blocked schedules."}
+              description={
+                search
+                  ? "Try a different date or reason."
+                  : "Use the form above to close a day or a time range."
+              }
+              action={search ? <ResetFiltersButton onClick={() => setSearch("")} /> : undefined}
+            />
+          }
+          columns={[
+            {
+              key: "date",
+              header: "Date",
+              card: "title",
+              className: "w-56",
+              cell: (b) => <span className="font-medium">{formatDateLong(b.block_date)}</span>,
+            },
+            {
+              key: "slot",
+              header: "Time",
+              className: "w-44",
+              cell: (b) => <span className="text-sm">{blockSlotLabel(b)}</span>,
+            },
+            {
+              key: "reason",
+              header: "Reason",
+              card: "wide",
+              cell: (b) => (
+                <span className="text-sm text-muted-foreground">
+                  {decodeBlockReason(b.reason).userReason || "No reason given"}
+                </span>
+              ),
+            },
+          ]}
+          actionsClassName="w-36"
+          actions={(b) => (
+            <>
+              <Button size="sm" variant="outline" onClick={() => startEditing(b)}>
+                <Pencil /> Edit
+              </Button>
+              <MoreActionsMenu itemLabel={`the block on ${formatDateLong(b.block_date)}`}>
+                <ArchiveMenuItem
+                  disabled={archive.isPending}
+                  onSelect={() => setArchiveTarget(b.id)}
+                />
+              </MoreActionsMenu>
+            </>
           )}
-        </CardContent>
-      </Card>
+        />
+      </ListCard>
       <ArchiveConfirmationDialog
         open={Boolean(archiveTarget)}
         recordLabel="schedule block"
@@ -566,8 +581,16 @@ function ScheduleBlocks() {
           setArchiveTarget(null);
         }}
       />
-    </div>
+    </AdminPage>
   );
+}
+
+/** "Whole day", or the blocked time range. */
+function blockSlotLabel(block: ScheduleBlock) {
+  if (!block.start_time) return "Whole day";
+  const start = formatTime(String(block.start_time).slice(0, 5));
+  const { endTime } = decodeBlockReason(block.reason);
+  return endTime ? `${start} – ${formatTime(endTime.slice(0, 5))}` : start;
 }
 
 function ReservedFieldError({ message }: { message?: string | undefined }) {

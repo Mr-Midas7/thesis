@@ -11,8 +11,11 @@ const TabsList = React.forwardRef<
 >(({ className, ...props }, ref) => (
   <TabsPrimitive.List
     ref={ref}
+    // The list grows with its triggers (each at least 36px tall for touch) and
+    // wraps onto another row when narrow. A fixed height shorter than the
+    // triggers, combined with overflow, used to show a scrollbar inside the tabs.
     className={cn(
-      "inline-flex h-11 max-w-full items-center justify-center overflow-x-auto rounded-lg bg-muted p-1 text-muted-foreground md:h-9",
+      "inline-flex h-auto max-w-full flex-wrap items-center justify-center gap-y-1 rounded-lg bg-muted p-1 text-muted-foreground",
       className,
     )}
     {...props}

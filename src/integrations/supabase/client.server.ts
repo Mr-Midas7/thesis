@@ -32,9 +32,33 @@ function createSupabaseFetch(supabaseKey: string): typeof fetch {
   };
 }
 
+function projectHost(url: string | undefined) {
+  if (!url) return "not set";
+  try {
+    return new URL(url.trim()).host;
+  } catch {
+    return "not a valid URL";
+  }
+}
+
+/** The Supabase project server code talks to, for logs. Never includes a key. */
+export function supabaseServerProject() {
+  return projectHost(process.env["SUPABASE_URL"]);
+}
+
 function createSupabaseAdminClient() {
   const SUPABASE_URL = process.env["SUPABASE_URL"];
   const SUPABASE_SERVICE_ROLE_KEY = process.env["SUPABASE_SERVICE_ROLE_KEY"];
+
+  // The browser uses VITE_SUPABASE_URL and server code uses SUPABASE_URL. If
+  // they point to different projects, public pages still load while server
+  // features (availability, bookings, lookups) query the other project and fail.
+  const browserUrl = process.env["VITE_SUPABASE_URL"];
+  if (SUPABASE_URL && browserUrl && projectHost(browserUrl) !== projectHost(SUPABASE_URL)) {
+    console.error(
+      `[Supabase] SUPABASE_URL (${projectHost(SUPABASE_URL)}) and VITE_SUPABASE_URL (${projectHost(browserUrl)}) point to different projects. Set both to the same project.`,
+    );
+  }
 
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
     const missing = [

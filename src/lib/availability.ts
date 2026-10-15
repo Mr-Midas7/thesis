@@ -66,10 +66,12 @@ export type CrewAvailabilityResult = {
 };
 
 /**
- * Finds the crew who can perform one reservation and the capacity left after
- * existing unassigned reservations. All callers must pass only active crew
- * schedules; this keeps public availability, final booking, and continuations
- * on the same staffing rules.
+ * Finds the crew who can perform one reservation and how many more
+ * reservations fit. Two limits apply, as in the database's final check: the
+ * time slot's capacity counts every overlapping reservation, and each
+ * reservation needs its own free mechanic (unassigned reservations claim one
+ * each). All callers must pass only active crew schedules; this keeps public
+ * availability, final booking, and continuations on the same staffing rules.
  */
 export function evaluateCrewAvailability({
   date,
@@ -179,9 +181,37 @@ export function evaluateCrewAvailability({
     unassignedReservationCount,
     remainingCapacity: Math.max(
       0,
-      Math.min(normalizedCapacity, availableCrewIds.length) - unassignedReservationCount,
+      Math.min(
+        normalizedCapacity - overlappingAssignments.length,
+        availableCrewIds.length - unassignedReservationCount,
+      ),
     ),
   };
+}
+
+/**
+ * The free mechanic with the fewest bookings that day; ties go to the one with
+ * fewer booked minutes. Any free mechanic may be chosen: the capacity check
+ * already leaves enough free mechanics for reservations not yet assigned one.
+ */
+export function pickLeastBusyCrew(
+  crewIds: string[],
+  assignments: Assignment[],
+  date: string,
+): string | undefined {
+  const workload = new Map(crewIds.map((crewId) => [crewId, { bookings: 0, minutes: 0 }]));
+  for (const assignment of assignments) {
+    if (assignment.date !== date || !assignment.crewId) continue;
+    const load = workload.get(assignment.crewId);
+    if (!load) continue;
+    load.bookings += 1;
+    load.minutes += assignment.durationMinutes;
+  }
+  return [...crewIds].sort((left, right) => {
+    const a = workload.get(left)!;
+    const b = workload.get(right)!;
+    return a.bookings - b.bookings || a.minutes - b.minutes || left.localeCompare(right);
+  })[0];
 }
 
 /** Internal scheduling data. It must stay on the server. */
@@ -309,17 +339,16 @@ export function planContinuationSegments({
         continue;
       }
 
-      const { availableCrewIds, unassignedReservationCount, remainingCapacity } =
-        evaluateCrewAvailability({
-          date: cursor,
-          startTime: slot.startTime,
-          durationMinutes: duration,
-          capacity: slot.capacity,
-          schedules: source.schedules,
-          exceptions: source.exceptions,
-          assignments,
-        });
-      const crewId = availableCrewIds[unassignedReservationCount];
+      const { availableCrewIds, remainingCapacity } = evaluateCrewAvailability({
+        date: cursor,
+        startTime: slot.startTime,
+        durationMinutes: duration,
+        capacity: slot.capacity,
+        schedules: source.schedules,
+        exceptions: source.exceptions,
+        assignments,
+      });
+      const crewId = pickLeastBusyCrew(availableCrewIds, assignments, cursor);
       if (remainingCapacity <= 0 || !crewId) continue;
 
       const segment: ContinuationSegment = {

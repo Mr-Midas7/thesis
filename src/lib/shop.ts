@@ -31,7 +31,8 @@ export const APPOINTMENT_STATUSES = [
   "no_show",
 ] as const;
 
-export type AppointmentStatus = (typeof APPOINTMENT_STATUSES)[number];
+/** Shown where archiving or deleting a completed appointment is refused (the database enforces it). */
+export const COMPLETED_APPOINTMENT_KEPT = "Completed appointments are kept for financial records.";
 
 export function statusLabel(status: string) {
   return status.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
@@ -84,9 +85,6 @@ export const DEFAULT_BOOKING_HOURS = {
   openingTime: "08:00",
   closingTime: "17:00",
 } as const;
-
-/** New online booking requests are accepted only during this Manila time window. */
-export const BOOKING_SUBMISSION_HOURS = DEFAULT_BOOKING_HOURS;
 
 export type BookingHours = {
   openingTime: string;
@@ -177,21 +175,6 @@ export function isBookingStartTime(time: string, hours: BookingHours = DEFAULT_B
     minutes < closingMinutes &&
     (minutes - openingMinutes) % BOOKING_INTERVAL_MINUTES === 0
   );
-}
-
-/**
- * True only while online booking submissions are open in the shop's configured
- * local timezone. Closing time is exclusive, so 5:00 PM is the cutoff.
- */
-export function isBookingSubmissionOpen(now = new Date()) {
-  const currentMinutes = timeToMinutes(manilaNow(now).time);
-  const openingMinutes = timeToMinutes(BOOKING_SUBMISSION_HOURS.openingTime);
-  const closingMinutes = timeToMinutes(BOOKING_SUBMISSION_HOURS.closingTime);
-  return currentMinutes >= openingMinutes && currentMinutes < closingMinutes;
-}
-
-export function bookingSubmissionClosedMessage() {
-  return `Online booking is currently closed. Booking submissions are available from ${formatTime(BOOKING_SUBMISSION_HOURS.openingTime)} to ${formatTime(BOOKING_SUBMISSION_HOURS.closingTime)} (${SHOP.timeZone}).`;
 }
 
 /** True when the entire appointment fits inside the shop's operating hours. */
@@ -406,8 +389,6 @@ export const phoneSchema = z
   .transform((value) => normalizePhilippineMobile(value)!);
 
 export const REFERENCE_CODE_PATTERN = /^FRM-[A-Z0-9]{6}$/i;
-export const REFERENCE_CODE_VALIDATION_MESSAGE =
-  "Enter a valid reference code in the format FRM-XXXXXX.";
 
 /** Reference codes are case-insensitive; store and query them in one canonical form. */
 export function normalizeReferenceCode(value: string) {

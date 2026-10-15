@@ -4,7 +4,16 @@ import { getRequest } from "@tanstack/react-start/server";
 import { z } from "zod";
 
 import type { Database } from "@/integrations/supabase/types";
-import { normalizePhilippineMobile, phoneSchema } from "./shop";
+import {
+  bookingNotAcceptedEmail,
+  escapeHtml,
+  formatAppointmentDate,
+  formatAppointmentTime,
+  rescheduleNotApprovedEmail,
+  type EmailContent,
+  type ShopContact,
+} from "./customer-emails";
+import { SHOP, normalizePhilippineMobile, phoneSchema } from "./shop";
 
 const appointmentStatuses = [
   "pending",
@@ -55,11 +64,6 @@ const appointmentUpdateSchema = z.object({
     ),
 });
 
-type ConfirmationEmailConfig = {
-  apiKey: string;
-  from: string;
-};
-
 type ConfirmationEmailResult = { sent: true } | { sent: false; error: string | null };
 
 type TextBeeConfig = {
@@ -70,38 +74,12 @@ type TextBeeConfig = {
 
 const TEXTBEE_DEMO_PHONE = "09242698505";
 const DELIVERY_LEASE_MS = 5 * 60 * 1000;
-const EMAIL_ADDRESS_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 type ConfirmationSmsResult = {
   sent: boolean;
   skipped: boolean;
   error: string | null;
 };
-
-function senderAddress(value: string) {
-  const trimmed = value.trim();
-  const namedAddress = trimmed.match(/^[^<>]*<\s*([^<>\s]+)\s*>$/);
-  const address = (namedAddress?.[1] ?? trimmed).toLowerCase();
-  return EMAIL_ADDRESS_PATTERN.test(address) ? address : null;
-}
-
-function emailConfig(): { config: ConfirmationEmailConfig } | { error: string } {
-  const apiKey = process.env["RESEND_API_KEY"]?.trim();
-  const from = process.env["RESEND_FROM_EMAIL"]?.trim();
-  if (!apiKey || !from) {
-    return {
-      error:
-        "Email is not configured. Set RESEND_API_KEY and RESEND_FROM_EMAIL in the server environment.",
-    };
-  }
-  if (!senderAddress(from)) {
-    return {
-      error:
-        "Email is not configured correctly. RESEND_FROM_EMAIL must be a valid email address or display-name address.",
-    };
-  }
-  return { config: { apiKey, from } };
-}
 
 function textBeeConfig(): { config: TextBeeConfig } | { error: string } {
   const apiKey = process.env["TEXTBEE_API_KEY"]?.trim();
@@ -127,33 +105,6 @@ function textBeeConfig(): { config: TextBeeConfig } | { error: string } {
   return {
     config: deviceId ? { apiKey, deviceId, simSubscriptionId } : { apiKey, simSubscriptionId },
   };
-}
-
-function escapeHtml(value: string | number | null | undefined) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-function formatAppointmentDate(date: string) {
-  return new Intl.DateTimeFormat("en-PH", {
-    dateStyle: "full",
-    timeZone: "Asia/Manila",
-  }).format(new Date(`${date}T12:00:00+08:00`));
-}
-
-function formatAppointmentTime(time: string) {
-  const [hour = "0", minute = "0"] = time.slice(0, 5).split(":");
-  const date = new Date(`2000-01-01T${hour.padStart(2, "0")}:${minute}:00+08:00`);
-  return new Intl.DateTimeFormat("en-PH", {
-    hour: "numeric",
-    minute: "2-digit",
-    hour12: true,
-    timeZone: "Asia/Manila",
-  }).format(date);
 }
 
 function formatDuration(durationMinutes: number) {
@@ -201,18 +152,18 @@ function redactProviderDetail(value: string) {
     .slice(0, 400);
 }
 
-async function assertProviderAccepted(provider: "Resend" | "TextBee", response: Response) {
+async function assertTextBeeAccepted(response: Response) {
   const body = await response.text();
   if (!response.ok) {
     const detail = redactProviderDetail(body);
-    console.error(`[${provider}] provider rejected notification`, {
+    console.error("[TextBee] provider rejected notification", {
       status: response.status,
       detail: detail || undefined,
     });
-    throw new Error(`${provider} returned ${response.status}${detail ? `: ${detail}` : "."}`);
+    throw new Error(`TextBee returned ${response.status}${detail ? `: ${detail}` : "."}`);
   }
 
-  if (provider !== "TextBee" || !body) return;
+  if (!body) return;
   try {
     const payload = JSON.parse(body) as {
       data?: { success?: boolean; successCount?: number; failureCount?: number };
@@ -257,7 +208,8 @@ function authenticatedSupabaseClient() {
 async function sendQueuedConfirmationEmail(
   appointmentId: string,
 ): Promise<ConfirmationEmailResult> {
-  const configured = emailConfig();
+  const { emailTransport, sendEmail } = await import("./email.server");
+  const configured = emailTransport();
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   if ("error" in configured) {
     console.error("[Confirmation email] configuration unavailable", { reason: configured.error });
@@ -378,22 +330,13 @@ async function sendQueuedConfirmationEmail(
       .join("\n");
     const html = `<p>Hello ${escapeHtml(appointment.customer_name)},</p><p>Your Fake Rider Motorparts appointment has been <strong>approved</strong>.</p><p><strong>Reference code:</strong> ${escapeHtml(appointment.reference_code)}</p><p><strong>Confirmed schedule:</strong></p><ul>${scheduleRows}</ul><p><strong>Services:</strong></p><ul>${serviceList}</ul><p><strong>Motorcycle:</strong> ${escapeHtml(motorcycle)}<br /><strong>Plate number:</strong> ${escapeHtml(appointment.plate_number)}<br /><strong>Estimated total:</strong> PHP ${escapeHtml(Number(appointment.total_estimate).toFixed(2))}</p>${appointment.notes ? `<p><strong>Notes:</strong> ${escapeHtml(appointment.notes)}</p>` : ""}<p>Please keep your reference code for appointment tracking.</p>`;
 
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${configured.config.apiKey}`,
-        "Content-Type": "application/json",
-        "Idempotency-Key": `appointment-confirmation-${delivery.id}`,
-      },
-      body: JSON.stringify({
-        from: configured.config.from,
-        to: [delivery.recipient_email],
-        subject: `Appointment confirmed - ${appointment.reference_code}`,
-        html,
-        text,
-      }),
+    await sendEmail(configured.transport, {
+      to: delivery.recipient_email,
+      subject: `Appointment confirmed - ${appointment.reference_code}`,
+      html,
+      text,
+      idempotencyKey: `appointment-confirmation-${delivery.id}`,
     });
-    await assertProviderAccepted("Resend", response);
 
     const { error: sentError } = await supabaseAdmin
       .from("appointment_confirmation_emails")
@@ -557,7 +500,7 @@ async function sendQueuedConfirmationSms(appointmentId: string): Promise<Confirm
       },
       body: JSON.stringify(body),
     });
-    await assertProviderAccepted("TextBee", response);
+    await assertTextBeeAccepted(response);
 
     const { error: sentError } = await supabaseAdmin
       .from("appointment_confirmation_sms")
@@ -783,7 +726,8 @@ function formatCompletionSmsDate(value: string | null, appointmentDate: string) 
 }
 
 async function sendQueuedCompletionEmail(appointmentId: string): Promise<CompletionDeliveryResult> {
-  const configured = emailConfig();
+  const { emailTransport, sendEmail } = await import("./email.server");
+  const configured = emailTransport();
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   if ("error" in configured) {
     console.error("[Completion email] configuration unavailable", { reason: configured.error });
@@ -830,22 +774,13 @@ async function sendQueuedCompletionEmail(appointmentId: string): Promise<Complet
       "Thank you for choosing Fake Rider Motorparts.",
     ].join("\n");
     const html = `<p>Hello ${escapeHtml(appointment.customer_name)},</p><p>Your service at Fake Rider Motorparts has been <strong>completed</strong>.</p><p><strong>Reference code:</strong> ${escapeHtml(appointment.reference_code)}<br /><strong>Completed on:</strong> ${escapeHtml(completedOn)}<br /><strong>Final amount:</strong> PHP ${escapeHtml(appointment.finalAmount.toFixed(2))}</p><p><strong>Services:</strong></p><ul>${serviceList}</ul><p>Thank you for choosing Fake Rider Motorparts.</p>`;
-    const response = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${configured.config.apiKey}`,
-        "Content-Type": "application/json",
-        "Idempotency-Key": `appointment-completion-${claim.id}`,
-      },
-      body: JSON.stringify({
-        from: configured.config.from,
-        to: [claim.recipient],
-        subject: `Service completed - ${appointment.reference_code}`,
-        html,
-        text,
-      }),
+    await sendEmail(configured.transport, {
+      to: claim.recipient,
+      subject: `Service completed - ${appointment.reference_code}`,
+      html,
+      text,
+      idempotencyKey: `appointment-completion-${claim.id}`,
     });
-    await assertProviderAccepted("Resend", response);
     await markCompletionNotificationSent(claim.id, "email");
     return { sent: true };
   } catch (error) {
@@ -910,7 +845,7 @@ async function sendQueuedCompletionSms(appointmentId: string): Promise<Confirmat
       },
       body: JSON.stringify(body),
     });
-    await assertProviderAccepted("TextBee", response);
+    await assertTextBeeAccepted(response);
     await markCompletionNotificationSent(claim.id, "sms");
     return { sent: true, skipped: false, error: null };
   } catch (error) {
@@ -950,6 +885,170 @@ async function sendCompletionNotifications(appointmentId: string) {
     console.error("[Completion SMS] unhandled delivery failure", smsResult.reason);
   }
   return { emailDelivery, smsDelivery };
+}
+
+type CustomerEmailResult = { sent: true } | { sent: false; error: string };
+
+/** The shop's contact details as set in Settings, for customer emails. */
+async function shopContact(): Promise<ShopContact> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data, error } = await supabaseAdmin
+    .from("shop_settings")
+    .select("shop_name,contact_number,contact_email")
+    .eq("id", true)
+    .maybeSingle();
+  if (error) console.warn("[Customer email] shop contact lookup failed; using defaults", error);
+  return {
+    name: data?.shop_name?.trim() || SHOP.name,
+    phone: data?.contact_number?.trim() || SHOP.phone,
+    email: data?.contact_email?.trim() || SHOP.email,
+  };
+}
+
+/**
+ * A public page on this site, from the admin's own request. Links are left
+ * out when the console runs on a local development address.
+ */
+function publicPageUrl(path: string) {
+  const origin = getRequest()?.headers.get("origin");
+  return origin?.startsWith("https://") ? `${origin}${path}` : null;
+}
+
+/** One customer email. Failures are logged and reported to the admin, not retried. */
+async function deliverCustomerEmail(
+  label: string,
+  to: string,
+  content: EmailContent,
+  failure: string,
+): Promise<CustomerEmailResult> {
+  const { emailTransport, sendEmail } = await import("./email.server");
+  const configured = emailTransport();
+  if ("error" in configured) {
+    console.error(`[${label}] configuration unavailable`, { reason: configured.error });
+    return { sent: false, error: `${failure} ${configured.error}` };
+  }
+  try {
+    await sendEmail(configured.transport, { to, ...content });
+    return { sent: true };
+  } catch (error) {
+    console.error(`[${label}] send failed`, error);
+    return { sent: false, error: failure };
+  }
+}
+
+/** Tells the customer their pending booking request was not accepted. */
+async function sendBookingNotAcceptedEmail(appointmentId: string): Promise<CustomerEmailResult> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data: appointment, error } = await supabaseAdmin
+    .from("appointments")
+    .select(
+      "reference_code,customer_name,email,appointment_date,start_time,moto_brand,moto_model,plate_number,appointment_services(service_name)",
+    )
+    .eq("id", appointmentId)
+    .eq("status", "rejected")
+    .maybeSingle();
+  if (error || !appointment) {
+    console.error("[Booking not accepted email] appointment lookup failed", error);
+    return {
+      sent: false,
+      error: "The booking was rejected, but the customer email could not be prepared.",
+    };
+  }
+  const recipient = appointment.email?.trim().toLowerCase();
+  if (!recipient) {
+    return {
+      sent: false,
+      error:
+        "The booking was rejected. This customer has no email on file, so please let them know by phone.",
+    };
+  }
+
+  const content = bookingNotAcceptedEmail({
+    appointment: {
+      referenceCode: appointment.reference_code,
+      customerName: appointment.customer_name,
+      appointmentDate: appointment.appointment_date,
+      startTime: appointment.start_time,
+      services: (appointment.appointment_services ?? []).map((service) => service.service_name),
+      motorcycle: [appointment.moto_brand, appointment.moto_model].filter(Boolean).join(" "),
+      plateNumber: appointment.plate_number,
+    },
+    contact: await shopContact(),
+    bookingUrl: publicPageUrl("/book"),
+  });
+  return deliverCustomerEmail(
+    "Booking not accepted email",
+    recipient,
+    content,
+    "The booking was rejected, but the email to the customer could not be sent.",
+  );
+}
+
+/** Tells the customer their reschedule request was not approved. */
+async function sendRescheduleNotApprovedEmail(appointmentId: string): Promise<CustomerEmailResult> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const [appointmentRes, requestRes] = await Promise.all([
+    supabaseAdmin
+      .from("appointments")
+      .select(
+        "reference_code,customer_name,email,appointment_date,start_time,moto_brand,moto_model,plate_number,appointment_services(service_name)",
+      )
+      .eq("id", appointmentId)
+      .maybeSingle(),
+    // Rejecting clears the request from the appointment; its history keeps the requested time.
+    supabaseAdmin
+      .from("appointment_reschedule_history")
+      .select("to_date,to_start_time")
+      .eq("appointment_id", appointmentId)
+      .eq("decision", "rejected")
+      .order("approved_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+  const appointment = appointmentRes.data;
+  if (appointmentRes.error || !appointment) {
+    console.error(
+      "[Reschedule not approved email] appointment lookup failed",
+      appointmentRes.error,
+    );
+    return {
+      sent: false,
+      error: "The reschedule request was rejected, but the customer email could not be prepared.",
+    };
+  }
+  if (requestRes.error) {
+    console.warn("[Reschedule not approved email] request lookup failed", requestRes.error);
+  }
+  const recipient = appointment.email?.trim().toLowerCase();
+  if (!recipient) {
+    return {
+      sent: false,
+      error:
+        "The reschedule request was rejected. This customer has no email on file, so please let them know by phone.",
+    };
+  }
+
+  const content = rescheduleNotApprovedEmail({
+    appointment: {
+      referenceCode: appointment.reference_code,
+      customerName: appointment.customer_name,
+      appointmentDate: appointment.appointment_date,
+      startTime: appointment.start_time,
+      services: (appointment.appointment_services ?? []).map((service) => service.service_name),
+      motorcycle: [appointment.moto_brand, appointment.moto_model].filter(Boolean).join(" "),
+      plateNumber: appointment.plate_number,
+    },
+    requestedDate: requestRes.data?.to_date ?? null,
+    requestedStartTime: requestRes.data?.to_start_time ?? null,
+    contact: await shopContact(),
+    appointmentUrl: publicPageUrl("/my-appointment"),
+  });
+  return deliverCustomerEmail(
+    "Reschedule not approved email",
+    recipient,
+    content,
+    "The reschedule request was rejected, but the email to the customer could not be sent.",
+  );
 }
 
 async function requireActiveAdminSession() {
@@ -1047,7 +1146,14 @@ export const reviewPendingAppointmentWithConfirmation = createServerFn({ method:
       p_decision: data.decision,
     });
     if (error) return { ok: false as const, error: error.message };
-    if (data.decision === "rejected") return { ok: true as const, emailSent: false };
+    if (data.decision === "rejected") {
+      const emailDelivery = await sendBookingNotAcceptedEmail(data.appointmentId);
+      return {
+        ok: true as const,
+        emailSent: emailDelivery.sent,
+        emailError: emailDelivery.sent ? null : emailDelivery.error,
+      };
+    }
 
     const { emailDelivery, smsDelivery } = await sendConfirmationNotifications(data.appointmentId);
     return {
@@ -1069,7 +1175,14 @@ export const reviewRescheduleRequestWithConfirmation = createServerFn({ method: 
       p_decision: data.decision,
     });
     if (error) return { ok: false as const, error: error.message };
-    if (data.decision === "rejected") return { ok: true as const, emailSent: false };
+    if (data.decision === "rejected") {
+      const emailDelivery = await sendRescheduleNotApprovedEmail(data.appointmentId);
+      return {
+        ok: true as const,
+        emailSent: emailDelivery.sent,
+        emailError: emailDelivery.sent ? null : emailDelivery.error,
+      };
+    }
 
     const { data: replacement, error: replacementError } = await client
       .from("appointments")
@@ -1115,6 +1228,7 @@ export const updateAppointmentWithConfirmation = createServerFn({ method: "POST"
       existingAppointment.status !== "confirmed" && data.status === "confirmed";
     const isBeingCompleted =
       existingAppointment.status !== "completed" && data.status === "completed";
+    const isBeingRejected = existingAppointment.status === "pending" && data.status === "rejected";
     const { error } = await client.rpc("update_appointment_financial_details_atomic", {
       p_appointment_id: data.appointmentId,
       p_service_ids: data.serviceIds,
@@ -1135,6 +1249,14 @@ export const updateAppointmentWithConfirmation = createServerFn({ method: "POST"
       })),
     });
     if (error) return { ok: false as const, error: error.message };
+    if (isBeingRejected) {
+      const emailDelivery = await sendBookingNotAcceptedEmail(data.appointmentId);
+      return {
+        ok: true as const,
+        emailSent: emailDelivery.sent,
+        emailError: emailDelivery.sent ? null : emailDelivery.error,
+      };
+    }
     if (!isBeingConfirmed && !isBeingCompleted) return { ok: true as const, emailSent: false };
 
     const { emailDelivery, smsDelivery } = isBeingCompleted

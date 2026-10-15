@@ -1,13 +1,32 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link, useSearch } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { CheckCircle2, Copy, Info, Loader2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
-import { format, parseISO } from "date-fns";
+import {
+  ArrowLeft,
+  ArrowRight,
+  CalendarDays,
+  Check,
+  CheckCircle2,
+  CircleAlert,
+  Clock,
+  Info,
+  Loader2,
+  Pencil,
+  Search,
+  X,
+} from "lucide-react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { z } from "zod";
 
+import {
+  BookingCalendar,
+  FullyBookedLegend,
+  TimeSlotPicker,
+} from "@/components/site/booking-schedule";
+import { CopyReferenceButton } from "@/components/site/copy-reference-button";
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
+import { TermsAgreement } from "@/components/site/terms-agreement";
 import { TurnstileChallenge } from "@/components/site/turnstile-challenge";
 import {
   AlertDialog,
@@ -20,18 +39,14 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
-  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
-  DialogTrigger,
 } from "@/components/ui/dialog";
 import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
@@ -55,7 +70,6 @@ import { createBooking, getAvailability, getRescheduleDetails } from "@/lib/book
 import {
   DEFAULT_BOOKING_TERMS,
   DEFAULT_BOOKING_HOURS,
-  bookingSubmissionClosedMessage,
   PHONE_VALIDATION_MESSAGE,
   SHOP,
   MAX_BOOKING_SERVICE_SELECTIONS,
@@ -64,7 +78,6 @@ import {
   formatPHP,
   formatTime,
   formatNamePartInput,
-  isBookingSubmissionOpen,
   isValidCalendarDate,
   normalizePhilippineMobile,
   sanitizePhilippineMobileInput,
@@ -94,7 +107,7 @@ const searchSchema = z.object({
 });
 
 const turnstileEnabled = Boolean(import.meta.env["VITE_TURNSTILE_SITE_KEY"]);
-const BOOKING_PAGES = ["Booking details", "Review booking"] as const;
+const BOOKING_PAGES = ["Booking details", "Review & submit"] as const;
 
 export const Route = createFileRoute("/book")({
   validateSearch: searchSchema,
@@ -171,7 +184,7 @@ const validationFocusTargets: Partial<Record<keyof Errors, string>> = {
 };
 
 function isDuplicateBookingMessage(message: string) {
-  return /you already have an appointment for/i.test(message);
+  return /already (?:have|has) an appointment for/i.test(message);
 }
 
 function BookPage() {
@@ -198,6 +211,7 @@ function BookPage() {
     search.serviceId ? [search.serviceId] : [],
   );
   const [serviceCategory, setServiceCategory] = useState("all");
+  const [serviceSearch, setServiceSearch] = useState("");
   const [date, setDate] = useState<string>(search.date ?? "");
   const [startTime, setStartTime] = useState<string>(search.startTime ?? "");
   const [terms, setTerms] = useState(false);
@@ -214,13 +228,11 @@ function BookPage() {
     startTime: string;
     continuationSegments?: Array<{ date: string; startTime: string; durationMinutes: number }>;
   } | null>(null);
-  const [referenceCopyStatus, setReferenceCopyStatus] = useState<"copied" | "error" | null>(null);
   const [turnstileToken, setTurnstileToken] = useState("");
   const [bookingRequestId, setBookingRequestId] = useState(() => crypto.randomUUID());
   const isReschedule = Boolean(search.reschedule && search.phone);
   const [rescheduleReason, setRescheduleReason] = useState("");
   const [reschedulePrefillReady, setReschedulePrefillReady] = useState(!isReschedule);
-  const [clock, setClock] = useState(() => Date.now());
 
   const rescheduleDetails = useQuery({
     queryKey: ["reschedule-details", search.reschedule, search.phone],
@@ -389,7 +401,6 @@ function BookPage() {
     () => (availability.data && date ? computeAvailableSlots(availability.data, date) : []),
     [availability.data, date],
   );
-  const availableSlots = useMemo(() => slots.filter((slot) => !slot.disabled), [slots]);
 
   const availableDateSet = useMemo(() => new Set(dates), [dates]);
   const fullyBookedDates = useMemo(
@@ -397,7 +408,9 @@ function BookPage() {
     [availability.data],
   );
 
-  const selectedDate = date && isValidCalendarDate(date) ? parseISO(date) : undefined;
+  const availabilityEnabled = serviceIds.length > 0 && motorcycleSelectionReady;
+  const availabilityLoading =
+    availabilityEnabled && (availability.isPending || availability.isFetching);
   const availabilityError = availability.data?.error;
 
   const selectedServices = (services.data ?? []).filter((s) => serviceIds.includes(s.id));
@@ -408,8 +421,11 @@ function BookPage() {
       ).sort(),
     [services.data],
   );
+  const normalizedServiceSearch = serviceSearch.trim().toLowerCase();
   const filteredServices = (services.data ?? []).filter(
-    (service) => serviceCategory === "all" || service.category === serviceCategory,
+    (service) =>
+      (serviceCategory === "all" || service.category === serviceCategory) &&
+      (!normalizedServiceSearch || service.name.toLowerCase().includes(normalizedServiceSearch)),
   );
   const serviceEstimates =
     availability.data?.serviceEstimates ??
@@ -444,8 +460,6 @@ function BookPage() {
             : DEFAULT_BOOKING_HOURS.closingTime,
         }
       : DEFAULT_BOOKING_HOURS);
-  const bookingSubmissionOpen = isBookingSubmissionOpen(new Date(clock));
-  const bookingClosedMessage = bookingSubmissionClosedMessage();
   const serviceStepOverflowMinutes =
     !isReschedule && serviceIds.length > 1
       ? bookingDurationOverflowMinutes(operatingHours.openingTime, totalDuration, operatingHours)
@@ -457,12 +471,63 @@ function BookPage() {
       : 0;
   const needsMultiDayContinuationConfirmation = multiDayOverflowMinutes > 0;
   const bookingTerms = shopSettings.data?.booking_terms || DEFAULT_BOOKING_TERMS;
+  // Prices depend on the motorcycle's size category, so only show a total once
+  // the server has priced the selected services for the chosen motorcycle.
+  const pricingReady = Boolean(availability.data?.serviceEstimates) && !availabilityError;
+  const selectedModelLabel =
+    modelsForBrand.find((model) => model.value === form.motoModel)?.label ?? form.motoModel;
+  const sectionComplete = {
+    personal:
+      isReschedule ||
+      (form.lastName.trim().length >= 2 &&
+        form.firstName.trim().length >= 2 &&
+        normalizePhilippineMobile(form.phone) !== null &&
+        /^\S+@\S+\.\S+$/.test(form.email.trim())),
+    motorcycle: motorcycleSelectionReady && form.plateNumber.trim().length >= 2,
+    services: serviceIds.length > 0 && form.wantsProducts !== null,
+    schedule: Boolean(date && startTime) && (!isReschedule || Boolean(rescheduleReason.trim())),
+  };
 
-  useEffect(() => {
-    const refreshClock = () => setClock(Date.now());
-    const interval = window.setInterval(refreshClock, 15_000);
-    return () => window.clearInterval(interval);
-  }, []);
+  function clearErrors(...fields: (keyof Errors)[]) {
+    setErrors((current) => {
+      if (!fields.some((field) => current[field])) return current;
+      const next = { ...current };
+      for (const field of fields) delete next[field];
+      return next;
+    });
+  }
+
+  function updateForm<K extends keyof typeof form>(field: K, value: (typeof form)[K]) {
+    setForm((current) => ({ ...current, [field]: value }));
+    if (field in validationFocusTargets) clearErrors(field as keyof Errors);
+  }
+
+  function resetSchedule() {
+    setDate("");
+    setStartTime("");
+    setMultiDayContinuationAccepted(false);
+  }
+
+  function toggleService(serviceId: string) {
+    const checked = serviceIds.includes(serviceId);
+    if (!checked && serviceIds.length >= MAX_BOOKING_SERVICE_SELECTIONS) {
+      setErrors((current) => ({
+        ...current,
+        services: `You can select up to ${MAX_BOOKING_SERVICE_SELECTIONS} services per appointment.`,
+      }));
+      return;
+    }
+    setServiceIds((prev) =>
+      checked ? prev.filter((id) => id !== serviceId) : [...prev, serviceId],
+    );
+    clearErrors("services");
+    resetSchedule();
+  }
+
+  function clearServices() {
+    setServiceIds([]);
+    resetSchedule();
+  }
 
   useEffect(() => {
     if (!focusRequest) return;
@@ -639,7 +704,7 @@ function BookPage() {
     if (steps.includes(3) && form.wantsProducts === null) {
       e.wantsProducts = "Choose Yes or No for shop products.";
     }
-    if (steps.includes(4) && (availability.isPending || availability.isFetching)) {
+    if (steps.includes(4) && availabilityLoading) {
       e.schedule = "Availability is still loading. Please wait a moment.";
     }
     if (steps.includes(4) && (availability.isError || availabilityError)) {
@@ -668,10 +733,6 @@ function BookPage() {
   }
 
   function continueToReview() {
-    if (!bookingSubmissionOpen) {
-      setErrors((current) => ({ ...current, schedule: bookingClosedMessage }));
-      return;
-    }
     const e = validationErrors([1, 2, 3, 4]);
     if (!showValidationErrors(e)) return;
     const requiresMultiDayConfirmation =
@@ -685,11 +746,6 @@ function BookPage() {
   }
 
   function continueWithMultiDayBooking() {
-    if (!bookingSubmissionOpen) {
-      setMultiDayContinuationOpen(false);
-      setErrors((current) => ({ ...current, schedule: bookingClosedMessage }));
-      return;
-    }
     setMultiDayContinuationAccepted(true);
     setMultiDayContinuationOpen(false);
     setBookingPage("review");
@@ -703,72 +759,83 @@ function BookPage() {
   }
 
   function submitBooking() {
-    if (!bookingSubmissionOpen) {
-      setErrors((current) => ({ ...current, schedule: bookingClosedMessage }));
-      return;
-    }
     if (!rescheduleReady || !validateBooking()) return;
     mutation.mutate();
+  }
+
+  /** Return from the review page to a specific part of the booking form. */
+  function editBookingSection(field: keyof Errors) {
+    setErrors({});
+    setBookingPage("details");
+    setFocusRequest(field);
   }
 
   function dismissDuplicateBookingDialog() {
     setDuplicateBookingMessage(null);
   }
 
+  function chooseAnotherDate() {
+    dismissDuplicateBookingDialog();
+    editBookingSection("schedule");
+  }
+
   if (result) {
+    const nextSteps = isReschedule
+      ? [
+          "The shop reviews your requested new date and time.",
+          "Your original appointment stays reserved until the request is reviewed.",
+          "Check the status of your request anytime on the My Appointment page.",
+        ]
+      : [
+          "The shop reviews your booking request.",
+          "Once it is approved, we will email your confirmed appointment details.",
+          "Use your reference code on the My Appointment page to check the status, reschedule, or cancel.",
+          "On the day, please arrive 10–15 minutes early for check-in.",
+        ];
+
     return (
       <div className="min-h-screen">
         <SiteHeader />
-        <main className="mx-auto w-full max-w-2xl px-4 py-16">
-          <Card className="border-primary/40 bg-card/70">
-            <CardContent className="p-8 text-center">
-              <CheckCircle2 className="mx-auto h-14 w-14 text-primary" />
-              <h1 className="mt-4 font-display text-3xl uppercase">
-                {isReschedule ? "Reschedule request sent" : "Appointment Requested"}
-              </h1>
-              <p className="mt-2 text-muted-foreground">
-                {isReschedule
-                  ? "Your original appointment remains reserved while the shop reviews your requested new date and time."
-                  : "Save your reference code. Your request remains pending until the shop approves it, then we will email your confirmed appointment details."}
-              </p>
-              <div className="mt-6 rounded-xl border border-dashed border-primary/50 bg-primary/5 p-6">
-                <p className="text-xs tracking-[0.3em] text-muted-foreground uppercase">
-                  Reference code
+        <main className="mx-auto w-full max-w-2xl px-4 py-10 sm:py-16">
+          <Card className="overflow-hidden border-primary/40 bg-card/70">
+            <CardContent className="p-0">
+              <div className="px-5 pt-8 pb-6 text-center sm:px-8">
+                <CheckCircle2 className="mx-auto h-14 w-14 text-primary" aria-hidden="true" />
+                <h1 className="mt-4 font-display text-3xl font-bold uppercase sm:text-4xl">
+                  {isReschedule ? "Reschedule request sent" : "Appointment requested"}
+                </h1>
+                <p className="mx-auto mt-2 max-w-md text-sm text-muted-foreground">
+                  {isReschedule
+                    ? "Your original appointment remains reserved while the shop reviews your requested new date and time."
+                    : "Save your reference code. Your request remains pending until the shop approves it, then we will email your confirmed appointment details."}
                 </p>
-                <p className="font-display text-4xl font-bold tracking-widest text-primary">
-                  {result.reference}
-                </p>
-                <Button
-                  variant="outline"
-                  className="mt-4"
-                  onClick={async () => {
-                    try {
-                      await navigator.clipboard.writeText(result.reference);
-                      setReferenceCopyStatus("copied");
-                    } catch {
-                      setReferenceCopyStatus("error");
-                    }
-                  }}
-                >
-                  <Copy /> {referenceCopyStatus === "copied" ? "Copied" : "Copy code"}
-                </Button>
-                {referenceCopyStatus === "error" && (
-                  <p className="mt-2 text-xs text-destructive" role="alert">
-                    Could not copy the code automatically. Please copy it manually.
+                <div className="mt-6 rounded-xl border border-dashed border-primary/50 bg-primary/5 p-5">
+                  <p className="text-xs tracking-[0.3em] text-muted-foreground uppercase">
+                    Reference code
                   </p>
-                )}
+                  <p className="mt-1 font-display text-4xl font-bold tracking-widest text-primary">
+                    {result.reference}
+                  </p>
+                  <CopyReferenceButton value={result.reference} className="mt-3" />
+                </div>
               </div>
-              <div className="mt-6 space-y-1 text-sm text-muted-foreground">
-                <p>
-                  {formatDateLong(result.date)} at {formatTime(result.startTime)}
-                </p>
-                <p>Estimated total: {formatPHP(result.total)}</p>
-                <p>Status: pending confirmation by the shop</p>
-                <p>The shop will review your request and confirm your appointment.</p>
+
+              <dl className="grid gap-px border-y border-border/70 bg-border/70 sm:grid-cols-3">
+                <SuccessDetail label="Schedule">
+                  {formatDateLong(result.date)}
+                  <span className="block text-muted-foreground">
+                    {formatTime(result.startTime)}
+                  </span>
+                </SuccessDetail>
+                <SuccessDetail label="Estimated total">{formatPHP(result.total)}</SuccessDetail>
+                <SuccessDetail label="Status">Pending shop confirmation</SuccessDetail>
+              </dl>
+
+              <div className="space-y-6 px-5 py-6 sm:px-8">
                 {(result.continuationSegments?.length ?? 0) > 0 && (
-                  <div className="mt-4 rounded-lg border border-primary/30 bg-primary/5 p-3 text-left">
+                  <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 text-sm">
                     <p className="font-medium text-foreground">Continued service schedule</p>
-                    <ul className="mt-2 space-y-1 text-xs">
+                    <ul className="mt-2 space-y-1 text-muted-foreground">
                       {result.continuationSegments?.map((segment) => (
                         <li key={`${segment.date}-${segment.startTime}`}>
                           {formatDateLong(segment.date)} at {formatTime(segment.startTime)} (
@@ -778,14 +845,39 @@ function BookPage() {
                     </ul>
                   </div>
                 )}
-              </div>
-              <div className="mt-7 flex flex-wrap justify-center gap-3">
-                <Button asChild className="font-display uppercase">
-                  <Link to="/my-appointment">View my appointment</Link>
-                </Button>
-                <Button asChild variant="outline" className="font-display uppercase">
-                  <Link to="/">Back to home</Link>
-                </Button>
+
+                <div>
+                  <h2 className="font-display text-lg tracking-wide uppercase">
+                    What happens next
+                  </h2>
+                  <ol className="mt-3 space-y-3 text-sm">
+                    {nextSteps.map((step, index) => (
+                      <li key={step} className="flex gap-3">
+                        <span
+                          aria-hidden="true"
+                          className="flex size-6 shrink-0 items-center justify-center rounded-full bg-primary/15 font-display text-sm text-primary"
+                        >
+                          {index + 1}
+                        </span>
+                        <span className="pt-0.5 text-muted-foreground">{step}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+
+                <div className="flex flex-col gap-3 sm:flex-row sm:justify-center">
+                  <Button asChild size="lg" className="font-display tracking-wide uppercase">
+                    <Link to="/my-appointment">Track my appointment</Link>
+                  </Button>
+                  <Button
+                    asChild
+                    size="lg"
+                    variant="outline"
+                    className="font-display tracking-wide uppercase"
+                  >
+                    <Link to="/">Back to homepage</Link>
+                  </Button>
+                </div>
               </div>
             </CardContent>
           </Card>
@@ -812,10 +904,15 @@ function BookPage() {
                 </>
               ) : (
                 <>
-                  <h1 className="font-display text-2xl uppercase">Unable to reschedule online</h1>
+                  <CircleAlert className="mx-auto size-8 text-destructive" aria-hidden="true" />
+                  <h1 className="mt-4 font-display text-2xl uppercase">
+                    Unable to reschedule online
+                  </h1>
                   <p className="mt-2 text-sm text-destructive">{rescheduleError}</p>
                   <Button asChild variant="outline" className="mt-6">
-                    <Link to="/my-appointment">Back to Appointment Tracker</Link>
+                    <Link to="/my-appointment">
+                      <ArrowLeft /> Back to My Appointment
+                    </Link>
                   </Button>
                 </>
               )}
@@ -827,727 +924,904 @@ function BookPage() {
     );
   }
 
+  const productChoiceLabel =
+    form.wantsProducts === null
+      ? "Not selected"
+      : form.wantsProducts
+        ? "Yes, if needed"
+        : "No, service only";
+  const showMultiDayNote =
+    !isReschedule &&
+    (needsServiceStepMultiDayConfirmation || needsMultiDayContinuationConfirmation);
+
   return (
     <div className="min-h-screen">
       <SiteHeader />
-      <main className="mx-auto w-full max-w-5xl px-4 py-8 sm:py-12">
-        <p className="text-xs tracking-[0.3em] text-accent uppercase">
-          {isReschedule ? "Reschedule appointment" : "Booking"}
-        </p>
-        <h1 className="font-display text-3xl font-bold uppercase sm:text-4xl md:text-5xl">
-          {isReschedule ? "Choose a new service slot" : "Reserve your service slot"}
-        </h1>
-        <p className="mt-2 max-w-2xl text-muted-foreground">
-          {isReschedule
-            ? "Your saved appointment details are retained. Enter a reason and choose a new available date and time; your original slot stays reserved until the shop confirms."
-            : "Schedule your motorcycle service online and secure an available appointment slot in advance."}
-        </p>
-
-        {!bookingSubmissionOpen && (
-          <div
-            role="alert"
-            className="mt-6 flex items-start gap-3 rounded-xl border border-destructive/40 bg-destructive/10 p-4 text-sm"
-          >
-            <Info className="mt-0.5 h-5 w-5 shrink-0 text-destructive" aria-hidden="true" />
-            <div>
-              <p className="font-medium text-foreground">Online booking is currently closed</p>
-              <p className="mt-1 leading-5 text-muted-foreground">
-                The shop is currently outside booking hours. New booking submissions are accepted
-                from 8:00 AM to 5:00 PM, Philippine time.
-              </p>
-            </div>
+      <main className="mx-auto w-full max-w-6xl px-4 py-8 sm:px-6 sm:py-12">
+        <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
+          <div className="max-w-2xl">
+            <p className="text-xs tracking-[0.3em] text-accent uppercase">
+              {isReschedule ? "Reschedule appointment" : "Book a service"}
+            </p>
+            <h1 className="font-display text-3xl font-bold uppercase sm:text-4xl md:text-5xl">
+              {isReschedule ? "Choose a new service slot" : "Reserve your service slot"}
+            </h1>
+            <p className="mt-2 text-muted-foreground">
+              {isReschedule
+                ? "Your saved appointment details are retained. Enter a reason and choose a new available date and time; your original slot stays reserved until the shop confirms."
+                : "Tell us about you and your motorcycle, pick your services, and choose an available time. You'll review everything before submitting."}
+            </p>
           </div>
-        )}
-
-        <div className="sticky top-20 z-20 -mx-4 mt-6 border-y border-border/70 bg-background/95 px-4 py-3 backdrop-blur">
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span className="font-medium text-foreground">
-              {bookingPage === "details" ? "" : "Review Booking"}
-            </span>
-            <span>
-              {bookingPage === "details" ? "Complete your details" : "Final confirmation"}
-            </span>
-          </div>
-          <ol className="mt-3 grid grid-cols-2 gap-2" aria-label="Booking progress">
-            {BOOKING_PAGES.map((page, index) => {
-              const current =
-                (index === 0 && bookingPage === "details") ||
-                (index === 1 && bookingPage === "review");
-              const complete = index === 0 && bookingPage === "review";
-              return (
-                <li key={page} className="min-w-0">
-                  <span
-                    className={cn(
-                      "flex h-9 w-full items-center justify-center rounded-full border px-3 text-xs font-medium sm:text-sm",
-                      complete && "border-primary bg-primary text-primary-foreground",
-                      current && "border-primary text-primary",
-                      !complete && !current && "border-border text-muted-foreground",
-                    )}
-                    aria-current={current ? "step" : undefined}
-                    title={page}
-                  >
-                    {complete ? "✓ Booking details" : page}
-                  </span>
-                </li>
-              );
-            })}
-          </ol>
-          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-muted">
-            <div
-              className="h-full rounded-full bg-primary transition-[width] duration-200"
-              style={{ width: bookingPage === "review" ? "100%" : "50%" }}
-            />
-          </div>
+          <BookingSteps
+            current={bookingPage === "details" ? 0 : 1}
+            onSelectDetails={returnToBookingDetails}
+          />
         </div>
 
         <form
-          className="mt-10 space-y-8"
+          className="mt-8"
+          noValidate
           onSubmit={(e) => {
             e.preventDefault();
             if (bookingPage === "review") submitBooking();
             else continueToReview();
           }}
         >
-          <div className={cn(bookingPage !== "details" && "hidden")}>
-            <Section title="1. Personal information">
-              {isReschedule && (
-                <p className="mb-4 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm text-muted-foreground">
-                  These details are verified against your original appointment when you submit.
-                </p>
-              )}
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                <Field label="Last Name" error={errors.lastName}>
-                  <Input
-                    id="booking-last-name"
-                    value={form.lastName}
-                    maxLength={40}
-                    disabled={isReschedule}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        lastName: formatNamePartInput(e.target.value),
-                      })
-                    }
-                    placeholder="Dela Cruz"
-                  />
-                </Field>
-                <Field label="First Name" error={errors.firstName}>
-                  <Input
-                    id="booking-first-name"
-                    value={form.firstName}
-                    maxLength={40}
-                    disabled={isReschedule}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        firstName: formatNamePartInput(e.target.value),
-                      })
-                    }
-                    placeholder="Juan"
-                  />
-                </Field>
-                <Field label="Middle Name (Optional)" error={errors.middleName}>
-                  <Input
-                    id="booking-middle-name"
-                    value={form.middleName}
-                    maxLength={40}
-                    disabled={isReschedule}
-                    onChange={(e) =>
-                      setForm({
-                        ...form,
-                        middleName: formatNamePartInput(e.target.value),
-                      })
-                    }
-                    placeholder="Santos"
-                  />
-                </Field>
-                <Field label="Mobile number" error={errors.phone}>
-                  <Input
-                    id="booking-phone"
-                    type="tel"
-                    value={form.phone}
-                    maxLength={11}
-                    inputMode="tel"
-                    autoComplete="tel"
-                    disabled={isReschedule}
-                    onChange={(e) => {
-                      setForm({ ...form, phone: sanitizePhilippineMobileInput(e.target.value) });
-                    }}
-                    placeholder="09171234567"
-                  />
-                </Field>
-                <Field label="Email Address" error={errors.email}>
-                  <Input
-                    id="booking-email"
-                    type="email"
-                    value={form.email}
-                    maxLength={254}
-                    autoComplete="email"
-                    disabled={isReschedule}
-                    onChange={(e) => {
-                      setForm({ ...form, email: e.target.value.toLowerCase() });
-                    }}
-                    placeholder="juan@example.com"
-                  />
-                </Field>
-              </div>
-            </Section>
-
-            <Section title="2. Motorcycle details">
-              <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-                <div className="md:col-span-2 lg:col-span-3">
-                  <p className="text-sm text-muted-foreground">
-                    Select your motorcycle from the catalog. Choose a brand first to see its valid
-                    models.
-                  </p>
-                  {catalogUnavailable && (
-                    <p className="mt-1 text-sm text-destructive">
-                      The motorcycle catalog is unavailable. Please try again shortly.
-                    </p>
-                  )}
-                </div>
-
-                <Field label="Brand" error={errors.motoBrand}>
-                  <Select
-                    value={form.motoBrand}
-                    onValueChange={(v) => {
-                      setForm({ ...form, motoBrand: v, motoModel: "" });
-                      setDate("");
-                      setStartTime("");
-                    }}
-                    disabled={isReschedule || motorcycleCatalog.isLoading || catalogUnavailable}
-                  >
-                    <SelectTrigger id="booking-moto-brand">
-                      <SelectValue placeholder="Select a brand" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {brands.map((b) => (
-                        <SelectItem key={b} value={b}>
-                          {b}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field label="Model" error={errors.motoModel}>
-                  <Select
-                    value={form.motoModel}
-                    onValueChange={(v) => {
-                      setForm({ ...form, motoModel: v });
-                      setDate("");
-                      setStartTime("");
-                    }}
-                    disabled={
-                      isReschedule ||
-                      catalogUnavailable ||
-                      !form.motoBrand ||
-                      modelsForBrand.length === 0
-                    }
-                  >
-                    <SelectTrigger id="booking-moto-model">
-                      <SelectValue
-                        placeholder={form.motoBrand ? "Select a model" : "Select a brand first"}
-                      />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {modelsForBrand.map((m) => (
-                        <SelectItem key={m.value} value={m.value}>
-                          {m.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </Field>
-                <Field label="Plate number" error={errors.plateNumber}>
-                  <Input
-                    id="booking-plate-number"
-                    value={form.plateNumber}
-                    maxLength={20}
-                    disabled={isReschedule}
-                    onChange={(e) =>
-                      setForm({ ...form, plateNumber: e.target.value.toUpperCase() })
-                    }
-                    placeholder="ABC 1234"
-                  />
-                </Field>
-              </div>
-            </Section>
-
-            <Section title="3. Service selection" error={errors.services}>
-              <div className="mb-4 flex flex-wrap items-center gap-3">
-                <Label htmlFor="booking-service-category">Service category</Label>
-                <Select
-                  value={serviceCategory}
-                  onValueChange={setServiceCategory}
-                  disabled={isReschedule}
-                >
-                  <SelectTrigger id="booking-service-category" className="w-full sm:w-52">
-                    <SelectValue placeholder="All categories" />
-                  </SelectTrigger>
-                  <SelectContent position="item-aligned" className="max-h-64">
-                    <SelectItem value="all">All categories</SelectItem>
-                    {serviceCategories.map((category) => (
-                      <SelectItem key={category} value={category} className="capitalize">
-                        {category.replace(/[-_]/g, " ")}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div
-                id="booking-services"
-                tabIndex={-1}
-                className={cn(
-                  "grid gap-3 rounded-lg md:grid-cols-2",
-                  errors.services && "ring-1 ring-destructive",
-                )}
+          <div
+            className={cn(
+              "grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start xl:gap-8",
+              bookingPage !== "details" && "hidden",
+            )}
+          >
+            <div className="min-w-0 space-y-6">
+              <Section
+                step={1}
+                title="Personal information"
+                description={
+                  isReschedule
+                    ? "These details come from your original appointment and are verified when you submit."
+                    : "We use these details to confirm your booking and contact you about it."
+                }
+                complete={sectionComplete.personal}
               >
-                {filteredServices.map((s) => {
-                  const checked = serviceIds.includes(s.id);
-                  return (
-                    <button
-                      type="button"
-                      key={s.id}
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <Field id="booking-last-name" label="Last name" error={errors.lastName}>
+                    <Input
+                      id="booking-last-name"
+                      value={form.lastName}
+                      maxLength={40}
+                      autoComplete="family-name"
                       disabled={isReschedule}
-                      onClick={() => {
-                        if (!checked && serviceIds.length >= MAX_BOOKING_SERVICE_SELECTIONS) {
-                          setErrors((current) => ({
-                            ...current,
-                            services: `You can select up to ${MAX_BOOKING_SERVICE_SELECTIONS} services per appointment.`,
-                          }));
-                          return;
-                        }
-                        setServiceIds((prev) =>
-                          checked ? prev.filter((id) => id !== s.id) : [...prev, s.id],
-                        );
-                        setErrors((current) => {
-                          const { services: _, ...remainingErrors } = current;
-                          return remainingErrors;
-                        });
-                        setDate("");
-                        setStartTime("");
-                        setMultiDayContinuationAccepted(false);
-                      }}
-                      className={cn(
-                        "flex items-center rounded-lg border p-4 text-left transition-colors",
-                        checked
-                          ? "border-primary bg-primary/10"
-                          : "border-border bg-card/50 hover:border-primary/50",
-                        isReschedule && "cursor-not-allowed opacity-75",
-                      )}
-                    >
-                      <span className="font-display block tracking-wide uppercase">{s.name}</span>
-                    </button>
-                  );
-                })}
-              </div>
-              {filteredServices.length === 0 && (
-                <p className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-                  No services are available in this category.
-                </p>
-              )}
-              <p className="mt-3 text-sm text-muted-foreground">
-                Not sure which service to choose?{" "}
-                <Link
-                  to="/services"
-                  className="font-medium text-primary underline underline-offset-4"
-                >
-                  Browse our services
-                </Link>{" "}
-                for details to understand what each service includes.
-              </p>
-              <div className="mt-5 border-t border-border/70 pt-5">
-                <Label>Avail Products</Label>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  Would you like to avail shop products during your service? Specific products are
-                  selected by the shop only if needed during the actual service.
-                </p>
-                <div
-                  id="booking-products"
-                  className="mt-3 flex flex-wrap gap-3"
-                  role="radiogroup"
-                  aria-label="Avail products"
-                  aria-invalid={Boolean(errors.wantsProducts)}
-                >
-                  {[
-                    { value: true, label: "Yes" },
-                    { value: false, label: "No" },
-                  ].map((option) => (
-                    <button
-                      type="button"
-                      key={option.label}
-                      role="radio"
-                      aria-checked={form.wantsProducts === option.value}
+                      aria-invalid={Boolean(errors.lastName)}
+                      onChange={(e) => updateForm("lastName", formatNamePartInput(e.target.value))}
+                      placeholder="Dela Cruz"
+                    />
+                  </Field>
+                  <Field id="booking-first-name" label="First name" error={errors.firstName}>
+                    <Input
+                      id="booking-first-name"
+                      value={form.firstName}
+                      maxLength={40}
+                      autoComplete="given-name"
                       disabled={isReschedule}
-                      onClick={() => {
-                        setForm({ ...form, wantsProducts: option.value });
-                        setErrors(({ wantsProducts: _, ...current }) => current);
-                      }}
-                      className={cn(
-                        "min-w-24 rounded-lg border px-4 py-2 text-sm font-medium transition-colors",
-                        form.wantsProducts === option.value
-                          ? "border-primary bg-primary/10 text-primary"
-                          : "border-border bg-card/50 hover:border-primary/50",
-                        isReschedule && "cursor-not-allowed opacity-75",
-                      )}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
+                      aria-invalid={Boolean(errors.firstName)}
+                      onChange={(e) => updateForm("firstName", formatNamePartInput(e.target.value))}
+                      placeholder="Juan"
+                    />
+                  </Field>
+                  <Field
+                    id="booking-middle-name"
+                    label="Middle name (optional)"
+                    error={errors.middleName}
+                  >
+                    <Input
+                      id="booking-middle-name"
+                      value={form.middleName}
+                      maxLength={40}
+                      autoComplete="additional-name"
+                      disabled={isReschedule}
+                      aria-invalid={Boolean(errors.middleName)}
+                      onChange={(e) =>
+                        updateForm("middleName", formatNamePartInput(e.target.value))
+                      }
+                      placeholder="Santos"
+                    />
+                  </Field>
+                  <Field
+                    id="booking-phone"
+                    label="Mobile number"
+                    hint="11 digits, starting with 09."
+                    error={errors.phone}
+                  >
+                    <Input
+                      id="booking-phone"
+                      type="tel"
+                      value={form.phone}
+                      maxLength={11}
+                      inputMode="tel"
+                      autoComplete="tel"
+                      disabled={isReschedule}
+                      aria-invalid={Boolean(errors.phone)}
+                      aria-describedby="booking-phone-hint"
+                      onChange={(e) =>
+                        updateForm("phone", sanitizePhilippineMobileInput(e.target.value))
+                      }
+                      placeholder="09171234567"
+                    />
+                  </Field>
+                  <Field
+                    id="booking-email"
+                    label="Email address"
+                    hint="We'll email your confirmed appointment details here."
+                    error={errors.email}
+                  >
+                    <Input
+                      id="booking-email"
+                      type="email"
+                      value={form.email}
+                      maxLength={254}
+                      autoComplete="email"
+                      disabled={isReschedule}
+                      aria-invalid={Boolean(errors.email)}
+                      aria-describedby="booking-email-hint"
+                      onChange={(e) => updateForm("email", e.target.value.toLowerCase())}
+                      placeholder="juan@example.com"
+                    />
+                  </Field>
                 </div>
-                <FieldError message={errors.wantsProducts} className="mt-2" />
-              </div>
-            </Section>
+              </Section>
 
-            <Section title="4. Date and time selection" error={errors.schedule}>
-              {serviceIds.length === 0 ? (
-                <p className="text-sm text-muted-foreground">
-                  Select a service first to view available dates and time slots.
-                </p>
-              ) : !motorcycleSelectionReady ? (
-                <p className="text-sm text-muted-foreground">
-                  Select a motorcycle brand and model to view available dates and time slots.
-                </p>
-              ) : availability.isPending || availability.isFetching ? (
-                <p className="text-sm text-muted-foreground">Loading available schedules...</p>
-              ) : availability.isError || availabilityError ? (
-                <p className="text-sm text-destructive">
-                  {availabilityError ??
-                    "We could not load availability. Please refresh and try again."}
-                </p>
-              ) : (
-                <>
-                  {isReschedule && (
-                    <div className="mb-5">
-                      <Label htmlFor="reschedule-reason">Reason for Rescheduling</Label>
-                      <Textarea
-                        id="reschedule-reason"
-                        value={rescheduleReason}
-                        maxLength={500}
-                        onChange={(event) => setRescheduleReason(event.target.value)}
-                        placeholder="Tell the shop why you need a different schedule."
-                        aria-invalid={Boolean(errors.rescheduleReason)}
-                        className="mt-2"
+              <Section
+                step={2}
+                title="Motorcycle details"
+                description="Choose your motorcycle from our catalog. Service rates and available times depend on your model."
+                complete={sectionComplete.motorcycle}
+              >
+                {catalogUnavailable && (
+                  <p className="mb-4 flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                    <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                    The motorcycle catalog is unavailable. Please try again shortly.
+                  </p>
+                )}
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                  <Field id="booking-moto-brand" label="Brand" error={errors.motoBrand}>
+                    <Select
+                      value={form.motoBrand}
+                      onValueChange={(v) => {
+                        setForm((current) => ({ ...current, motoBrand: v, motoModel: "" }));
+                        clearErrors("motoBrand", "motoModel");
+                        resetSchedule();
+                      }}
+                      disabled={isReschedule || motorcycleCatalog.isLoading || catalogUnavailable}
+                    >
+                      <SelectTrigger id="booking-moto-brand">
+                        <SelectValue
+                          placeholder={
+                            motorcycleCatalog.isLoading ? "Loading brands…" : "Select a brand"
+                          }
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {brands.map((b) => (
+                          <SelectItem key={b} value={b}>
+                            {b}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field id="booking-moto-model" label="Model" error={errors.motoModel}>
+                    <Select
+                      value={form.motoModel}
+                      onValueChange={(v) => {
+                        updateForm("motoModel", v);
+                        resetSchedule();
+                      }}
+                      disabled={
+                        isReschedule ||
+                        catalogUnavailable ||
+                        !form.motoBrand ||
+                        modelsForBrand.length === 0
+                      }
+                    >
+                      <SelectTrigger id="booking-moto-model">
+                        <SelectValue
+                          placeholder={form.motoBrand ? "Select a model" : "Select a brand first"}
+                        />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {modelsForBrand.map((m) => (
+                          <SelectItem key={m.value} value={m.value}>
+                            {m.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
+                  <Field id="booking-plate-number" label="Plate number" error={errors.plateNumber}>
+                    <Input
+                      id="booking-plate-number"
+                      value={form.plateNumber}
+                      maxLength={20}
+                      disabled={isReschedule}
+                      aria-invalid={Boolean(errors.plateNumber)}
+                      onChange={(e) => updateForm("plateNumber", e.target.value.toUpperCase())}
+                      placeholder="ABC 1234"
+                    />
+                  </Field>
+                </div>
+              </Section>
+
+              <Section
+                step={3}
+                title="Services"
+                description={
+                  isReschedule
+                    ? "Your original services are kept for this reschedule request."
+                    : `Select the services you need. You can choose up to ${MAX_BOOKING_SERVICE_SELECTIONS} per appointment.`
+                }
+                complete={sectionComplete.services}
+              >
+                {!isReschedule && (
+                  <div className="flex flex-col gap-3 sm:flex-row">
+                    <div className="relative min-w-0 flex-1">
+                      <Search
+                        className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
+                        aria-hidden="true"
                       />
-                      <FieldError message={errors.rescheduleReason} className="mt-1" />
+                      <Input
+                        id="booking-service-search"
+                        type="search"
+                        value={serviceSearch}
+                        onChange={(e) => setServiceSearch(e.target.value)}
+                        // Enter should filter, not submit the whole booking form.
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") e.preventDefault();
+                        }}
+                        placeholder="Search services"
+                        aria-label="Search services"
+                        className="pl-9"
+                      />
+                    </div>
+                    <Select value={serviceCategory} onValueChange={setServiceCategory}>
+                      <SelectTrigger
+                        id="booking-service-category"
+                        aria-label="Service category"
+                        className="w-full sm:w-52"
+                      >
+                        <SelectValue placeholder="All categories" />
+                      </SelectTrigger>
+                      <SelectContent position="item-aligned" className="max-h-64">
+                        <SelectItem value="all">All categories</SelectItem>
+                        {serviceCategories.map((category) => (
+                          <SelectItem key={category} value={category} className="capitalize">
+                            {category.replace(/[-_]/g, " ")}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+
+                <div id="booking-services" tabIndex={-1} className="focus:outline-none">
+                  {selectedServices.length > 0 && (
+                    <div
+                      className={cn("flex flex-wrap items-center gap-2", !isReschedule && "mt-4")}
+                    >
+                      <span className="mr-1 text-xs font-medium tracking-widest text-muted-foreground uppercase">
+                        Selected ({selectedServices.length})
+                      </span>
+                      {selectedServices.map((service) =>
+                        isReschedule ? (
+                          <span
+                            key={service.id}
+                            className="rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-xs font-medium"
+                          >
+                            {service.name}
+                          </span>
+                        ) : (
+                          <button
+                            type="button"
+                            key={service.id}
+                            onClick={() => toggleService(service.id)}
+                            aria-label={`Remove ${service.name}`}
+                            className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 py-1 pr-2 pl-3 text-xs font-medium transition-colors hover:bg-primary/20 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                          >
+                            {service.name}
+                            <X className="size-3.5" aria-hidden="true" />
+                          </button>
+                        ),
+                      )}
+                      {!isReschedule && selectedServices.length > 1 && (
+                        <Button
+                          type="button"
+                          variant="link"
+                          size="sm"
+                          onClick={clearServices}
+                          className="h-auto px-1 text-xs md:h-auto"
+                        >
+                          Clear all
+                        </Button>
+                      )}
                     </div>
                   )}
-                  <p className="mb-2 text-sm text-muted-foreground">
-                    Available dates have an assigned mechanic, an open shop schedule, and enough
-                    time for your selected services. Other dates cannot be selected.
-                  </p>
 
-                  <div
-                    id="booking-schedule"
-                    tabIndex={-1}
-                    className={cn(
-                      "w-full rounded-xl border border-border bg-card/50 p-4 sm:p-5",
-                      (errors.date || errors.startTime || errors.schedule) && "border-destructive",
-                    )}
-                  >
-                    <div className="grid gap-6 lg:grid-cols-[minmax(18rem,0.8fr)_minmax(0,1.7fr)] lg:gap-8">
-                      <div className="border-b border-border/70 pb-5 lg:border-r lg:border-b-0 lg:pr-8 lg:pb-0">
-                        <div
-                          id="booking-date"
-                          tabIndex={-1}
-                          className="flex justify-center lg:justify-start"
-                        >
-                          <Calendar
-                            mode="single"
-                            selected={selectedDate}
-                            onSelect={(d) => {
-                              if (!d) return;
-                              const iso = format(d, "yyyy-MM-dd");
-                              if (!availableDateSet.has(iso)) return;
-                              setDate(iso);
-                              setStartTime("");
-                            }}
-                            disabled={(d) => !availableDateSet.has(format(d, "yyyy-MM-dd"))}
-                            modifiers={{
-                              fullyBooked: fullyBookedDates.map((value) => parseISO(value)),
-                            }}
-                            modifiersClassNames={{
-                              fullyBooked:
-                                "bg-destructive/15 text-destructive line-through opacity-100",
-                            }}
-                            className="p-0 min-[360px]:p-3"
-                            classNames={{
-                              nav: "justify-between gap-1",
-                              month_caption:
-                                "flex h-(--cell-size) w-full items-center justify-center px-(--cell-size)",
-                            }}
-                          />
-                        </div>
-                        {fullyBookedDates.length > 0 && (
-                          <p className="mt-4 flex items-center justify-center gap-2 text-xs text-muted-foreground lg:justify-start">
-                            <span className="h-3 w-3 rounded-sm bg-destructive/15 ring-1 ring-destructive/40" />
-                            Fully booked dates cannot be selected.
-                          </p>
-                        )}
-                      </div>
-
-                      <div id="booking-start-time" tabIndex={-1}>
-                        <h3 className="font-display text-lg uppercase">Available time slots</h3>
-                        <p className="mt-1 mb-4 text-sm text-muted-foreground">
-                          {date
-                            ? formatDateLong(date)
-                            : "Choose a calendar date to view available times."}
+                  {!isReschedule && (
+                    <div
+                      className={cn(
+                        "mt-4 max-h-[26rem] overflow-y-auto rounded-lg border border-border/70 bg-background/40 p-2 sm:max-h-[30rem]",
+                        errors.services && "border-destructive",
+                      )}
+                    >
+                      {services.isLoading ? (
+                        <p className="flex items-center gap-2 p-3 text-sm text-muted-foreground">
+                          <Loader2 className="size-4 animate-spin" aria-hidden="true" /> Loading
+                          services…
                         </p>
-                        {date ? (
-                          <div
-                            className={cn(
-                              "grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-4",
-                              (errors.startTime || errors.schedule) &&
-                                "rounded-lg ring-1 ring-destructive",
-                            )}
-                          >
-                            {availableSlots.map((slot) => (
+                      ) : filteredServices.length === 0 ? (
+                        <div className="p-4 text-center text-sm text-muted-foreground">
+                          <p>
+                            {normalizedServiceSearch
+                              ? `No services match “${serviceSearch.trim()}”.`
+                              : "No services are available in this category."}
+                          </p>
+                          {(normalizedServiceSearch || serviceCategory !== "all") && (
+                            <Button
+                              type="button"
+                              variant="link"
+                              size="sm"
+                              onClick={() => {
+                                setServiceSearch("");
+                                setServiceCategory("all");
+                              }}
+                            >
+                              Show all services
+                            </Button>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+                          {filteredServices.map((s) => {
+                            const checked = serviceIds.includes(s.id);
+                            return (
                               <button
                                 type="button"
-                                key={slot.id}
-                                disabled={slot.disabled}
-                                onClick={() => {
-                                  if (slot.disabled) return;
-                                  setStartTime(slot.startTime);
-                                }}
+                                key={s.id}
+                                aria-pressed={checked}
+                                onClick={() => toggleService(s.id)}
                                 className={cn(
-                                  "rounded-lg border p-3 text-center transition-colors",
-                                  slot.disabled && "cursor-not-allowed opacity-40",
-                                  startTime === slot.startTime
-                                    ? "border-primary bg-primary text-primary-foreground"
-                                    : "border-border bg-card/50 hover:border-primary/50",
+                                  "flex min-h-12 items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                                  checked
+                                    ? "border-primary bg-primary/10"
+                                    : "border-border/70 bg-card/60 hover:border-primary/50",
                                 )}
                               >
-                                <span className="font-display block">
-                                  {formatTime(slot.startTime)}
-                                </span>
                                 <span
+                                  aria-hidden="true"
                                   className={cn(
-                                    "block text-[11px] text-muted-foreground",
-                                    startTime === slot.startTime && "text-primary-foreground/80",
+                                    "flex size-5 shrink-0 items-center justify-center rounded border transition-colors",
+                                    checked
+                                      ? "border-primary bg-primary text-primary-foreground"
+                                      : "border-input bg-background",
                                   )}
                                 >
-                                  Available
+                                  {checked && <Check className="size-3.5" />}
+                                </span>
+                                <span className="font-display text-sm leading-tight tracking-wide uppercase">
+                                  {s.name}
                                 </span>
                               </button>
-                            ))}
-                            {availableSlots.length === 0 && (
-                              <p className="col-span-full rounded-lg border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
-                                No times remain available for this date. Select another available
-                                date.
-                              </p>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                <FieldError message={errors.services} className="mt-2" />
+                {!isReschedule && (
+                  <p className="mt-3 text-sm text-muted-foreground">
+                    Not sure which service you need?{" "}
+                    <Link
+                      to="/services"
+                      className="font-medium text-primary underline underline-offset-4"
+                    >
+                      Browse our services
+                    </Link>{" "}
+                    to see what each one includes.
+                  </p>
+                )}
+
+                <div className="mt-6 border-t border-border/70 pt-5">
+                  <p id="booking-products-label" className="text-sm font-medium">
+                    Shop products
+                  </p>
+                  <p className="mt-1 text-sm text-muted-foreground">
+                    Would you like to avail shop products during your service? Specific products are
+                    selected by the shop only if needed during the actual service.
+                  </p>
+                  <div
+                    id="booking-products"
+                    tabIndex={-1}
+                    className="mt-3 grid gap-2 focus:outline-none sm:max-w-md sm:grid-cols-2"
+                    role="radiogroup"
+                    aria-labelledby="booking-products-label"
+                    aria-invalid={Boolean(errors.wantsProducts)}
+                  >
+                    {[
+                      { value: true, label: "Yes, if needed" },
+                      { value: false, label: "No, service only" },
+                    ].map((option) => {
+                      const selected = form.wantsProducts === option.value;
+                      return (
+                        <button
+                          type="button"
+                          key={option.label}
+                          role="radio"
+                          aria-checked={selected}
+                          disabled={isReschedule}
+                          onClick={() => updateForm("wantsProducts", option.value)}
+                          className={cn(
+                            "flex items-center gap-3 rounded-lg border px-4 py-3 text-left text-sm font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
+                            selected
+                              ? "border-primary bg-primary/10 text-foreground"
+                              : "border-border bg-card/50 hover:border-primary/50",
+                            errors.wantsProducts && !selected && "border-destructive/60",
+                            isReschedule && "cursor-not-allowed opacity-75",
+                          )}
+                        >
+                          <span
+                            aria-hidden="true"
+                            className={cn(
+                              "flex size-4 shrink-0 items-center justify-center rounded-full border",
+                              selected ? "border-primary" : "border-input",
                             )}
+                          >
+                            {selected && <span className="size-2 rounded-full bg-primary" />}
+                          </span>
+                          {option.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <FieldError message={errors.wantsProducts} className="mt-2" />
+                </div>
+              </Section>
+
+              <Section
+                id="booking-schedule"
+                step={4}
+                title="Date and time"
+                description="Pick an available date, then choose a start time."
+                complete={sectionComplete.schedule}
+                error={errors.schedule}
+              >
+                {isReschedule && (
+                  <div className="mb-5">
+                    <Label htmlFor="reschedule-reason">Reason for rescheduling</Label>
+                    <Textarea
+                      id="reschedule-reason"
+                      value={rescheduleReason}
+                      maxLength={500}
+                      onChange={(event) => {
+                        setRescheduleReason(event.target.value);
+                        clearErrors("rescheduleReason");
+                      }}
+                      placeholder="Tell the shop why you need a different schedule."
+                      aria-invalid={Boolean(errors.rescheduleReason)}
+                      className="mt-2"
+                    />
+                    <FieldError message={errors.rescheduleReason} className="mt-1" />
+                  </div>
+                )}
+                {serviceIds.length === 0 ? (
+                  <ScheduleHint>
+                    Select at least one service to see available dates and times.
+                  </ScheduleHint>
+                ) : !motorcycleSelectionReady ? (
+                  <ScheduleHint>
+                    Select your motorcycle brand and model to see available dates and times.
+                  </ScheduleHint>
+                ) : availabilityLoading ? (
+                  <ScheduleHint loading>Checking available schedules…</ScheduleHint>
+                ) : availability.isError || availabilityError ? (
+                  <p className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive">
+                    <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                    {availabilityError ??
+                      "We could not load availability. Please refresh and try again."}
+                  </p>
+                ) : (
+                  <>
+                    <p className="mb-4 text-sm text-muted-foreground">
+                      Available dates have an assigned mechanic, an open shop schedule, and enough
+                      time for your selected services.
+                    </p>
+                    <div
+                      className={cn(
+                        "w-full rounded-xl border border-border bg-card/50 p-3 sm:p-5",
+                        (errors.date || errors.startTime) && "border-destructive",
+                      )}
+                    >
+                      <div className="grid gap-6 md:grid-cols-[auto_minmax(0,1fr)] md:gap-8">
+                        <div className="border-b border-border/70 pb-5 md:border-r md:border-b-0 md:pr-8 md:pb-0">
+                          <div
+                            id="booking-date"
+                            tabIndex={-1}
+                            className="flex justify-center focus:outline-none md:justify-start"
+                          >
+                            <BookingCalendar
+                              selected={date}
+                              availableDates={availableDateSet}
+                              fullyBookedDates={fullyBookedDates}
+                              onSelect={(iso) => {
+                                setDate(iso);
+                                setStartTime("");
+                                clearErrors("date", "startTime", "schedule");
+                              }}
+                            />
                           </div>
-                        ) : (
-                          <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-                            Time slots will appear here after you choose a date.
-                          </div>
-                        )}
-                        {date && startTime && (
-                          <div className="mt-4 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
-                            <p className="text-xs tracking-widest text-muted-foreground uppercase">
-                              Selected schedule
-                            </p>
-                            <p className="mt-1 font-medium text-foreground">
-                              {formatDateLong(date)} at {formatTime(startTime)}
-                            </p>
-                          </div>
-                        )}
+                          {fullyBookedDates.length > 0 && (
+                            <FullyBookedLegend className="mt-3 justify-center md:justify-start" />
+                          )}
+                        </div>
+
+                        <div
+                          id="booking-start-time"
+                          tabIndex={-1}
+                          className="min-w-0 focus:outline-none"
+                        >
+                          <h3 className="font-display text-lg uppercase">Available times</h3>
+                          <p className="mt-1 mb-4 text-sm text-muted-foreground">
+                            {date
+                              ? formatDateLong(date)
+                              : "Choose a date to see the available start times."}
+                          </p>
+                          {date ? (
+                            <TimeSlotPicker
+                              slots={slots}
+                              value={startTime}
+                              onChange={(value) => {
+                                setStartTime(value);
+                                clearErrors("startTime", "schedule");
+                              }}
+                              invalid={Boolean(errors.startTime)}
+                              gridClassName="sm:grid-cols-3 md:grid-cols-2 xl:grid-cols-3"
+                            />
+                          ) : (
+                            <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+                              Time slots will appear here after you choose a date.
+                            </div>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <FieldError message={errors.date} className="mt-2" />
-                  <FieldError message={errors.startTime} className="mt-2" />
-                </>
-              )}
-            </Section>
-
-            <div className="flex justify-end">
-              <Button
-                type="submit"
-                size="lg"
-                disabled={!bookingSubmissionOpen || !rescheduleReady}
-                className="w-full font-display tracking-wide uppercase sm:w-auto"
-              >
-                Submit
-              </Button>
+                    <FieldError message={errors.date} className="mt-2" />
+                    <FieldError message={errors.startTime} className="mt-2" />
+                    {date && startTime && (
+                      <div className="mt-4 flex items-center gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
+                        <CalendarDays className="size-5 shrink-0 text-primary" aria-hidden="true" />
+                        <div>
+                          <p className="text-xs tracking-widest text-muted-foreground uppercase">
+                            Selected schedule
+                          </p>
+                          <p className="font-medium text-foreground">
+                            {formatDateLong(date)} at {formatTime(startTime)}
+                          </p>
+                        </div>
+                      </div>
+                    )}
+                    {showMultiDayNote && (
+                      <p className="mt-3 flex items-start gap-2 text-xs text-muted-foreground">
+                        <Info
+                          className="mt-0.5 size-3.5 shrink-0 text-primary"
+                          aria-hidden="true"
+                        />
+                        Your selected services may need more than one day. The remaining service
+                        time will be reserved on the next available shop day.
+                      </p>
+                    )}
+                  </>
+                )}
+              </Section>
             </div>
+
+            <aside aria-label="Booking summary" className="lg:sticky lg:top-28">
+              <div className="rounded-xl border border-border/70 bg-card/60 p-4 shadow-sm sm:p-5">
+                <h2 className="font-display text-xl tracking-wide uppercase">Booking summary</h2>
+                <div className="mt-4 space-y-4 text-sm">
+                  <SummaryRow label="Your details" done={sectionComplete.personal}>
+                    {customerFullName || (
+                      <span className="text-muted-foreground">Not entered yet</span>
+                    )}
+                  </SummaryRow>
+                  <SummaryRow label="Motorcycle" done={sectionComplete.motorcycle}>
+                    {motorcycleSelectionReady ? (
+                      `${form.motoBrand} ${selectedModelLabel}`
+                    ) : (
+                      <span className="text-muted-foreground">Not selected yet</span>
+                    )}
+                  </SummaryRow>
+                  <SummaryRow label="Services" done={sectionComplete.services}>
+                    {estimatedServices.length > 0 ? (
+                      <ul className="max-h-40 space-y-1 overflow-y-auto pr-1">
+                        {estimatedServices.map((service) => (
+                          <li key={service.id} className="flex justify-between gap-3">
+                            <span className="min-w-0">{service.name}</span>
+                            {pricingReady && (
+                              <span className="shrink-0 text-muted-foreground">
+                                {formatPHP(service.price)}
+                              </span>
+                            )}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <span className="text-muted-foreground">None selected yet</span>
+                    )}
+                  </SummaryRow>
+                  <SummaryRow label="Date and time" done={Boolean(date && startTime)}>
+                    {date && startTime ? (
+                      `${formatDateLong(date)} at ${formatTime(startTime)}`
+                    ) : (
+                      <span className="text-muted-foreground">Not selected yet</span>
+                    )}
+                  </SummaryRow>
+                </div>
+
+                <div className="mt-5 border-t border-border/70 pt-4">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="text-sm font-medium">Estimated total</span>
+                    <span className="font-display text-2xl text-primary">
+                      {pricingReady ? formatPHP(total) : "—"}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {pricingReady
+                      ? "Labor/service charge only. Parts are quoted separately."
+                      : "Choose your motorcycle and services to see an estimate."}
+                  </p>
+                </div>
+
+                <Button
+                  type="submit"
+                  size="lg"
+                  disabled={!rescheduleReady}
+                  className="mt-5 w-full font-display tracking-wide uppercase"
+                >
+                  {isReschedule ? "Review reschedule request" : "Review booking"}
+                  <ArrowRight aria-hidden="true" />
+                </Button>
+                <p className="mt-3 text-center text-xs text-muted-foreground">
+                  Nothing is submitted until you confirm on the next step.
+                </p>
+              </div>
+              <p className="mt-3 text-center text-xs text-muted-foreground">
+                Need help? Call or text{" "}
+                <span className="font-medium text-foreground">{SHOP.phone}</span>
+              </p>
+            </aside>
           </div>
 
-          <Section
-            title="Review Booking"
-            error={errors.terms ?? errors.schedule}
-            className={cn(bookingPage !== "review" && "hidden")}
+          <div
+            className={cn(
+              "grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem] lg:items-start xl:gap-8",
+              bookingPage !== "review" && "hidden",
+            )}
           >
-            <p className="mb-5 text-sm text-muted-foreground">
-              Review the details below before confirming your appointment.
-            </p>
-            <FieldError message={errors.schedule} className="mb-5" />
-            <div className="grid gap-5 lg:grid-cols-2">
-              <div className="space-y-3">
-                <p className="text-xs tracking-widest text-muted-foreground uppercase">
-                  Personal information
-                </p>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <ReviewItem label="Customer" value={customerFullName} />
-                  <ReviewItem label="Mobile number" value={form.phone} />
-                  <ReviewItem label="Email address" value={form.email} />
-                </div>
-              </div>
-              <div className="space-y-3">
-                <p className="text-xs tracking-widest text-muted-foreground uppercase">
-                  Motorcycle details
-                </p>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <ReviewItem label="Brand" value={form.motoBrand} />
-                  <ReviewItem label="Model" value={form.motoModel} />
-                  <ReviewItem label="Plate number" value={form.plateNumber} />
-                </div>
-              </div>
-            </div>
-            <div className="mt-6 space-y-3">
-              <p className="text-xs tracking-widest text-muted-foreground uppercase">
-                Appointment schedule
-              </p>
-              <ReviewItem
-                label="Date and time"
-                value={`${formatDateLong(date)} at ${formatTime(startTime)}`}
-              />
-              <ReviewItem
-                label="Avail shop products"
-                value={
-                  form.wantsProducts === null ? "Not selected" : form.wantsProducts ? "Yes" : "No"
-                }
-              />
-              <div className="flex items-start gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
-                <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                <p className="leading-5 text-muted-foreground">
-                  Please arrive 10–15 minutes early for check-in, motorcycle verification, and
-                  service preparation.
+            <div className="min-w-0 space-y-5">
+              <div>
+                <h2 className="font-display text-2xl tracking-wide uppercase sm:text-3xl">
+                  {isReschedule ? "Review your reschedule request" : "Review your booking"}
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Check your details below. You can edit any section before submitting.
                 </p>
               </div>
-            </div>
-            <div className="mt-6">
-              <p className="text-xs tracking-widest text-muted-foreground uppercase">
-                Selected services
-              </p>
-              <ul className="mt-2 divide-y divide-border rounded-lg border border-border/70">
-                {estimatedServices.map((service) => (
-                  <li
-                    key={service.id}
-                    className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 p-3"
-                  >
-                    <div>
-                      <p className="font-medium text-foreground">{service.name}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {service.durationMinutes} min · {servicePricingLabel(service.pricingSource)}
-                      </p>
-                    </div>
-                    <span className="font-medium text-primary">{formatPHP(service.price)}</span>
-                  </li>
-                ))}
-                <li className="flex flex-wrap items-center justify-between gap-3 bg-primary/5 p-3">
-                  <span className="font-medium">Estimated total</span>
-                  <span className="font-display text-xl text-primary">{formatPHP(total)}</span>
-                </li>
-              </ul>
-              <div className="mt-3 flex items-start gap-3 rounded-lg border border-primary/30 bg-primary/5 p-3 text-sm">
-                <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                <div className="space-y-1">
-                  <p className="font-medium text-foreground">
-                    Your estimated total covers the labor/service charge for the selected services
-                    only.
-                  </p>
-                  <p className="leading-5 text-muted-foreground">
-                    Parts &amp; Accessories, replacement parts, tools, materials, or other work
-                    required during service are not included. If anything additional is needed,
-                    we’ll explain the cost and get your approval before applying any extra charge.
-                  </p>
-                </div>
-              </div>
-              {multiDayContinuationAccepted && needsMultiDayContinuationConfirmation && (
-                <p className="mt-2 text-xs text-primary">
-                  The remaining service time will be reserved on the next available shop day.
+
+              {errors.schedule && (
+                <p
+                  role="alert"
+                  className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+                >
+                  <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  {errors.schedule}
                 </p>
               )}
-            </div>
-            <div
-              className={cn(
-                "mt-5 flex items-start gap-3 rounded-md text-sm",
-                errors.terms && "border border-destructive p-3",
-              )}
-            >
-              <Checkbox
-                id="booking-terms"
-                checked={terms}
-                onCheckedChange={(value) => setTerms(value === true)}
-                className="mt-0.5"
-              />
-              <div className="leading-6">
-                <label id="booking-terms-label" htmlFor="booking-terms">
-                  I have read and agree to the{" "}
-                </label>
-                <Dialog>
-                  <DialogTrigger asChild>
-                    <button
-                      type="button"
-                      className="font-bold text-primary underline decoration-primary/70 underline-offset-4 transition-colors hover:text-primary/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
-                    >
-                      Terms and Conditions
-                    </button>
-                  </DialogTrigger>
-                  <DialogContent className="sm:max-w-2xl">
-                    <DialogHeader>
-                      <DialogTitle className="font-display text-2xl uppercase">
-                        Terms and Conditions
-                      </DialogTitle>
-                      <DialogDescription>
-                        Please read the complete booking terms before confirming your appointment.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="max-h-[50vh] overflow-y-auto rounded-lg border border-border/70 bg-card/50 p-4 text-sm leading-6 whitespace-pre-line text-muted-foreground">
-                      {bookingTerms}
-                    </div>
-                    <DialogFooter>
-                      <DialogClose asChild>
-                        <Button type="button" variant="outline">
-                          Close
-                        </Button>
-                      </DialogClose>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-                <span>.</span>
-              </div>
-            </div>
-            <div className="w-full space-y-4 md:w-auto">
-              <TurnstileChallenge resetKey={bookingRequestId} onToken={setTurnstileToken} />
-              <div className="flex flex-col gap-3 sm:flex-row sm:justify-end">
+
+              <div className="flex flex-col gap-4 rounded-xl border border-primary/40 bg-primary/5 p-4 sm:flex-row sm:items-center sm:justify-between sm:p-5">
+                <div className="flex items-start gap-3">
+                  <span className="flex size-11 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                    <CalendarDays className="size-5" aria-hidden="true" />
+                  </span>
+                  <div>
+                    <p className="text-xs tracking-widest text-muted-foreground uppercase">
+                      {isReschedule ? "Requested new schedule" : "Appointment"}
+                    </p>
+                    <p className="font-display text-xl uppercase sm:text-2xl">
+                      {date ? formatDateLong(date) : "Date not selected"}
+                    </p>
+                    <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                      <Clock className="size-4" aria-hidden="true" />
+                      {startTime ? formatTime(startTime) : "Time not selected"}
+                    </p>
+                  </div>
+                </div>
                 <Button
                   type="button"
                   variant="outline"
-                  onClick={returnToBookingDetails}
-                  className="w-full sm:w-auto"
+                  size="sm"
+                  onClick={() => editBookingSection("schedule")}
+                  className="self-start sm:self-center"
                 >
-                  Back to details
+                  <Pencil aria-hidden="true" /> Change date and time
                 </Button>
+              </div>
+              {multiDayContinuationAccepted && needsMultiDayContinuationConfirmation && (
+                <p className="-mt-2 flex items-start gap-2 text-xs text-primary">
+                  <Info className="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+                  The remaining service time will be reserved on the next available shop day.
+                </p>
+              )}
+
+              <div className="grid gap-5 md:grid-cols-2">
+                <ReviewGroup
+                  title="Personal information"
+                  {...(isReschedule
+                    ? {}
+                    : {
+                        onEdit: () => editBookingSection("lastName"),
+                        editLabel: "Edit personal information",
+                      })}
+                >
+                  <dl className="space-y-3">
+                    <ReviewItem label="Name" value={customerFullName} />
+                    <ReviewItem label="Mobile number" value={form.phone} />
+                    {form.email && <ReviewItem label="Email address" value={form.email} />}
+                  </dl>
+                </ReviewGroup>
+                <ReviewGroup
+                  title="Motorcycle"
+                  {...(isReschedule
+                    ? {}
+                    : {
+                        onEdit: () => editBookingSection("motoBrand"),
+                        editLabel: "Edit motorcycle details",
+                      })}
+                >
+                  <dl className="space-y-3">
+                    <ReviewItem
+                      label="Brand and model"
+                      value={[form.motoBrand, selectedModelLabel].filter(Boolean).join(" ")}
+                    />
+                    <ReviewItem label="Plate number" value={form.plateNumber} />
+                  </dl>
+                </ReviewGroup>
+              </div>
+
+              <ReviewGroup
+                title="Services"
+                {...(isReschedule
+                  ? {}
+                  : { onEdit: () => editBookingSection("services"), editLabel: "Edit services" })}
+              >
+                <ul className="divide-y divide-border/70">
+                  {estimatedServices.map((service) => (
+                    <li
+                      key={service.id}
+                      className="flex flex-wrap items-center justify-between gap-x-4 gap-y-1 py-3 first:pt-0"
+                    >
+                      <div>
+                        <p className="font-medium text-foreground">{service.name}</p>
+                        <p className="text-xs text-muted-foreground">
+                          {service.durationMinutes} min ·{" "}
+                          {servicePricingLabel(service.pricingSource)}
+                        </p>
+                      </div>
+                      <span className="font-medium text-primary">{formatPHP(service.price)}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="flex items-baseline justify-between gap-3 border-t border-border/70 pt-3">
+                  <span className="font-medium">Estimated total</span>
+                  <span className="font-display text-2xl text-primary">{formatPHP(total)}</span>
+                </div>
+                <dl className="mt-4 border-t border-border/70 pt-3">
+                  <ReviewItem label="Shop products" value={productChoiceLabel} />
+                </dl>
+              </ReviewGroup>
+
+              {isReschedule && (
+                <ReviewGroup
+                  title="Reason for rescheduling"
+                  onEdit={() => editBookingSection("rescheduleReason")}
+                  editLabel="Edit reason for rescheduling"
+                >
+                  <p className="text-sm break-words whitespace-pre-line">{rescheduleReason}</p>
+                </ReviewGroup>
+              )}
+
+              <div className="rounded-xl border border-border/70 bg-muted/30 p-4 text-sm sm:p-5">
+                <p className="flex items-center gap-2 font-medium text-foreground">
+                  <Info className="size-4 text-primary" aria-hidden="true" /> Before you submit
+                </p>
+                <ul className="mt-2 list-disc space-y-1.5 pl-6 leading-5 text-muted-foreground">
+                  <li>
+                    Your estimated total covers the labor/service charge for the selected services
+                    only. Parts &amp; Accessories, replacement parts, tools, materials, or other
+                    work required during service are not included. If anything additional is needed,
+                    we’ll explain the cost and get your approval before applying any extra charge.
+                  </li>
+                  <li>
+                    Please arrive 10–15 minutes early for check-in, motorcycle verification, and
+                    service preparation.
+                  </li>
+                </ul>
+              </div>
+            </div>
+
+            <aside aria-label="Confirm and submit" className="lg:sticky lg:top-28">
+              <div className="space-y-4 rounded-xl border border-border/70 bg-card/60 p-4 shadow-sm sm:p-5">
+                <h2 className="font-display text-xl tracking-wide uppercase">Confirm and submit</h2>
+                <div className="flex items-baseline justify-between gap-3 border-b border-border/70 pb-4">
+                  <span className="text-sm font-medium">Estimated total</span>
+                  <span className="font-display text-2xl text-primary">{formatPHP(total)}</span>
+                </div>
+                <div>
+                  <TermsAgreement
+                    id="booking-terms"
+                    checked={terms}
+                    onCheckedChange={(value) => {
+                      setTerms(value);
+                      clearErrors("terms");
+                    }}
+                    terms={bookingTerms}
+                    invalid={Boolean(errors.terms)}
+                  />
+                  <FieldError message={errors.terms} className="mt-2" />
+                </div>
+                <TurnstileChallenge
+                  resetKey={bookingRequestId}
+                  onToken={setTurnstileToken}
+                  label={
+                    isReschedule
+                      ? "Complete the security check to submit your reschedule request."
+                      : "Complete the security check to submit your booking."
+                  }
+                />
                 <Button
                   type="submit"
                   size="lg"
                   disabled={
-                    !bookingSubmissionOpen ||
-                    !rescheduleReady ||
-                    mutation.isPending ||
-                    (turnstileEnabled && !turnstileToken)
+                    !rescheduleReady || mutation.isPending || (turnstileEnabled && !turnstileToken)
                   }
-                  className="w-full font-display tracking-wide uppercase sm:w-auto"
+                  className="w-full font-display tracking-wide uppercase"
                 >
-                  {mutation.isPending && <Loader2 className="animate-spin" />}{" "}
-                  {isReschedule ? "Submit reschedule request" : "Book Now"}
+                  {mutation.isPending ? (
+                    <Loader2 className="animate-spin" aria-hidden="true" />
+                  ) : (
+                    <Check aria-hidden="true" />
+                  )}
+                  {mutation.isPending
+                    ? "Submitting request…"
+                    : isReschedule
+                      ? "Submit reschedule request"
+                      : "Submit booking request"}
                 </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="lg"
+                  onClick={returnToBookingDetails}
+                  className="w-full"
+                >
+                  <ArrowLeft aria-hidden="true" /> Back to booking details
+                </Button>
+                <p className="text-center text-xs text-muted-foreground">
+                  Your request stays pending until the shop confirms it.
+                </p>
               </div>
-            </div>
-          </Section>
+            </aside>
+          </div>
         </form>
         {!isReschedule && (
           <>
@@ -1563,17 +1837,18 @@ function BookPage() {
                     Multi-day service
                   </AlertDialogTitle>
                   <AlertDialogDescription>
-                    The services you selected may require more than one day to complete. Do you want
-                    to continue?
+                    The services you selected may require more than one day to complete. If you
+                    continue, the remaining service time will be reserved on the next available shop
+                    day.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
-                  <AlertDialogCancel>Close</AlertDialogCancel>
+                  <AlertDialogCancel>Adjust selection</AlertDialogCancel>
                   <AlertDialogAction
                     onClick={continueWithMultiDayBooking}
                     className="bg-primary text-primary-foreground hover:bg-primary/90"
                   >
-                    Continue
+                    Continue to review
                   </AlertDialogAction>
                 </AlertDialogFooter>
               </AlertDialogContent>
@@ -1590,14 +1865,16 @@ function BookPage() {
                   <DialogDescription>{duplicateBookingMessage}</DialogDescription>
                 </DialogHeader>
                 <p className="text-sm text-muted-foreground">
-                  Choose a different available date and time before confirming your booking.
+                  Choose a different available date for these services, or view your existing
+                  appointment on the My Appointment page.
                 </p>
-                <DialogFooter>
-                  <DialogClose asChild>
-                    <Button type="button" variant="outline" onClick={dismissDuplicateBookingDialog}>
-                      Close
-                    </Button>
-                  </DialogClose>
+                <DialogFooter className="gap-2">
+                  <Button asChild variant="outline">
+                    <Link to="/my-appointment">Go to My Appointment</Link>
+                  </Button>
+                  <Button type="button" onClick={chooseAnotherDate}>
+                    Choose another date
+                  </Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
@@ -1609,11 +1886,168 @@ function BookPage() {
   );
 }
 
+function BookingSteps({
+  current,
+  onSelectDetails,
+}: {
+  current: number;
+  onSelectDetails: () => void;
+}) {
+  return (
+    <ol aria-label="Booking progress" className="flex w-full items-center gap-3 md:w-auto">
+      {BOOKING_PAGES.map((page, index) => {
+        const complete = index < current;
+        const isCurrent = index === current;
+        const marker = (
+          <>
+            <span
+              className={cn(
+                "flex size-7 shrink-0 items-center justify-center rounded-full border font-display text-sm",
+                complete && "border-primary bg-primary text-primary-foreground",
+                isCurrent && "border-primary bg-primary/10 text-primary",
+                !complete && !isCurrent && "border-border text-muted-foreground",
+              )}
+            >
+              {complete ? <Check className="size-4" aria-hidden="true" /> : index + 1}
+            </span>
+            <span
+              className={cn(
+                "text-sm whitespace-nowrap",
+                isCurrent ? "font-medium text-foreground" : "text-muted-foreground",
+              )}
+            >
+              {page}
+              {complete && <span className="sr-only"> (completed)</span>}
+            </span>
+          </>
+        );
+        return (
+          <li
+            key={page}
+            className={cn("flex items-center gap-3", index > 0 && "flex-1 md:flex-none")}
+          >
+            {index > 0 && (
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "h-px min-w-6 flex-1 md:w-10 md:flex-none",
+                  complete || isCurrent ? "bg-primary" : "bg-border",
+                )}
+              />
+            )}
+            {complete ? (
+              <button
+                type="button"
+                onClick={onSelectDetails}
+                className="flex items-center gap-2 rounded-md hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              >
+                {marker}
+              </button>
+            ) : (
+              <span
+                aria-current={isCurrent ? "step" : undefined}
+                className="flex items-center gap-2"
+              >
+                {marker}
+              </span>
+            )}
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+function ScheduleHint({ children, loading }: { children: React.ReactNode; loading?: boolean }) {
+  return (
+    <p className="flex items-center gap-2 rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+      {loading ? (
+        <Loader2 className="size-4 shrink-0 animate-spin" aria-hidden="true" />
+      ) : (
+        <Info className="size-4 shrink-0 text-primary" aria-hidden="true" />
+      )}
+      {children}
+    </p>
+  );
+}
+
+function SummaryRow({
+  label,
+  done,
+  children,
+}: {
+  label: string;
+  done: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="flex gap-3">
+      <span
+        aria-hidden="true"
+        className={cn(
+          "mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-full",
+          done ? "bg-primary text-primary-foreground" : "border border-border",
+        )}
+      >
+        {done && <Check className="size-3" />}
+      </span>
+      <div className="min-w-0 flex-1">
+        <p className="text-xs tracking-widest text-muted-foreground uppercase">{label}</p>
+        <div className="mt-0.5 break-words text-foreground">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function SuccessDetail({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="bg-card px-5 py-4 text-center sm:text-left">
+      <dt className="text-xs tracking-widest text-muted-foreground uppercase">{label}</dt>
+      <dd className="mt-1 text-sm font-medium text-foreground">{children}</dd>
+    </div>
+  );
+}
+
+function ReviewGroup({
+  title,
+  onEdit,
+  editLabel,
+  children,
+}: {
+  title: string;
+  onEdit?: () => void;
+  editLabel?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="rounded-xl border border-border/70 bg-card/40 p-4 sm:p-5">
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <h3 className="font-sans text-xs font-semibold tracking-widest text-muted-foreground uppercase">
+          {title}
+        </h3>
+        {onEdit && (
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={onEdit}
+            aria-label={editLabel}
+            className="-my-1 h-8 px-2 text-primary md:h-8"
+          >
+            <Pencil aria-hidden="true" /> Edit
+          </Button>
+        )}
+      </div>
+      {children}
+    </section>
+  );
+}
+
 function ReviewItem({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-border/70 bg-muted/20 p-3">
-      <p className="text-xs tracking-widest text-muted-foreground uppercase">{label}</p>
-      <p className="mt-1 break-words text-foreground">{value}</p>
+    <div>
+      <dt className="text-xs text-muted-foreground">{label}</dt>
+      <dd className="mt-0.5 font-medium break-words text-foreground">{value || "—"}</dd>
     </div>
   );
 }
@@ -1624,19 +2058,57 @@ function servicePricingLabel(source: "small_bike" | "large_bike") {
 }
 
 function Section({
+  id,
+  step,
   title,
+  description,
+  complete,
   error,
   className,
   children,
 }: {
+  id?: string;
+  step?: number;
   title: string;
+  description?: string;
+  complete?: boolean;
   error?: string | undefined;
   className?: string;
   children: React.ReactNode;
 }) {
+  const titleId = useId();
   return (
-    <section className={cn("rounded-xl border border-border/70 bg-card/40 p-4 sm:p-6", className)}>
-      <h2 className="font-display mb-4 text-xl tracking-wide uppercase">{title}</h2>
+    <section
+      id={id}
+      tabIndex={id ? -1 : undefined}
+      aria-labelledby={titleId}
+      className={cn(
+        "rounded-xl border border-border/70 bg-card/40 p-4 focus:outline-none sm:p-6",
+        className,
+      )}
+    >
+      <div className="mb-5 flex items-start gap-3">
+        {step !== undefined && (
+          <span
+            aria-hidden="true"
+            className={cn(
+              "flex size-8 shrink-0 items-center justify-center rounded-full font-display text-base transition-colors",
+              complete
+                ? "bg-primary text-primary-foreground"
+                : "bg-primary/10 text-primary ring-1 ring-primary/30",
+            )}
+          >
+            {complete ? <Check className="size-4" /> : step}
+          </span>
+        )}
+        <div className="min-w-0">
+          <h2 id={titleId} className="font-display text-xl tracking-wide uppercase">
+            {title}
+            {complete && <span className="sr-only"> (complete)</span>}
+          </h2>
+          {description && <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>}
+        </div>
+      </div>
       {children}
       <FieldError message={error} className="mt-3" />
     </section>
@@ -1644,11 +2116,15 @@ function Section({
 }
 
 function Field({
+  id,
   label,
+  hint,
   error,
   children,
 }: {
+  id: string;
   label: string;
+  hint?: string;
   error?: string | undefined;
   children: React.ReactNode;
 }) {
@@ -1657,9 +2133,15 @@ function Field({
       data-invalid={!!error}
       className="space-y-1.5 data-[invalid=true]:[&_[role=combobox]]:border-destructive data-[invalid=true]:[&_input]:border-destructive data-[invalid=true]:[&_textarea]:border-destructive"
     >
-      <Label>{label}</Label>
+      <Label htmlFor={id}>{label}</Label>
       {children}
-      <FieldError message={error} />
+      {error ? (
+        <FieldError message={error} />
+      ) : hint ? (
+        <p id={`${id}-hint`} className="text-xs text-muted-foreground">
+          {hint}
+        </p>
+      ) : null}
     </div>
   );
 }

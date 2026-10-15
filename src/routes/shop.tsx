@@ -89,7 +89,7 @@ function ShopPage() {
 
         <div className="mt-8 flex flex-wrap items-center justify-between gap-4">
           <Tabs value={tab} onValueChange={setTab}>
-            <TabsList className="!overflow-visible">
+            <TabsList>
               {tabs.map((t) => (
                 <TabsTrigger key={t.value} value={t.value} className="font-display uppercase">
                   {t.label}

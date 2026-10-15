@@ -8,7 +8,6 @@ import {
   CalendarRange,
   ChevronDown,
   ChevronRight,
-  Gauge,
   PhilippinePeso,
   TrendingDown,
   TrendingUp,
@@ -19,6 +18,8 @@ import type { DateRange } from "react-day-picker";
 import { useMemo, useState } from "react";
 import { Bar, BarChart, CartesianGrid, Cell, Pie, PieChart, XAxis, YAxis } from "recharts";
 
+import { AdminPage, InlineAlert } from "@/components/admin/data-list";
+import { PageHeader } from "@/components/admin/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
@@ -100,7 +101,8 @@ function Dashboard() {
       const { data: appointments, error } = await supabase
         .from("appointments")
         .select("*")
-        .eq("is_archived", false)
+        // Completed appointments always count, as in the financial report.
+        .or("is_archived.eq.false,status.eq.completed")
         .order("appointment_date")
         .order("start_time");
       if (error) throw error;
@@ -263,35 +265,27 @@ function Dashboard() {
   const bookingStatusTotal = bookingStatuses.reduce((sum, status) => sum + status.value, 0);
 
   return (
-    <div>
-      <header className="mb-6 flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
-          <span className="grid size-11 shrink-0 place-items-center rounded-xl border border-primary/25 bg-primary/10 text-primary">
-            <Gauge className="size-5" aria-hidden="true" />
-          </span>
-          <div>
-            <h1 className="font-display text-2xl tracking-wide uppercase md:text-3xl">Overview</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Here&apos;s what&apos;s happening with your shop
-              {dashboardPeriod === "today" ? " today." : " for the selected period."}
-            </p>
-          </div>
-        </div>
-        <OverviewPeriodFilter
-          period={dashboardPeriod}
-          customDateRange={dashboardCustomDateRange}
-          onPeriodChange={setDashboardPeriod}
-          onCustomDateRangeChange={setDashboardCustomDateRange}
-          className="w-full justify-start sm:w-auto"
-        />
-      </header>
+    <AdminPage>
+      <PageHeader
+        title="Overview"
+        description={`Here's what's happening with your shop ${
+          dashboardPeriod === "today" ? "today." : "for the selected period."
+        }`}
+        action={
+          <OverviewPeriodFilter
+            period={dashboardPeriod}
+            customDateRange={dashboardCustomDateRange}
+            onPeriodChange={setDashboardPeriod}
+            onCustomDateRangeChange={setDashboardCustomDateRange}
+            className="w-full justify-start sm:w-auto"
+          />
+        }
+      />
 
       {data.isError && (
-        <Card className="mb-5 border-destructive/40 bg-card/60">
-          <CardContent className="p-4 text-sm text-destructive">
-            Could not load the dashboard data. Please refresh the page and try again.
-          </CardContent>
-        </Card>
+        <InlineAlert>
+          Could not load the dashboard data. Please refresh the page and try again.
+        </InlineAlert>
       )}
 
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -473,7 +467,7 @@ function Dashboard() {
           upcoming
         />
       </div>
-    </div>
+    </AdminPage>
   );
 }
 

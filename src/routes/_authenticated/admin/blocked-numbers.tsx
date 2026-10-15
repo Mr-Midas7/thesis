@@ -1,12 +1,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { Archive, Plus } from "lucide-react";
+import { Archive, Ban, Plus } from "lucide-react";
 import { useState } from "react";
 
-import { PageHeader } from "@/components/admin/page-header";
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
+import {
+  AdminPage,
+  DataList,
+  InlineAlert,
+  ListCard,
+  ListEmpty,
+  ListToolbar,
+  ResetFiltersButton,
+  ToolbarSearch,
+} from "@/components/admin/data-list";
+import { PageHeader } from "@/components/admin/page-header";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import {
   Dialog,
@@ -18,16 +27,9 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
+import { formatShortDate } from "@/lib/admin-date-range";
 import {
   PHONE_VALIDATION_MESSAGE,
   phoneSchema,
@@ -56,6 +58,7 @@ function BlockedNumbersPage() {
   const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
   const [phoneError, setPhoneError] = useState("");
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
 
   const blocked = useQuery({
     queryKey: ["blocked-numbers"],
@@ -89,7 +92,7 @@ function BlockedNumbersPage() {
           .update({ is_archived: false, reason: reason.trim() || null })
           .eq("id", existing.data.id);
         if (error) throw error;
-        return "restored" as const;
+        return;
       }
 
       const { error } = await supabase.from("blocked_numbers").insert({
@@ -97,9 +100,8 @@ function BlockedNumbersPage() {
         reason: reason.trim() || null,
       });
       if (error) throw error;
-      return "blocked" as const;
     },
-    onSuccess: (result) => {
+    onSuccess: () => {
       setPhone("");
       setReason("");
       setOpen(false);
@@ -150,96 +152,128 @@ function BlockedNumbersPage() {
     add.mutate(normalizedPhone);
   };
 
+  const searchTerm = search.trim().toLocaleLowerCase();
+  const searchDigits = searchTerm.replace(/\D/g, "");
+  const filtered = (blocked.data ?? []).filter(
+    (b) =>
+      !searchTerm ||
+      (searchDigits && toLocalPhilippineMobile(b.phone).includes(searchDigits)) ||
+      (b.reason ?? "").toLocaleLowerCase().includes(searchTerm),
+  );
+
+  const openBlockDialog = () => {
+    setPhone("");
+    setReason("");
+    setPhoneError("");
+    setOpen(true);
+  };
+
   return (
-    <div>
+    <AdminPage>
       <PageHeader
         title="Blocked Customers"
         description="Phone numbers blocked from booking online."
         action={
-          <Button
-            className="font-display uppercase"
-            onClick={() => {
-              setPhone("");
-              setReason("");
-              setPhoneError("");
-              setOpen(true);
-            }}
-          >
+          <Button className="font-display uppercase" onClick={openBlockDialog}>
             <Plus /> Block number
           </Button>
         }
       />
-      {archiveError && (
-        <p role="alert" className="mb-4 text-sm text-destructive">
-          {archiveError}
-        </p>
-      )}
+      {archiveError && <InlineAlert>{archiveError}</InlineAlert>}
 
-      <Card className="max-w-5xl border-border/70 bg-card/60">
-        <CardContent className="overflow-x-auto p-0">
-          <Table className="admin-data-table admin-balanced-table">
-            <colgroup>
-              <col style={{ width: "25%" }} />
-              <col style={{ width: "20%" }} />
-              <col style={{ width: "20%" }} />
-              <col style={{ width: "25%" }} />
-            </colgroup>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Phone</TableHead>
-                <TableHead>Reason</TableHead>
-                <TableHead className="text-center">Blocked on</TableHead>
-                <TableHead className="text-center">Action</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {blocked.data?.map((b) => (
-                <TableRow key={b.id}>
-                  <TableCell data-label="Phone" className="font-mono text-sm">
-                    {toLocalPhilippineMobile(b.phone)}
-                  </TableCell>
-                  <TableCell
-                    data-label="Reason"
-                    className="break-words text-sm text-muted-foreground"
-                  >
-                    {b.reason || "—"}
-                  </TableCell>
-                  <TableCell
-                    data-label="Blocked on"
-                    className="whitespace-nowrap text-center text-xs text-muted-foreground"
-                  >
-                    {new Date(b.created_at).toLocaleDateString("en-PH", {
-                      year: "numeric",
-                      month: "short",
-                      day: "numeric",
-                    })}
-                  </TableCell>
-                  <TableCell data-label="Action" className="text-center">
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => setArchiveTarget(b.id)}
-                      disabled={archive.isPending}
-                    >
-                      <Archive className="h-4 w-4" /> Archive
-                    </Button>
-                  </TableCell>
-                </TableRow>
-              ))}
-              {blocked.data?.length === 0 && !blocked.isLoading && (
-                <TableRow>
-                  <TableCell
-                    colSpan={4}
-                    className="py-10 text-center text-sm text-muted-foreground"
-                  >
-                    No blocked numbers.
-                  </TableCell>
-                </TableRow>
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+      <ListToolbar
+        summary={
+          blocked.data && `Showing ${filtered.length} of ${blocked.data.length} blocked numbers`
+        }
+      >
+        <ToolbarSearch
+          value={search}
+          onChange={setSearch}
+          placeholder="Search number or reason"
+          label="Search blocked numbers by phone number or reason"
+        />
+      </ListToolbar>
+
+      <ListCard>
+        <DataList
+          label="Blocked numbers"
+          rows={filtered}
+          rowKey={(b) => b.id}
+          loading={blocked.isLoading}
+          error={
+            blocked.isError
+              ? {
+                  message: "Could not load blocked numbers.",
+                  onRetry: () => void blocked.refetch(),
+                }
+              : null
+          }
+          empty={
+            <ListEmpty
+              icon={Ban}
+              title={search ? "No blocked numbers match your search." : "No blocked numbers."}
+              description={
+                search
+                  ? "Try a different number or reason."
+                  : "Numbers you block can't book online and will need to call the shop."
+              }
+              action={
+                search ? (
+                  <ResetFiltersButton onClick={() => setSearch("")} />
+                ) : (
+                  <Button size="sm" onClick={openBlockDialog}>
+                    <Plus /> Block number
+                  </Button>
+                )
+              }
+            />
+          }
+          // Fixed-width columns first and the free-text reason last, so the
+          // space between columns stays even however long a reason is.
+          columns={[
+            {
+              key: "phone",
+              header: "Phone",
+              card: "title",
+              className: "w-40",
+              cell: (b) => (
+                <span className="font-mono text-sm font-medium">
+                  {toLocalPhilippineMobile(b.phone)}
+                </span>
+              ),
+            },
+            {
+              key: "created",
+              header: "Blocked on",
+              className: "w-36",
+              cell: (b) => <span className="text-sm">{formatShortDate(b.created_at)}</span>,
+            },
+            {
+              key: "reason",
+              header: "Reason",
+              card: "wide",
+              className: "pr-8",
+              cell: (b) => (
+                <span className="text-sm text-muted-foreground">
+                  {b.reason || "No reason given"}
+                </span>
+              ),
+            },
+          ]}
+          actionsClassName="w-32"
+          actions={(b) => (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setArchiveTarget(b.id)}
+              disabled={archive.isPending}
+              aria-label={`Archive blocked number ${toLocalPhilippineMobile(b.phone)}`}
+            >
+              <Archive /> Archive
+            </Button>
+          )}
+        />
+      </ListCard>
 
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent>
@@ -297,6 +331,6 @@ function BlockedNumbersPage() {
           setArchiveTarget(null);
         }}
       />
-    </div>
+    </AdminPage>
   );
 }

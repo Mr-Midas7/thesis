@@ -8,6 +8,7 @@ import {
   CalendarDays,
   CalendarX,
   ClipboardList,
+  Clock,
   History,
   Home,
   LayoutDashboard,
@@ -23,6 +24,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import logo from "@/assets/logo-shp.png.asset.json";
 import { ThemeToggle } from "@/components/site/theme-toggle";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -93,7 +103,10 @@ const groups = [
   },
 ];
 
-const ADMIN_INACTIVITY_TIMEOUT_MS = 120_000;
+const ADMIN_INACTIVITY_TIMEOUT_MINUTES = 15;
+const ADMIN_INACTIVITY_TIMEOUT_MS = ADMIN_INACTIVITY_TIMEOUT_MINUTES * 60_000;
+const ADMIN_INACTIVITY_WARNING_MS = 60_000;
+const ADMIN_INACTIVITY_CHECK_INTERVAL_MS = 1_000;
 const NOTIFICATION_POLL_INTERVAL_MS = 30_000;
 const ADMIN_SESSION_HEARTBEAT_INTERVAL_MS = 30_000;
 
@@ -101,10 +114,15 @@ function AdminLayout() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const path = useRouterState({ select: (s) => s.location.pathname });
-  const inactivityTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastActivityAtRef = useRef(Date.now());
+  // Mirrors inactivityDeadline for the window listeners, which must not
+  // re-subscribe every time the warning opens or closes.
+  const inactivityWarningOpenRef = useRef(false);
+  const inactivitySignOutStartedRef = useRef(false);
   const signingOutRef = useRef(false);
   const [isSigningOut, setIsSigningOut] = useState(false);
   const [signOutError, setSignOutError] = useState<string | null>(null);
+  const [inactivityDeadline, setInactivityDeadline] = useState<number | null>(null);
 
   const role = useQuery({
     queryKey: ["my-role"],
@@ -140,19 +158,11 @@ function AdminLayout() {
     };
   }, [queryClient]);
 
-  const clearInactivityTimer = useCallback(() => {
-    if (inactivityTimerRef.current !== null) {
-      clearTimeout(inactivityTimerRef.current);
-      inactivityTimerRef.current = null;
-    }
-  }, []);
-
   const signOut = useCallback(
     async (reason: "manual" | "inactivity" | "public") => {
       if (signingOutRef.current) return;
       signingOutRef.current = true;
       setIsSigningOut(true);
-      clearInactivityTimer();
       setSignOutError(null);
 
       void recordAdminActivityEvent({
@@ -161,7 +171,7 @@ function AdminLayout() {
         targetLabel: "Admin console",
         summary:
           reason === "inactivity"
-            ? "Administrator was automatically signed out after 2 minutes of inactivity."
+            ? `Administrator was automatically signed out after ${ADMIN_INACTIVITY_TIMEOUT_MINUTES} minutes of inactivity.`
             : reason === "public"
               ? "Administrator signed out before visiting the public site."
               : "Administrator signed out of the admin console.",
@@ -174,7 +184,8 @@ function AdminLayout() {
         // If the request cannot complete (for example, the browser is offline),
         // the short server-side lease expires automatically.
         const { error: releaseError } = await supabase.rpc("release_admin_session");
-        if (releaseError) console.warn("Could not release the administrator session:", releaseError);
+        if (releaseError)
+          console.warn("Could not release the administrator session:", releaseError);
 
         const { error } = await supabase.auth.signOut({ scope: "local" });
         if (error) throw error;
@@ -195,8 +206,17 @@ function AdminLayout() {
         setIsSigningOut(false);
       }
     },
-    [clearInactivityTimer, navigate, queryClient],
+    [navigate, queryClient],
   );
+
+  const staySignedIn = useCallback(() => {
+    if (signingOutRef.current) return;
+    lastActivityAtRef.current = Date.now();
+    inactivityWarningOpenRef.current = false;
+    inactivitySignOutStartedRef.current = false;
+    setInactivityDeadline(null);
+    setSignOutError(null);
+  }, []);
 
   const isAdmin = (role.data ?? []).includes("admin");
 
@@ -224,7 +244,10 @@ function AdminLayout() {
     };
 
     void renewSession();
-    const intervalId = window.setInterval(() => void renewSession(), ADMIN_SESSION_HEARTBEAT_INTERVAL_MS);
+    const intervalId = window.setInterval(
+      () => void renewSession(),
+      ADMIN_SESSION_HEARTBEAT_INTERVAL_MS,
+    );
     return () => {
       isMounted = false;
       window.clearInterval(intervalId);
@@ -265,27 +288,54 @@ function AdminLayout() {
   useEffect(() => {
     if (!isAdmin) return;
 
-    const resetInactivityTimer = () => {
-      if (signingOutRef.current) return;
-      clearInactivityTimer();
-      inactivityTimerRef.current = setTimeout(() => {
-        void signOut("inactivity");
-      }, ADMIN_INACTIVITY_TIMEOUT_MS);
+    lastActivityAtRef.current = Date.now();
+    inactivityWarningOpenRef.current = false;
+    inactivitySignOutStartedRef.current = false;
+
+    const recordActivity = () => {
+      // Once the warning is showing, only an explicit choice keeps the session,
+      // so a stray mouse movement cannot dismiss it unseen.
+      if (inactivityWarningOpenRef.current || signingOutRef.current) return;
+      lastActivityAtRef.current = Date.now();
     };
-    const activityEvents = ["mousemove", "mousedown", "keydown", "scroll", "touchstart"] as const;
 
-    resetInactivityTimer();
-    for (const eventName of activityEvents) {
-      window.addEventListener(eventName, resetInactivityTimer, { passive: true });
-    }
-
-    return () => {
-      clearInactivityTimer();
-      for (const eventName of activityEvents) {
-        window.removeEventListener(eventName, resetInactivityTimer);
+    // Compare timestamps instead of relying on one long timer: browsers delay
+    // timers in background tabs, and the countdown must stay accurate when the
+    // administrator returns to the tab.
+    const checkInactivity = () => {
+      if (signingOutRef.current) return;
+      const deadline = lastActivityAtRef.current + ADMIN_INACTIVITY_TIMEOUT_MS;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        // Try once per timeout. If sign-out fails, the warning stays open with
+        // the error so the administrator can retry or keep working.
+        if (inactivitySignOutStartedRef.current) return;
+        inactivitySignOutStartedRef.current = true;
+        inactivityWarningOpenRef.current = true;
+        setInactivityDeadline(deadline);
+        void signOut("inactivity");
+      } else if (remaining <= ADMIN_INACTIVITY_WARNING_MS && !inactivityWarningOpenRef.current) {
+        inactivityWarningOpenRef.current = true;
+        setInactivityDeadline(deadline);
       }
     };
-  }, [clearInactivityTimer, isAdmin, signOut]);
+
+    const activityEvents = ["mousemove", "mousedown", "keydown", "scroll", "touchstart"] as const;
+    for (const eventName of activityEvents) {
+      // Capture also sees scrolling inside dialogs and panels, which does not bubble.
+      window.addEventListener(eventName, recordActivity, { capture: true, passive: true });
+    }
+    document.addEventListener("visibilitychange", checkInactivity);
+    const intervalId = window.setInterval(checkInactivity, ADMIN_INACTIVITY_CHECK_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener("visibilitychange", checkInactivity);
+      for (const eventName of activityEvents) {
+        window.removeEventListener(eventName, recordActivity, { capture: true });
+      }
+    };
+  }, [isAdmin, signOut]);
 
   return (
     <SidebarProvider>
@@ -402,6 +452,84 @@ function AdminLayout() {
           </main>
         </div>
       </div>
+      <InactivityWarningDialog
+        deadline={inactivityDeadline}
+        isSigningOut={isSigningOut}
+        error={signOutError}
+        onStay={staySignedIn}
+        onSignOut={() => void signOut("manual")}
+      />
     </SidebarProvider>
+  );
+}
+
+function InactivityWarningDialog({
+  deadline,
+  isSigningOut,
+  error,
+  onStay,
+  onSignOut,
+}: {
+  deadline: number | null;
+  isSigningOut: boolean;
+  error: string | null;
+  onStay: () => void;
+  onSignOut: () => void;
+}) {
+  const stayButtonRef = useRef<HTMLButtonElement>(null);
+  const [now, setNow] = useState(() => Date.now());
+
+  // The countdown ticks here so the admin page behind the dialog does not
+  // re-render every second.
+  useEffect(() => {
+    if (deadline === null) return;
+    setNow(Date.now());
+    const intervalId = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(intervalId);
+  }, [deadline]);
+
+  const secondsLeft = deadline === null ? 0 : Math.max(0, Math.ceil((deadline - now) / 1_000));
+
+  return (
+    <AlertDialog
+      open={deadline !== null}
+      onOpenChange={(open) => {
+        if (!open && !isSigningOut) onStay();
+      }}
+    >
+      <AlertDialogContent
+        className="sm:max-w-md"
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          stayButtonRef.current?.focus();
+        }}
+      >
+        <AlertDialogHeader>
+          <AlertDialogTitle className="flex items-center justify-center gap-2 font-display uppercase sm:justify-start">
+            <Clock className="h-5 w-5 text-primary" aria-hidden="true" /> Stay signed in?
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            {isSigningOut
+              ? "Signing you out…"
+              : secondsLeft > 0
+                ? `You haven't used the admin console for a while. For your security, you'll be signed out in ${secondsLeft} ${secondsLeft === 1 ? "second" : "seconds"}, and any unsaved changes will be lost.`
+                : "Your session timed out because of inactivity."}
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {error && (
+          <p role="alert" className="text-sm text-destructive">
+            {error}
+          </p>
+        )}
+        <AlertDialogFooter>
+          <Button variant="outline" onClick={onSignOut} disabled={isSigningOut}>
+            <LogOut /> Sign out now
+          </Button>
+          <AlertDialogAction ref={stayButtonRef} onClick={onStay} disabled={isSigningOut}>
+            Stay signed in
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   );
 }

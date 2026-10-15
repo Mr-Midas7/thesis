@@ -9,23 +9,22 @@ import {
   buildPublicAvailability,
   evaluateCrewAvailability,
   isActiveReservationStatus,
+  pickLeastBusyCrew,
   planContinuationSegments as planContinuationSegmentsFromAvailability,
+  type Assignment,
 } from "./availability";
 import {
   addDays,
-  bookingSubmissionClosedMessage,
   buildBookingTimeSlots,
   DEFAULT_BOOKING_HOURS,
   decodeBlockReason,
   earliestBookableDate,
-  formatDateLong,
   formatTime,
   NAME_PART_PATTERN,
   NAME_PART_VALIDATION_MESSAGE,
   bookingDurationForFirstDay,
   bookingDurationOverflowMinutes,
   isBookingStartTime,
-  isBookingSubmissionOpen,
   isBookingTimeRangeWithinHours,
   isValidCalendarDate,
   isShopOpenDate,
@@ -36,8 +35,10 @@ import {
   phoneSchema,
   REFERENCE_CODE_PATTERN,
   normalizeReferenceCode,
+  SHOP,
   timeToMinutes,
 } from "./shop";
+import type { AppointmentAction } from "./appointment-verification.server";
 
 type BookingRules = {
   operatingHours: {
@@ -242,6 +243,8 @@ const bookingSchema = z
       .regex(REFERENCE_CODE_PATTERN, "Enter a valid original appointment reference.")
       .optional(),
     rescheduleReason: z.string().trim().max(500).optional().or(z.literal("")),
+    // Issued by verifyAppointmentActionCode; required whenever rescheduleReference is set.
+    verificationToken: z.string().trim().max(100).optional(),
   })
   .superRefine((data, context) => {
     if (!data.rescheduleReference && !data.email) {
@@ -259,8 +262,6 @@ const bookingSchema = z
       });
     }
   });
-
-export type BookingInput = z.infer<typeof bookingSchema>;
 
 function fullName(firstName: string, middleName: string, lastName: string) {
   return [firstName.trim(), middleName.trim(), lastName.trim()].filter(Boolean).join(" ");
@@ -286,6 +287,91 @@ type ContinuationSegment = {
   assignedCrewId: string;
 };
 
+/**
+ * A pending reschedule request holds its requested time until the shop reviews
+ * it, so other customers cannot take it in the meantime.
+ */
+function rescheduleHoldsQuery(supabaseAdmin: SupabaseClient<Database>, from: string, to: string) {
+  return supabaseAdmin
+    .from("appointments")
+    .select("id,pending_reschedule_date,pending_reschedule_start_time,booking_duration_minutes")
+    .not("pending_reschedule_request_id", "is", null)
+    .eq("is_archived", false)
+    .is("rescheduled_to_appointment_id", null)
+    .in("status", ["pending", "confirmed"])
+    .gte("pending_reschedule_date", from)
+    .lte("pending_reschedule_date", to);
+}
+
+/** Holds count as reservations that do not have a mechanic yet. */
+function rescheduleHoldAssignments(
+  rows: Array<{
+    id: string;
+    pending_reschedule_date: string | null;
+    pending_reschedule_start_time: string | null;
+    booking_duration_minutes: number | null;
+  }>,
+  excludedAppointmentId?: string | null,
+): Assignment[] {
+  return rows.flatMap((row) =>
+    row.id !== excludedAppointmentId &&
+    row.pending_reschedule_date &&
+    row.pending_reschedule_start_time
+      ? [
+          {
+            date: row.pending_reschedule_date,
+            startTime: String(row.pending_reschedule_start_time).slice(0, 5),
+            // The same default the database uses for a hold.
+            durationMinutes: row.booking_duration_minutes ?? 75,
+            crewId: null,
+          },
+        ]
+      : [],
+  );
+}
+
+/** Most appointments one mobile number or email address can have coming up at once. */
+const MAX_UPCOMING_APPOINTMENTS = 3;
+
+/**
+ * The reason a new booking is refused for having too many upcoming
+ * appointments, or null. The database enforces the same limit.
+ */
+async function upcomingAppointmentLimitError(
+  supabaseAdmin: SupabaseClient<Database>,
+  phone: string,
+  email: string | undefined,
+): Promise<string | null> {
+  const upcoming = () =>
+    supabaseAdmin
+      .from("appointments")
+      .select("id", { count: "exact", head: true })
+      .eq("is_archived", false)
+      .is("rescheduled_to_appointment_id", null)
+      .in("status", ["pending", "confirmed", "in_progress"])
+      .gte("appointment_date", manilaNow().date);
+  const normalizedEmail = email?.trim().toLowerCase();
+  const [byPhone, byEmail] = await Promise.all([
+    upcoming().eq("phone", phone),
+    normalizedEmail ? upcoming().eq("email", normalizedEmail) : Promise.resolve(null),
+  ]);
+  if (byPhone.error || byEmail?.error) {
+    console.error("[Booking] upcoming appointment count failed", byPhone.error ?? byEmail?.error);
+    return null; // The database limit still applies when the booking is saved.
+  }
+  if ((byPhone.count ?? 0) >= MAX_UPCOMING_APPOINTMENTS) {
+    return upcomingLimitMessage("mobile number");
+  }
+  if ((byEmail?.count ?? 0) >= MAX_UPCOMING_APPOINTMENTS) {
+    return upcomingLimitMessage("email address");
+  }
+  return null;
+}
+
+function upcomingLimitMessage(contact: "mobile number" | "email address") {
+  return `This ${contact} already has ${MAX_UPCOMING_APPOINTMENTS} upcoming appointments, the most allowed at one time. Please cancel one or wait until one is done before booking another.`;
+}
+
 async function planContinuationSegments({
   supabaseAdmin,
   firstDate,
@@ -309,45 +395,49 @@ async function planContinuationSegments({
     };
   }
 
-  const [blocksRes, schedulesRes, crewRes, exceptionsRes, appointmentsRes, continuationsRes] =
-    await Promise.all([
-      supabaseAdmin
-        .from("schedule_blocks")
-        .select("block_date,start_time,reason")
-        .eq("is_active", true)
-        .gte("block_date", from)
-        .lte("block_date", lastAvailableDate),
-      supabaseAdmin
-        .from("crew_schedules")
-        .select("crew_id,schedule_date,start_time,end_time,is_working")
-        .gte("schedule_date", from)
-        .lte("schedule_date", lastAvailableDate),
-      supabaseAdmin
-        .from("crew_members")
-        .select("id")
-        .eq("is_active", true)
-        .eq("is_archived", false),
-      supabaseAdmin
-        .from("crew_availability_exceptions")
-        .select("crew_id,start_date,end_date,start_time,end_time,is_all_day")
-        .lte("start_date", lastAvailableDate)
-        .gte("end_date", from),
-      supabaseAdmin
-        .from("appointments")
-        .select("appointment_date,start_time,assigned_crew_id,booking_duration_minutes")
-        .eq("is_archived", false)
-        .is("rescheduled_to_appointment_id", null)
-        .in("status", ACTIVE_RESERVATION_STATUSES)
-        .gte("appointment_date", from)
-        .lte("appointment_date", lastAvailableDate),
-      supabaseAdmin
-        .from("appointment_continuations")
-        .select(
-          "appointment_id,appointment_date,start_time,assigned_crew_id,booking_duration_minutes",
-        )
-        .gte("appointment_date", from)
-        .lte("appointment_date", lastAvailableDate),
-    ]);
+  const [
+    blocksRes,
+    schedulesRes,
+    crewRes,
+    exceptionsRes,
+    appointmentsRes,
+    continuationsRes,
+    holdsRes,
+  ] = await Promise.all([
+    supabaseAdmin
+      .from("schedule_blocks")
+      .select("block_date,start_time,reason")
+      .eq("is_active", true)
+      .gte("block_date", from)
+      .lte("block_date", lastAvailableDate),
+    supabaseAdmin
+      .from("crew_schedules")
+      .select("crew_id,schedule_date,start_time,end_time,is_working")
+      .gte("schedule_date", from)
+      .lte("schedule_date", lastAvailableDate),
+    supabaseAdmin.from("crew_members").select("id").eq("is_active", true).eq("is_archived", false),
+    supabaseAdmin
+      .from("crew_availability_exceptions")
+      .select("crew_id,start_date,end_date,start_time,end_time,is_all_day")
+      .lte("start_date", lastAvailableDate)
+      .gte("end_date", from),
+    supabaseAdmin
+      .from("appointments")
+      .select("appointment_date,start_time,assigned_crew_id,booking_duration_minutes")
+      .eq("is_archived", false)
+      .is("rescheduled_to_appointment_id", null)
+      .in("status", ACTIVE_RESERVATION_STATUSES)
+      .gte("appointment_date", from)
+      .lte("appointment_date", lastAvailableDate),
+    supabaseAdmin
+      .from("appointment_continuations")
+      .select(
+        "appointment_id,appointment_date,start_time,assigned_crew_id,booking_duration_minutes",
+      )
+      .gte("appointment_date", from)
+      .lte("appointment_date", lastAvailableDate),
+    rescheduleHoldsQuery(supabaseAdmin, from, lastAvailableDate),
+  ]);
 
   if (
     blocksRes.error ||
@@ -355,7 +445,8 @@ async function planContinuationSegments({
     crewRes.error ||
     exceptionsRes.error ||
     appointmentsRes.error ||
-    continuationsRes.error
+    continuationsRes.error ||
+    holdsRes.error
   ) {
     console.error("[Booking continuation] availability lookup failed", {
       blocks: blocksRes.error,
@@ -364,6 +455,7 @@ async function planContinuationSegments({
       exceptions: exceptionsRes.error,
       appointments: appointmentsRes.error,
       continuations: continuationsRes.error,
+      holds: holdsRes.error,
     });
     return {
       ok: false,
@@ -412,6 +504,7 @@ async function planContinuationSegments({
         durationMinutes: continuation.booking_duration_minutes,
         crewId: continuation.assigned_crew_id,
       })),
+    ...rescheduleHoldAssignments(holdsRes.data ?? []),
   ];
   const activeCrewIds = new Set((crewRes.data ?? []).map((crew) => crew.id));
   const segments = planContinuationSegmentsFromAvailability({
@@ -502,7 +595,14 @@ async function hashRateLimitSubject(subject: string) {
 type RateLimitResult = "allowed" | "limited" | "unavailable";
 
 async function checkPublicRequestRateLimit(
-  scope: "availability" | "booking" | "lookup" | "cancellation" | "rescheduling",
+  scope:
+    | "availability"
+    | "booking"
+    | "lookup"
+    | "cancellation"
+    | "rescheduling"
+    | "verification_request"
+    | "verification_verify",
   maxRequests: number,
   windowSeconds: number,
   subject?: string,
@@ -601,25 +701,82 @@ export const getAvailability = createServerFn({ method: "GET" })
       );
     }
 
-    let appointmentsQuery = supabaseAdmin
-      .from("appointments")
-      .select("appointment_date,start_time,assigned_crew_id,booking_duration_minutes")
-      .eq("is_archived", false)
-      .gte("appointment_date", configuredFrom)
-      .lte("appointment_date", configuredTo)
-      .is("rescheduled_to_appointment_id", null)
-      .in("status", ACTIVE_RESERVATION_STATUSES);
-    const continuationsQuery = supabaseAdmin
-      .from("appointment_continuations")
-      .select(
-        "appointment_id,appointment_date,start_time,assigned_crew_id,booking_duration_minutes",
-      )
-      .gte("appointment_date", configuredFrom)
-      .lte("appointment_date", configuredTo);
-    if (data.excludeAppointmentId) {
-      appointmentsQuery = appointmentsQuery.neq("id", data.excludeAppointmentId);
-    }
+    // Builds fresh queries on each call so a failed attempt can be retried.
+    const loadSchedulingData = () => {
+      let appointmentsQuery = supabaseAdmin
+        .from("appointments")
+        .select("appointment_date,start_time,assigned_crew_id,booking_duration_minutes")
+        .eq("is_archived", false)
+        .gte("appointment_date", configuredFrom)
+        .lte("appointment_date", configuredTo)
+        .is("rescheduled_to_appointment_id", null)
+        .in("status", ACTIVE_RESERVATION_STATUSES);
+      if (data.excludeAppointmentId) {
+        appointmentsQuery = appointmentsQuery.neq("id", data.excludeAppointmentId);
+      }
+      return Promise.all([
+        supabaseAdmin
+          .from("time_slots")
+          .select("id,start_time,end_time,capacity")
+          .eq("is_active", true)
+          .order("start_time"),
+        supabaseAdmin
+          .from("schedule_blocks")
+          .select("block_date,start_time,reason")
+          .eq("is_active", true)
+          .gte("block_date", configuredFrom)
+          .lte("block_date", configuredTo),
+        appointmentsQuery,
+        data.serviceIds.length > 0
+          ? supabaseAdmin
+              .from("services")
+              .select("id,name,price,duration_minutes,large_bike_price,large_bike_duration_minutes")
+              .in("id", data.serviceIds)
+              .eq("is_active", true)
+              .eq("is_archived", false)
+          : {
+              data: [] as {
+                id: string;
+                name: string;
+                price: number;
+                duration_minutes: number | null;
+                large_bike_price: number | null;
+                large_bike_duration_minutes: number | null;
+              }[],
+              error: null,
+            },
+        supabaseAdmin
+          .from("crew_schedules")
+          .select("*")
+          .gte("schedule_date", configuredFrom)
+          .lte("schedule_date", configuredTo),
+        supabaseAdmin
+          .from("crew_members")
+          .select("id")
+          .eq("is_active", true)
+          .eq("is_archived", false),
+        supabaseAdmin
+          .from("crew_availability_exceptions")
+          .select("*")
+          .gte("end_date", configuredFrom)
+          .lte("start_date", configuredTo),
+        supabaseAdmin
+          .from("appointment_continuations")
+          .select(
+            "appointment_id,appointment_date,start_time,assigned_crew_id,booking_duration_minutes",
+          )
+          .gte("appointment_date", configuredFrom)
+          .lte("appointment_date", configuredTo),
+        rescheduleHoldsQuery(supabaseAdmin, configuredFrom, configuredTo),
+      ]);
+    };
 
+    let results = await loadSchedulingData();
+    // One retry covers a dropped connection or a brief database restart.
+    if (results.some((result) => result.error)) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      results = await loadSchedulingData();
+    }
     const [
       slotsRes,
       blocksRes,
@@ -629,76 +786,31 @@ export const getAvailability = createServerFn({ method: "GET" })
       activeCrewRes,
       exceptionsRes,
       continuationsRes,
-    ] = await Promise.all([
-      supabaseAdmin
-        .from("time_slots")
-        .select("id,start_time,end_time,capacity")
-        .eq("is_active", true)
-        .order("start_time"),
-      supabaseAdmin
-        .from("schedule_blocks")
-        .select("block_date,start_time,reason")
-        .eq("is_active", true)
-        .gte("block_date", configuredFrom)
-        .lte("block_date", configuredTo),
-      appointmentsQuery,
-      data.serviceIds.length > 0
-        ? supabaseAdmin
-            .from("services")
-            .select("id,name,price,duration_minutes,large_bike_price,large_bike_duration_minutes")
-            .in("id", data.serviceIds)
-            .eq("is_active", true)
-            .eq("is_archived", false)
-        : {
-            data: [] as {
-              id: string;
-              name: string;
-              price: number;
-              duration_minutes: number | null;
-              large_bike_price: number | null;
-              large_bike_duration_minutes: number | null;
-            }[],
-            error: null,
-          },
-      supabaseAdmin
-        .from("crew_schedules")
-        .select("*")
-        .gte("schedule_date", configuredFrom)
-        .lte("schedule_date", configuredTo),
-      supabaseAdmin
-        .from("crew_members")
-        .select("id")
-        .eq("is_active", true)
-        .eq("is_archived", false),
-      supabaseAdmin
-        .from("crew_availability_exceptions")
-        .select("*")
-        .gte("end_date", configuredFrom)
-        .lte("start_date", configuredTo),
-      continuationsQuery,
-    ]);
+      holdsRes,
+    ] = results;
 
-    if (
-      slotsRes.error ||
-      blocksRes.error ||
-      apptsRes.error ||
-      servicesRes.error ||
-      schedulesRes.error ||
-      activeCrewRes.error ||
-      exceptionsRes.error ||
-      continuationsRes.error
-    ) {
-      const errors = [
-        slotsRes.error,
-        blocksRes.error,
-        apptsRes.error,
-        servicesRes.error,
-        schedulesRes.error,
-        activeCrewRes.error,
-        exceptionsRes.error,
-        continuationsRes.error,
+    const errors = results.map((result) => result.error);
+    if (errors.some(Boolean)) {
+      const tables = [
+        "time_slots",
+        "schedule_blocks",
+        "appointments",
+        "services",
+        "crew_schedules",
+        "crew_members",
+        "crew_availability_exceptions",
+        "appointment_continuations",
+        "appointments (reschedule requests)",
       ];
-      console.error("[Booking availability] database query failed", errors);
+      // Names the project and each failed read, so the hosting logs show the cause.
+      console.error("[Booking availability] database query failed", {
+        supabaseProject: supabaseModule.supabaseServerProject(),
+        failures: errors.flatMap((error, index) =>
+          error
+            ? [{ table: tables[index], code: error.code, message: error.message, hint: error.hint }]
+            : [],
+        ),
+      });
       return unavailableAvailability(
         configuredFrom,
         configuredTo,
@@ -829,6 +941,9 @@ export const getAvailability = createServerFn({ method: "GET" })
       }
     }
 
+    // An admin editing an appointment does not compete with its own request.
+    assignments.push(...rescheduleHoldAssignments(holdsRes.data ?? [], data.excludeAppointmentId));
+
     const capacityConfig = (slotsRes.data ?? []).map((slot) => ({
       startTime: String(slot.start_time).slice(0, 5),
       capacity: slot.capacity,
@@ -912,10 +1027,6 @@ export const createBooking = createServerFn({ method: "POST" })
       };
     }
 
-    if (!isBookingSubmissionOpen()) {
-      return { ok: false as const, error: bookingSubmissionClosedMessage() };
-    }
-
     let rescheduledFrom: {
       id: string;
       reference_code: string;
@@ -929,6 +1040,12 @@ export const createBooking = createServerFn({ method: "POST" })
           error: "We could not verify the original appointment. Please look it up again.",
         };
       }
+      const verification = await requireActionVerification(
+        original.id,
+        "reschedule",
+        data.verificationToken,
+      );
+      if (verification) return verification;
       const continuations = await supabaseAdmin
         .from("appointment_continuations")
         .select("id", { count: "exact", head: true })
@@ -1080,12 +1197,26 @@ export const createBooking = createServerFn({ method: "POST" })
       .ilike("phone", data.phone)
       .eq("is_archived", false)
       .maybeSingle();
+    // Without an answer the number might be blocked, so the booking stops here.
+    if (isBlocked.error) {
+      console.error("[Booking] blocked-number check failed", isBlocked.error);
+      return {
+        ok: false as const,
+        error: "We could not verify your booking right now. Please try again shortly.",
+      };
+    }
     if (isBlocked.data) {
       return {
         ok: false as const,
         error:
           "This number has been blocked from booking online due to previous violations. Please contact the shop directly.",
       };
+    }
+
+    // A reschedule replaces an existing appointment, so it is not limited.
+    if (!rescheduledFrom) {
+      const limitError = await upcomingAppointmentLimitError(supabaseAdmin, data.phone, data.email);
+      if (limitError) return { ok: false as const, error: limitError };
     }
 
     if (!isBookingStartTime(startTime, bookingRules.operatingHours)) {
@@ -1311,7 +1442,7 @@ export const createBooking = createServerFn({ method: "POST" })
     }
 
     // 4. Evaluate staffing and capacity with the same rule used by the public availability grid.
-    const [existingApptsRes, existingContinuationsRes] = await Promise.all([
+    const [existingApptsRes, existingContinuationsRes, existingHoldsRes] = await Promise.all([
       supabaseAdmin
         .from("appointments")
         .select("assigned_crew_id,start_time,booking_duration_minutes")
@@ -1323,8 +1454,9 @@ export const createBooking = createServerFn({ method: "POST" })
         .from("appointment_continuations")
         .select("appointment_id,assigned_crew_id,start_time,booking_duration_minutes")
         .eq("appointment_date", data.date),
+      rescheduleHoldsQuery(supabaseAdmin, data.date, data.date),
     ]);
-    if (existingApptsRes.error || existingContinuationsRes.error) {
+    if (existingApptsRes.error || existingContinuationsRes.error || existingHoldsRes.error) {
       return {
         ok: false as const,
         error: "We could not verify mechanic availability. Please try again.",
@@ -1373,17 +1505,18 @@ export const createBooking = createServerFn({ method: "POST" })
           durationMinutes: continuation.booking_duration_minutes,
           crewId: continuation.assigned_crew_id,
         })),
+      // A customer's own pending request never blocks their new requested time.
+      ...rescheduleHoldAssignments(existingHoldsRes.data ?? [], rescheduledFrom?.id),
     ];
-    const { availableCrewIds, unassignedReservationCount, remainingCapacity } =
-      evaluateCrewAvailability({
-        date: data.date,
-        startTime,
-        durationMinutes: firstDayDuration,
-        capacity: slot.capacity,
-        schedules: effectiveSchedules,
-        exceptions: exceptionsRes.data ?? [],
-        assignments: existingAssignments,
-      });
+    const { availableCrewIds, remainingCapacity } = evaluateCrewAvailability({
+      date: data.date,
+      startTime,
+      durationMinutes: firstDayDuration,
+      capacity: slot.capacity,
+      schedules: effectiveSchedules,
+      exceptions: exceptionsRes.data ?? [],
+      assignments: existingAssignments,
+    });
     if (remainingCapacity <= 0) {
       return {
         ok: false as const,
@@ -1391,9 +1524,9 @@ export const createBooking = createServerFn({ method: "POST" })
       };
     }
 
-    // 5. Auto-assign an available mechanic, reserving capacity for legacy
-    //    appointments that have not yet been assigned to a crew member.
-    const assignedMechanicId = availableCrewIds[unassignedReservationCount] ?? null;
+    // 5. Assign the free mechanic with the fewest bookings that day.
+    const assignedMechanicId =
+      pickLeastBusyCrew(availableCrewIds, existingAssignments, data.date) ?? null;
 
     const total = resolvedServices.reduce((sum, service) => sum + service.price, 0);
 
@@ -1526,8 +1659,9 @@ export const createBooking = createServerFn({ method: "POST" })
     }
 
     if (
-      inserted.error?.code === "23505" &&
-      /already have an appointment for/i.test(inserted.error.message)
+      (inserted.error?.code === "23505" &&
+        /already (?:have|has) an appointment for/i.test(inserted.error.message)) ||
+      (inserted.error?.code === "23514" && /upcoming appointments/i.test(inserted.error.message))
     ) {
       return {
         ok: false as const,
@@ -1612,6 +1746,21 @@ const appointmentIdentitySchema = appointmentReferenceSchema.extend({
   phone: phoneSchema,
 });
 
+// Issued by verifyAppointmentActionCode. Its format is checked with the token itself,
+// so a missing or malformed value gets the "verify again" response, not a parse error.
+const verificationTokenSchema = z.string().trim().max(100).optional();
+
+const appointmentActionCodeSchema = appointmentReferenceSchema.extend({
+  action: z.enum(["cancel", "reschedule"]),
+});
+
+const appointmentActionVerifySchema = appointmentActionCodeSchema.extend({
+  code: z
+    .string()
+    .trim()
+    .regex(/^\d{6}$/, "Enter the 6-digit verification code."),
+});
+
 async function findAppointmentByReference(reference: string) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const primaryLookup = await supabaseAdmin
@@ -1659,8 +1808,96 @@ async function findAppointment(reference: string, phone: string) {
   return appointment;
 }
 
+type ManagedAppointment = NonNullable<Awaited<ReturnType<typeof findAppointmentByReference>>>;
+
+/** Enough of an address for customers to recognise it, e.g. "ju•••@gmail.com". */
+function maskEmail(email: string) {
+  const at = email.lastIndexOf("@");
+  if (at < 1) return "your booking email";
+  const local = email.slice(0, at);
+  return `${local.slice(0, local.length > 2 ? 2 : 1)}•••${email.slice(at)}`;
+}
+
+function cancellationBlockedReason(appt: ManagedAppointment, rules: BookingRules) {
+  if (appt.rescheduled_to_appointment_id) {
+    return "This appointment has already been rescheduled. Please use the new reference.";
+  }
+  if (appt.pending_reschedule_request_id) {
+    return "A reschedule request is already awaiting the shop's review.";
+  }
+  if (!["pending", "confirmed", "rescheduled"].includes(appt.status)) {
+    return "This appointment can no longer be cancelled online. Please call the shop.";
+  }
+  if (
+    !isSlotBookable(
+      appt.appointment_date,
+      String(appt.start_time).slice(0, 5),
+      rules.cancellationNoticeHours,
+    )
+  ) {
+    return `Cancellations need ${rules.cancellationNoticeHours} hours notice. Please call the shop instead.`;
+  }
+  return null;
+}
+
+function rescheduleBlockedReason(appt: ManagedAppointment, rules: BookingRules) {
+  if (appt.rescheduled_to_appointment_id) {
+    return "This appointment has already been rescheduled. Please use the new reference.";
+  }
+  if (appt.pending_reschedule_request_id) {
+    return "A reschedule request for this appointment is already awaiting the shop's review.";
+  }
+  if (appt.reschedule_count >= 3) {
+    return "This appointment has reached the maximum of 3 reschedules.";
+  }
+  if (!["pending", "confirmed"].includes(appt.status)) {
+    return "This appointment can no longer be rescheduled online. Please call the shop.";
+  }
+  if (
+    !isSlotBookable(
+      appt.appointment_date,
+      String(appt.start_time).slice(0, 5),
+      rules.reschedulingNoticeHours,
+    )
+  ) {
+    return `Rescheduling needs ${rules.reschedulingNoticeHours} hours notice. Please call the shop instead.`;
+  }
+  return null;
+}
+
+/**
+ * Online cancellation and rescheduling need a token from verifyAppointmentActionCode,
+ * which proves access to the booking's email. Returns the response to send when the
+ * token is missing, expired, or cannot be checked; null when the action may proceed.
+ */
+async function requireActionVerification(
+  appointmentId: string,
+  action: AppointmentAction,
+  token: string | undefined,
+) {
+  const { checkActionToken } = await import("./appointment-verification.server");
+  const result = await checkActionToken(appointmentId, action, token);
+  if (result === "valid") return null;
+  if (result === "unavailable") {
+    return {
+      ok: false as const,
+      error: "Email verification is temporarily unavailable. Please try again shortly.",
+    };
+  }
+  return {
+    ok: false as const,
+    verificationRequired: true as const,
+    error:
+      action === "cancel"
+        ? "Please verify your email again to cancel this appointment."
+        : "Please verify your email again to submit your reschedule request.",
+  };
+}
+
 export const getRescheduleDetails = createServerFn({ method: "POST" })
-  .validator((input: unknown) => appointmentIdentitySchema.parse(input))
+  .validator((input: unknown) =>
+    appointmentIdentitySchema.extend({ verificationToken: verificationTokenSchema }).parse(input),
+  )
   .handler(async ({ data }) => {
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const rateLimit = await checkPublicRequestRateLimit("rescheduling", 5, 15 * 60, data.phone);
@@ -1679,6 +1916,22 @@ export const getRescheduleDetails = createServerFn({ method: "POST" })
       return {
         ok: false as const,
         error: "No appointment found for that reference code and mobile number.",
+      };
+    }
+    // These details include the customer's email, so they need the same email
+    // verification as the reschedule itself.
+    const verification = await requireActionVerification(
+      appt.id,
+      "reschedule",
+      data.verificationToken,
+    );
+    if (verification) {
+      return {
+        ok: false as const,
+        error:
+          "verificationRequired" in verification
+            ? "For your security, reschedule from the My Appointment page. We'll email a verification code to the address on your booking."
+            : verification.error,
       };
     }
     if (appt.rescheduled_to_appointment_id) {
@@ -1830,6 +2083,8 @@ export const lookupAppointment = createServerFn({ method: "POST" })
         middleName: appt.middle_name ?? "",
         lastName: appt.last_name ?? "",
         phone: appt.phone,
+        // Where cancel/reschedule verification codes go; null means no email on file.
+        emailHint: appt.email ? maskEmail(appt.email) : null,
         motorcycle: [appt.moto_brand, appt.moto_model, appt.moto_variant, appt.moto_year]
           .filter(Boolean)
           .join(" "),
@@ -1866,7 +2121,9 @@ export const lookupAppointment = createServerFn({ method: "POST" })
   });
 
 export const cancelAppointment = createServerFn({ method: "POST" })
-  .validator((input: unknown) => appointmentReferenceSchema.parse(input))
+  .validator((input: unknown) =>
+    appointmentReferenceSchema.extend({ verificationToken: verificationTokenSchema }).parse(input),
+  )
   .handler(async ({ data }) => {
     const cancellationRateLimit = await checkPublicRequestRateLimit(
       "cancellation",
@@ -1890,37 +2147,12 @@ export const cancelAppointment = createServerFn({ method: "POST" })
         ok: false as const,
         error: "No appointment found for that reference code.",
       };
-    if (appt.rescheduled_to_appointment_id) {
-      return {
-        ok: false as const,
-        error: "This appointment has already been rescheduled. Please use the new reference.",
-      };
-    }
-    if (appt.pending_reschedule_request_id) {
-      return {
-        ok: false as const,
-        error: "A reschedule request is already awaiting the shop's review.",
-      };
-    }
-    if (!["pending", "confirmed", "rescheduled"].includes(appt.status)) {
-      return {
-        ok: false as const,
-        error: "This appointment can no longer be cancelled online. Please call the shop.",
-      };
-    }
     const bookingRules = await getBookingRules();
-    if (
-      !isSlotBookable(
-        appt.appointment_date,
-        String(appt.start_time).slice(0, 5),
-        bookingRules.cancellationNoticeHours,
-      )
-    ) {
-      return {
-        ok: false as const,
-        error: `Cancellations need ${bookingRules.cancellationNoticeHours} hours notice. Please call the shop instead.`,
-      };
-    }
+    const blockedReason = cancellationBlockedReason(appt, bookingRules);
+    if (blockedReason) return { ok: false as const, error: blockedReason };
+
+    const verification = await requireActionVerification(appt.id, "cancel", data.verificationToken);
+    if (verification) return verification;
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
     const cancellation = await supabaseAdmin.rpc("cancel_public_appointment", {
@@ -1949,4 +2181,141 @@ export const cancelAppointment = createServerFn({ method: "POST" })
       };
     }
     return { ok: true as const };
+  });
+
+/** Email a one-time code that unlocks cancelling or rescheduling one appointment. */
+export const requestAppointmentActionCode = createServerFn({ method: "POST" })
+  .validator((input: unknown) => appointmentActionCodeSchema.parse(input))
+  .handler(async ({ data }) => {
+    const rateLimit = await checkPublicRequestRateLimit(
+      "verification_request",
+      5,
+      15 * 60,
+      data.reference,
+    );
+    if (rateLimit !== "allowed") {
+      return {
+        ok: false as const,
+        error:
+          rateLimit === "limited"
+            ? "Too many verification codes requested. Please wait a few minutes before trying again."
+            : "Email verification is temporarily unavailable. Please try again shortly.",
+      };
+    }
+
+    const appt = await findAppointmentByReference(data.reference);
+    if (!appt) {
+      return { ok: false as const, error: "No appointment found for that reference code." };
+    }
+    if (!appt.email) {
+      return {
+        ok: false as const,
+        error: `This booking has no email address for verification, so it can't be changed online. Please call the shop at ${SHOP.phone}.`,
+      };
+    }
+
+    // Check eligibility first so customers aren't sent a code they can't use.
+    const bookingRules = await getBookingRules();
+    const blockedReason =
+      data.action === "cancel"
+        ? cancellationBlockedReason(appt, bookingRules)
+        : rescheduleBlockedReason(appt, bookingRules);
+    if (blockedReason) return { ok: false as const, error: blockedReason };
+    if (data.action === "reschedule") {
+      const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+      const continuations = await supabaseAdmin
+        .from("appointment_continuations")
+        .select("id", { count: "exact", head: true })
+        .eq("appointment_id", appt.id);
+      if (continuations.error) {
+        console.error("[Appointment verification] continuation lookup failed", continuations.error);
+        return {
+          ok: false as const,
+          error: "Email verification is temporarily unavailable. Please try again shortly.",
+        };
+      }
+      if ((continuations.count ?? 0) > 0) {
+        return {
+          ok: false as const,
+          error:
+            "This appointment includes a multi-day service. Please call the shop to reschedule all reserved service days together.",
+        };
+      }
+    }
+
+    const verification = await import("./appointment-verification.server");
+    const issued = await verification.issueActionCode(appt.id, data.action);
+    if (!issued) {
+      return {
+        ok: false as const,
+        error: "Email verification is temporarily unavailable. Please try again shortly.",
+      };
+    }
+    try {
+      await verification.sendActionCodeEmail({
+        to: appt.email,
+        code: issued.code,
+        action: data.action,
+        reference: normalizeReferenceCode(appt.reference_code),
+        date: appt.appointment_date,
+        startTime: String(appt.start_time).slice(0, 5),
+      });
+    } catch (error) {
+      console.error("[Appointment verification] code email failed", error);
+      await verification.discardActionCode(issued.challengeId);
+      return {
+        ok: false as const,
+        error: "We could not send the verification email. Please try again shortly.",
+      };
+    }
+
+    return { ok: true as const, emailHint: maskEmail(appt.email) };
+  });
+
+/** Check an emailed code and issue a short-lived token for that one action. */
+export const verifyAppointmentActionCode = createServerFn({ method: "POST" })
+  .validator((input: unknown) => appointmentActionVerifySchema.parse(input))
+  .handler(async ({ data }) => {
+    const rateLimit = await checkPublicRequestRateLimit(
+      "verification_verify",
+      10,
+      15 * 60,
+      data.reference,
+    );
+    if (rateLimit !== "allowed") {
+      return {
+        ok: false as const,
+        error:
+          rateLimit === "limited"
+            ? "Too many verification attempts. Please wait a few minutes, then request a new code."
+            : "Email verification is temporarily unavailable. Please try again shortly.",
+      };
+    }
+
+    const appt = await findAppointmentByReference(data.reference);
+    if (!appt) {
+      return { ok: false as const, error: "No appointment found for that reference code." };
+    }
+
+    const { verifyActionCode } = await import("./appointment-verification.server");
+    const result = await verifyActionCode(appt.id, data.action, data.code);
+    switch (result.outcome) {
+      case "verified":
+        return { ok: true as const, token: result.token, expiresAt: result.expiresAt };
+      case "invalid":
+        return {
+          ok: false as const,
+          error: "That code is incorrect. Check the latest email from us and try again.",
+        };
+      case "expired":
+        return {
+          ok: false as const,
+          error: "That code has expired or is no longer valid. Request a new code.",
+        };
+      default:
+        return {
+          ok: false as const,
+          error: "Email verification is temporarily unavailable. Please try again shortly.",
+        };
+    }
   });

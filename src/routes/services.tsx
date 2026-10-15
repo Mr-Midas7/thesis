@@ -1,6 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Clock } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 
 import { SiteFooter } from "@/components/site/site-footer";
@@ -60,7 +59,6 @@ function ServicesPage() {
         <h1 className="font-display text-4xl font-bold uppercase md:text-5xl">Services</h1>
         <p className="mt-2 max-w-2xl text-muted-foreground">
           Browse our provided services. Final details depend on the actual condition of your unit.
-
         </p>
 
         <div className="mt-8">

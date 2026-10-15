@@ -1,15 +1,41 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useServerFn } from "@tanstack/react-start";
-import { Archive, CalendarRange, ChevronDown } from "lucide-react";
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
+import {
+  CalendarClock,
+  CalendarDays,
+  CalendarRange,
+  CheckCircle2,
+  ChevronDown,
+  CircleAlert,
+  CircleX,
+  ClipboardCheck,
+  Eye,
+  Loader2,
+  Pencil,
+  Play,
+  type LucideIcon,
+} from "lucide-react";
+import { type ReactNode, useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import type { DateRange } from "react-day-picker";
 import { z } from "zod";
 import { format, parseISO } from "date-fns";
 
-import { PageHeader } from "@/components/admin/page-header";
 import { ArchiveConfirmationDialog } from "@/components/admin/archive-confirmation-dialog";
-import { ActiveFilterChips } from "@/components/admin/active-filter-chips";
+import {
+  AdminPage,
+  ArchiveMenuItem,
+  DataList,
+  InlineAlert,
+  ListCard,
+  ListEmpty,
+  ListToolbar,
+  MoreActionsMenu,
+  ResetFiltersButton,
+  ToolbarFilters,
+  ToolbarSearch,
+} from "@/components/admin/data-list";
+import { PageHeader } from "@/components/admin/page-header";
 import { PaginationControls } from "@/components/admin/pagination-controls";
 import {
   AlertDialog,
@@ -24,7 +50,6 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import { Card, CardContent } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
@@ -34,6 +59,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -45,14 +71,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
@@ -73,10 +91,16 @@ import {
   evaluateCrewAvailability,
   isActiveReservationStatus,
 } from "@/lib/availability";
-import { updateAppointmentWithConfirmation } from "@/lib/appointment-confirmation.functions";
+import {
+  reviewPendingAppointmentWithConfirmation,
+  reviewRescheduleRequestWithConfirmation,
+  updateAppointmentServiceProgressWithNotifications,
+  updateAppointmentWithConfirmation,
+} from "@/lib/appointment-confirmation.functions";
 import { getAvailability } from "@/lib/booking.functions";
 import {
   APPOINTMENT_STATUSES,
+  COMPLETED_APPOINTMENT_KEPT,
   addDays,
   formatDateLong,
   formatPHP,
@@ -297,12 +321,17 @@ function AppointmentsPage() {
   const navigate = useNavigate();
   const availabilityFn = useServerFn(getAvailability);
   const updateWithConfirmation = useServerFn(updateAppointmentWithConfirmation);
+  const reviewBookingFn = useServerFn(reviewPendingAppointmentWithConfirmation);
+  const reviewRescheduleFn = useServerFn(reviewRescheduleRequestWithConfirmation);
+  const serviceProgressFn = useServerFn(updateAppointmentServiceProgressWithNotifications);
   const search = Route.useSearch();
   const [status, setStatus] = useState("all");
   const [term, setTerm] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [confirmationNotificationWarning, setConfirmationNotificationWarning] = useState<string | null>(null);
+  const [confirmationNotificationWarning, setConfirmationNotificationWarning] = useState<
+    string | null
+  >(null);
   const [editForm, setEditForm] = useState<AppointmentEditForm | null>(null);
   const [editErrors, setEditErrors] = useState<AppointmentEditErrors>({});
   const [pendingSaveForm, setPendingSaveForm] = useState<AppointmentEditForm | null>(null);
@@ -311,7 +340,13 @@ function AppointmentsPage() {
   const [page, setPage] = useState(0);
   const [archiveTarget, setArchiveTarget] = useState<string | null>(null);
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [quickAction, setQuickAction] = useState<{
+    appointment: AppointmentDetails;
+    step: NextStep;
+  } | null>(null);
+  const [quickActionError, setQuickActionError] = useState<string | null>(null);
   const focusedAppointmentId = search.appointmentId;
+  const today = manilaNow().date;
   const deferredTerm = useDeferredValue(term);
   const dateRange = useMemo(
     () => buildAppointmentDateRange(datePeriod, customDateRange),
@@ -643,9 +678,72 @@ function AppointmentsPage() {
     },
     onError: (err: Error) => {
       console.error("Archive failed:", err);
-      setArchiveError("Could not archive this appointment. Please try again.");
+      setArchiveError(
+        // The database refuses completed appointments, e.g. one completed in another tab.
+        err.message.includes("Completed appointments")
+          ? COMPLETED_APPOINTMENT_KEPT
+          : "Could not archive this appointment. Please try again.",
+      );
     },
   });
+
+  // The same server actions the Notifications page uses, so customers get the
+  // same confirmation and completion messages.
+  const runNextStep = useMutation({
+    mutationFn: async ({
+      appointmentId,
+      step,
+      decision,
+    }: {
+      appointmentId: string;
+      step: NextStep;
+      decision: "confirmed" | "rejected";
+    }) => {
+      const result =
+        step === "review-booking"
+          ? await reviewBookingFn({ data: { appointmentId, decision } })
+          : step === "review-reschedule"
+            ? await reviewRescheduleFn({ data: { appointmentId, decision } })
+            : await serviceProgressFn({
+                data: { appointmentId, action: step === "start" ? "start" : "complete" },
+              });
+      if (!result.ok) throw new Error(result.error);
+      return result;
+    },
+    onSuccess: (result) => {
+      const warnings = [
+        "emailError" in result ? result.emailError : null,
+        "smsError" in result ? result.smsError : null,
+      ].filter((warning): warning is string => Boolean(warning));
+      setConfirmationNotificationWarning(warnings.join(" ") || null);
+      setQuickAction(null);
+      setQuickActionError(null);
+      qc.invalidateQueries({ queryKey: ["admin-appointments"], exact: false });
+      qc.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
+      qc.invalidateQueries({ queryKey: ["reports"], exact: false });
+      qc.invalidateQueries({ queryKey: ["notifications"] });
+      qc.invalidateQueries({ queryKey: ["unread-notifications"] });
+    },
+    onError: (err: Error) => {
+      setQuickActionError(err.message || "Could not update this appointment. Please try again.");
+    },
+  });
+
+  function openDetails(appointment: AppointmentDetails, edit = false) {
+    setOpenId(appointment.id);
+    setEditErrors({});
+    if (edit) {
+      startEditing(appointment);
+    } else {
+      setIsEditing(false);
+      setEditForm(null);
+    }
+  }
+
+  function openNextStep(appointment: AppointmentDetails, step: NextStep) {
+    setQuickActionError(null);
+    setQuickAction({ appointment, step });
+  }
 
   useEffect(() => {
     setOpenId(focusedAppointmentId ?? null);
@@ -700,6 +798,11 @@ function AppointmentsPage() {
         ]
       : []),
   ];
+
+  const appointmentTotal = appointments.data?.total ?? 0;
+  const appointmentCountLabel = `${appointmentTotal} ${
+    activeFilters.length > 0 ? "matching " : ""
+  }${appointmentTotal === 1 ? "appointment" : "appointments"}`;
 
   function resetFilters() {
     setTerm("");
@@ -930,7 +1033,7 @@ function AppointmentsPage() {
   }
 
   return (
-    <div>
+    <AdminPage>
       <PageHeader
         title="Appointments Management"
         description={
@@ -940,160 +1043,244 @@ function AppointmentsPage() {
         }
       />
 
-      <div className="mb-4 flex flex-wrap gap-3">
-        <Input
-          value={term}
-          onChange={(e) => {
-            setTerm(e.target.value);
-            setPage(0);
-          }}
-          placeholder="Search reference, name, phone or plate"
-          className="max-w-xs"
-        />
-        <Select
-          value={status}
-          onValueChange={(value) => {
-            setStatus(value);
-            setPage(0);
-          }}
-        >
-          <SelectTrigger className="w-full sm:w-48">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All statuses</SelectItem>
-            {APPOINTMENT_STATUSES.map((s) => (
-              <SelectItem key={s} value={s}>
-                {statusLabel(s)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <AppointmentDateFilter
-          period={datePeriod}
-          customDateRange={customDateRange}
-          onPeriodChange={(period) => {
-            setDatePeriod(period);
-            if (period === "all") setCustomDateRange(undefined);
-          }}
-          onCustomDateRangeChange={setCustomDateRange}
-        />
-        {focusedAppointmentId && (
+      {archiveError && <InlineAlert>{archiveError}</InlineAlert>}
+      {confirmationNotificationWarning && (
+        <InlineAlert>{confirmationNotificationWarning}</InlineAlert>
+      )}
+
+      {focusedAppointmentId ? (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-primary/30 bg-primary/5 px-4 py-3 text-sm">
+          <span>Showing one appointment opened from Notifications.</span>
           <Button
+            size="sm"
             variant="outline"
             onClick={() => navigate({ to: "/admin/appointments", search: {} })}
           >
             Show all appointments
           </Button>
-        )}
-      </div>
-      <ActiveFilterChips filters={activeFilters} onReset={resetFilters} />
-      {archiveError && (
-        <p role="alert" className="mt-4 text-sm text-destructive">
-          {archiveError}
-        </p>
-      )}
-      {confirmationNotificationWarning && (
-        <p role="alert" className="mt-4 text-sm text-destructive">
-          {confirmationNotificationWarning}
-        </p>
+        </div>
+      ) : (
+        <ListToolbar summary={appointments.data && appointmentCountLabel}>
+          <ToolbarSearch
+            value={term}
+            onChange={(value) => {
+              setTerm(value);
+              setPage(0);
+            }}
+            placeholder="Search reference, name, phone, or plate"
+            label="Search appointments by reference, customer name, phone, or plate number"
+          />
+          <ToolbarFilters>
+            <Select
+              value={status}
+              onValueChange={(value) => {
+                setStatus(value);
+                setPage(0);
+              }}
+            >
+              <SelectTrigger aria-label="Filter by status" className="w-full sm:w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All statuses</SelectItem>
+                {APPOINTMENT_STATUSES.map((s) => (
+                  <SelectItem key={s} value={s}>
+                    {statusLabel(s)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <AppointmentDateFilter
+              period={datePeriod}
+              customDateRange={customDateRange}
+              onPeriodChange={(period) => {
+                setDatePeriod(period);
+                if (period === "all") setCustomDateRange(undefined);
+              }}
+              onCustomDateRangeChange={setCustomDateRange}
+            />
+            {activeFilters.length > 0 && <ResetFiltersButton onClick={resetFilters} />}
+          </ToolbarFilters>
+        </ListToolbar>
       )}
 
-      <Card className="border-border/70 bg-card/60">
-        <CardContent className="overflow-x-auto p-0">
-          <Table className="admin-data-table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Date Created</TableHead>
-                <TableHead>Reference</TableHead>
-                <TableHead>Customer</TableHead>
-                <TableHead>Services</TableHead>
-                <TableHead>Schedule</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {typedRows.map((a) => (
-                <TableRow key={a.id}>
-                  <TableCell
-                    data-label="Booked on"
-                    className="whitespace-nowrap text-xs text-muted-foreground"
-                  >
-                    {formatBookedOn(a.created_at)}
-                  </TableCell>
-                  <TableCell data-label="Reference" className="font-mono text-xs">
-                    {a.reference_code}
-                  </TableCell>
-                  <TableCell data-label="Customer">
-                    <span className="block text-sm">{a.customer_name}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {toLocalPhilippineMobile(a.phone)}
-                    </span>
-                  </TableCell>
-                  <TableCell data-label="Services" className="text-xs">
-                    <AppointmentServicesList
-                      appointmentId={a.id}
-                      services={a.appointment_services}
-                    />
-                  </TableCell>
-                  <TableCell data-label="Schedule" className="text-xs">
-                    {formatDateLong(a.appointment_date)}
-                    <span className="block text-muted-foreground">
-                      {formatTime(String(a.start_time).slice(0, 5))}
-                    </span>
-                  </TableCell>
-                  <TableCell data-label="Status">
-                    <Badge variant="outline" className={cn("uppercase", statusTone(a.status))}>
-                      {statusLabel(a.status)}
-                    </Badge>
-                  </TableCell>
-                  <TableCell data-label="Actions" className="text-right">
-                    <div className="flex justify-end gap-1">
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => {
-                          setOpenId(a.id);
-                          setIsEditing(false);
-                          setEditForm(null);
-                          setEditErrors({});
-                        }}
-                      >
-                        View
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="ghost"
-                        aria-label={`Archive appointment ${a.reference_code}`}
-                        title="Archive appointment"
-                        onClick={() => setArchiveTarget(a.id)}
-                      >
-                        <Archive className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-          {rows.length === 0 && (
-            <p className="p-8 text-center text-sm text-muted-foreground">
-              {focusedAppointmentId
-                ? "This appointment is no longer available."
-                : "No appointments found."}
-            </p>
-          )}
-          {!focusedAppointmentId && (
+      <ListCard
+        footer={
+          !focusedAppointmentId && (
             <PaginationControls
               page={page}
               pageSize={pageSize}
               total={appointments.data?.total ?? 0}
               onPageChange={setPage}
             />
-          )}
-        </CardContent>
-      </Card>
+          )
+        }
+      >
+        <DataList
+          label="Appointments"
+          rows={typedRows}
+          rowKey={(a) => a.id}
+          loading={appointments.isLoading}
+          error={
+            appointments.isError
+              ? {
+                  message: "Could not load appointments.",
+                  onRetry: () => void appointments.refetch(),
+                }
+              : null
+          }
+          empty={
+            <ListEmpty
+              icon={CalendarDays}
+              title={
+                focusedAppointmentId
+                  ? "This appointment is no longer available."
+                  : activeFilters.length > 0
+                    ? "No appointments match your filters."
+                    : "No appointments yet."
+              }
+              description={
+                focusedAppointmentId
+                  ? "It may have been archived or deleted."
+                  : activeFilters.length > 0
+                    ? "Try a different search, status, or date."
+                    : "Bookings from the website will appear here."
+              }
+              action={
+                activeFilters.length > 0 && !focusedAppointmentId ? (
+                  <ResetFiltersButton onClick={resetFilters} />
+                ) : undefined
+              }
+            />
+          }
+          columns={[
+            {
+              key: "customer",
+              header: "Customer",
+              card: "title",
+              cell: (a) => (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => openDetails(a)}
+                    className="text-left font-medium underline-offset-4 hover:text-primary hover:underline focus-visible:rounded-sm focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                  >
+                    {a.customer_name}
+                  </button>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    <span className="font-mono">{a.reference_code}</span> ·{" "}
+                    {toLocalPhilippineMobile(a.phone)}
+                  </p>
+                  {/* Services get their own table column from xl. */}
+                  <p className="mt-1 hidden text-xs text-muted-foreground lg:block xl:hidden">
+                    {a.appointment_services.map((service) => service.service_name).join(", ")}
+                  </p>
+                </>
+              ),
+            },
+            {
+              key: "schedule",
+              header: "Schedule",
+              className: "w-40",
+              cell: (a) => (
+                <span className="text-sm">
+                  {formatDateLong(a.appointment_date)}
+                  <span className="block text-xs text-muted-foreground">
+                    {formatTime(String(a.start_time).slice(0, 5))}
+                  </span>
+                </span>
+              ),
+            },
+            {
+              key: "services",
+              header: "Services",
+              card: "wide",
+              xlOnly: true,
+              className: "w-52",
+              cell: (a) => (
+                <span className="text-sm">
+                  <AppointmentServicesList appointmentId={a.id} services={a.appointment_services} />
+                </span>
+              ),
+            },
+            {
+              key: "booked",
+              header: "Booked on",
+              // Least important column: the table shows it only on very wide screens.
+              className: "hidden w-32 2xl:table-cell",
+              cell: (a) => {
+                const [day, time] = formatBookedOn(a.created_at).split(" - ");
+                return (
+                  <span className="text-sm text-muted-foreground">
+                    {day}
+                    <span className="block text-xs">{time}</span>
+                  </span>
+                );
+              },
+            },
+            {
+              key: "status",
+              header: "Status",
+              card: "badge",
+              className: "w-28 text-center",
+              cell: (a) => (
+                <span className="inline-flex flex-col items-center gap-1">
+                  <Badge variant="outline" className={cn("uppercase", statusTone(a.status))}>
+                    {statusLabel(a.status)}
+                  </Badge>
+                  {a.pending_reschedule_request_id && (
+                    <span className="text-[11px] leading-tight font-medium text-accent">
+                      Reschedule requested
+                    </span>
+                  )}
+                </span>
+              ),
+            },
+          ]}
+          actionsClassName="w-52"
+          actions={(a) => {
+            const step = nextStepFor(a, today);
+            const StepIcon = step ? NEXT_STEPS[step].icon : Eye;
+            return (
+              <>
+                {step ? (
+                  <Button
+                    size="sm"
+                    onClick={() => openNextStep(a, step)}
+                    aria-label={`${NEXT_STEPS[step].label} for ${a.reference_code}`}
+                  >
+                    <StepIcon /> {NEXT_STEPS[step].label}
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => openDetails(a)}
+                    aria-label={`View appointment ${a.reference_code}`}
+                  >
+                    <StepIcon /> View
+                  </Button>
+                )}
+                <MoreActionsMenu itemLabel={`appointment ${a.reference_code}`}>
+                  <DropdownMenuItem onSelect={() => openDetails(a)}>
+                    <Eye /> View details
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => openDetails(a, true)}>
+                    <Pencil /> Edit appointment
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <ArchiveMenuItem
+                    onSelect={() => setArchiveTarget(a.id)}
+                    unavailableReason={
+                      a.status === "completed" ? COMPLETED_APPOINTMENT_KEPT : undefined
+                    }
+                  />
+                </MoreActionsMenu>
+              </>
+            );
+          }}
+        />
+      </ListCard>
 
       <Dialog
         open={Boolean(selectedAppointment)}
@@ -1262,8 +1449,8 @@ function AppointmentsPage() {
                     {selectedAppointment.wants_products &&
                       !canRecordAppointmentProducts(editForm.status) && (
                         <p className="text-sm text-muted-foreground">
-                          Confirm the appointment to add products before service begins. Products can
-                          also be adjusted while service is in progress or completed.
+                          Confirm the appointment to add products before service begins. Products
+                          can also be adjusted while service is in progress or completed.
                         </p>
                       )}
                     <div className="space-y-3">
@@ -1829,6 +2016,231 @@ function AppointmentsPage() {
           setArchiveTarget(null);
         }}
       />
+      <NextStepDialog
+        action={quickAction}
+        pending={runNextStep.isPending}
+        error={quickActionError}
+        onCancel={() => {
+          setQuickAction(null);
+          setQuickActionError(null);
+        }}
+        onDecide={(decision) => {
+          if (!quickAction) return;
+          setQuickActionError(null);
+          runNextStep.mutate({
+            appointmentId: quickAction.appointment.id,
+            step: quickAction.step,
+            decision,
+          });
+        }}
+      />
+    </AdminPage>
+  );
+}
+
+type NextStep = "review-booking" | "review-reschedule" | "start" | "complete";
+
+const NEXT_STEPS: Record<
+  NextStep,
+  {
+    label: string;
+    icon: LucideIcon;
+    title: string;
+    description: string;
+    confirm: string;
+    reject?: string;
+  }
+> = {
+  "review-booking": {
+    label: "Review booking",
+    icon: ClipboardCheck,
+    title: "Review booking request",
+    description:
+      "Confirming assigns an available mechanic and notifies the customer. Rejecting frees the time slot and emails the customer that the booking was not accepted.",
+    confirm: "Confirm booking",
+    reject: "Reject booking",
+  },
+  "review-reschedule": {
+    label: "Review request",
+    icon: CalendarClock,
+    title: "Review reschedule request",
+    description:
+      "Approving books the requested schedule under the new reference and notifies the customer. Rejecting keeps the current appointment and emails the customer that the request was not approved.",
+    confirm: "Approve new schedule",
+    reject: "Reject request",
+  },
+  start: {
+    label: "Start service",
+    icon: Play,
+    title: "Start service?",
+    description: "Records the start time and moves this appointment to In progress.",
+    confirm: "Start service",
+  },
+  complete: {
+    label: "Mark completed",
+    icon: CheckCircle2,
+    title: "Mark service completed?",
+    description:
+      "Records the end time, counts the appointment in revenue, and lets the customer know the service is done.",
+    confirm: "Mark completed",
+  },
+};
+
+/** What an appointment is waiting for, if anything. */
+function nextStepFor(appointment: AppointmentDetails, today: string): NextStep | null {
+  if (appointment.pending_reschedule_request_id) return "review-reschedule";
+  if (appointment.status === "pending") return "review-booking";
+  // Not offered ahead of the appointment date, so a future booking is not started by mistake.
+  if (
+    appointment.status === "confirmed" &&
+    !appointment.service_started_at &&
+    appointment.appointment_date <= today
+  ) {
+    return "start";
+  }
+  if (appointment.status === "in_progress") return "complete";
+  return null;
+}
+
+/** Confirms a next step from the table, showing the booking it applies to. */
+function NextStepDialog({
+  action,
+  pending,
+  error,
+  onCancel,
+  onDecide,
+}: {
+  action: { appointment: AppointmentDetails; step: NextStep } | null;
+  pending: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onDecide: (decision: "confirmed" | "rejected") => void;
+}) {
+  const appointment = action?.appointment;
+  const step = action ? NEXT_STEPS[action.step] : null;
+  const isReschedule = action?.step === "review-reschedule";
+  const atRescheduleLimit = isReschedule && (appointment?.reschedule_count ?? 0) >= 3;
+
+  return (
+    <AlertDialog open={Boolean(action)} onOpenChange={(open) => !open && !pending && onCancel()}>
+      <AlertDialogContent className="sm:max-w-lg">
+        {appointment && step && (
+          <>
+            <AlertDialogHeader>
+              <AlertDialogTitle>{step.title}</AlertDialogTitle>
+              <AlertDialogDescription>{step.description}</AlertDialogDescription>
+            </AlertDialogHeader>
+
+            <dl className="grid gap-x-4 gap-y-3 rounded-lg border border-border/70 bg-muted/30 p-3 text-sm sm:grid-cols-2">
+              <NextStepFact label="Customer">
+                {appointment.customer_name}
+                <span className="block text-xs text-muted-foreground">
+                  <span className="font-mono">{appointment.reference_code}</span> ·{" "}
+                  {toLocalPhilippineMobile(appointment.phone)}
+                </span>
+              </NextStepFact>
+              <NextStepFact label="Motorcycle">
+                {appointment.moto_brand} {appointment.moto_model}
+                <span className="block text-xs text-muted-foreground">
+                  Plate {appointment.plate_number}
+                </span>
+              </NextStepFact>
+              <NextStepFact label={isReschedule ? "Current schedule" : "Schedule"}>
+                {formatDateLong(appointment.appointment_date)}
+                <span className="block text-xs text-muted-foreground">
+                  {formatTime(String(appointment.start_time).slice(0, 5))}
+                </span>
+              </NextStepFact>
+              {isReschedule ? (
+                <NextStepFact label="Requested schedule">
+                  {appointment.pending_reschedule_date
+                    ? formatDateLong(appointment.pending_reschedule_date)
+                    : "Not provided"}
+                  <span className="block text-xs text-muted-foreground">
+                    {appointment.pending_reschedule_start_time
+                      ? formatTime(String(appointment.pending_reschedule_start_time).slice(0, 5))
+                      : ""}
+                    {appointment.pending_reschedule_reference_code
+                      ? ` · New reference ${appointment.pending_reschedule_reference_code}`
+                      : ""}
+                  </span>
+                </NextStepFact>
+              ) : (
+                <NextStepFact label="Services">
+                  {appointment.appointment_services
+                    .map((service) => service.service_name)
+                    .join(", ") || "None"}
+                </NextStepFact>
+              )}
+              {isReschedule && appointment.pending_reschedule_reason && (
+                <NextStepFact label="Reason" wide>
+                  {appointment.pending_reschedule_reason}
+                </NextStepFact>
+              )}
+            </dl>
+
+            {atRescheduleLimit && (
+              <p className="text-sm text-destructive">
+                This appointment has reached the maximum of 3 reschedules, so this request can only
+                be rejected.
+              </p>
+            )}
+            {error && (
+              <p
+                role="alert"
+                className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 p-3 text-sm text-destructive"
+              >
+                <CircleAlert className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                {error}
+              </p>
+            )}
+
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={pending}>Cancel</AlertDialogCancel>
+              {step.reject && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  disabled={pending}
+                  onClick={() => onDecide("rejected")}
+                  className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                >
+                  <CircleX /> {step.reject}
+                </Button>
+              )}
+              <Button
+                type="button"
+                disabled={pending || atRescheduleLimit}
+                onClick={() => onDecide("confirmed")}
+              >
+                {pending ? (
+                  <Loader2 className="animate-spin" aria-hidden="true" />
+                ) : (
+                  <step.icon aria-hidden="true" />
+                )}
+                {step.confirm}
+              </Button>
+            </AlertDialogFooter>
+          </>
+        )}
+      </AlertDialogContent>
+    </AlertDialog>
+  );
+}
+
+function NextStepFact({
+  label,
+  wide = false,
+  children,
+}: {
+  label: string;
+  wide?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <div className={cn("min-w-0", wide && "sm:col-span-2")}>
+      <dt className="text-[11px] tracking-wide text-muted-foreground uppercase">{label}</dt>
+      <dd className="mt-0.5 break-words">{children}</dd>
     </div>
   );
 }
@@ -1850,6 +2262,7 @@ function AppointmentReadOnlyDetails({
             label="Contact number"
             value={toLocalPhilippineMobile(appointment.phone)}
           />
+          <AppointmentDetail label="Email" value={appointment.email || "Not provided"} />
         </div>
       </div>
       <div>
@@ -1922,7 +2335,9 @@ function AppointmentDetail({
   return (
     <div className={className}>
       <p className="text-xs tracking-wide text-muted-foreground uppercase">{label}</p>
-      <p className="mt-1 whitespace-pre-wrap text-sm text-foreground">{value}</p>
+      <p className="mt-1 text-sm whitespace-pre-wrap text-foreground [overflow-wrap:anywhere]">
+        {value}
+      </p>
     </div>
   );
 }
@@ -2004,7 +2419,12 @@ function AppointmentDateFilter({
       }}
     >
       <PopoverTrigger asChild>
-        <Button type="button" variant="outline" className="min-w-40 justify-between gap-2">
+        <Button
+          type="button"
+          variant="outline"
+          aria-label="Filter by appointment date"
+          className="w-full min-w-0 justify-between gap-2 sm:w-auto sm:min-w-40"
+        >
           <span className="flex min-w-0 items-center gap-2 truncate">
             <CalendarRange className="size-4 shrink-0" aria-hidden="true" />
             {appointmentDatePeriodLabel(period, buildAppointmentDateRange(period, customDateRange))}
