@@ -2056,7 +2056,7 @@ const NEXT_STEPS: Record<
     icon: ClipboardCheck,
     title: "Review booking request",
     description:
-      "Confirming assigns an available mechanic and notifies the customer. Rejecting frees the time slot and emails the customer that the booking was not accepted.",
+      "Confirming assigns an available mechanic and notifies the customer. Rejecting frees the time slot and emails and texts the customer that the booking was not accepted.",
     confirm: "Confirm booking",
     reject: "Reject booking",
   },
@@ -2065,7 +2065,7 @@ const NEXT_STEPS: Record<
     icon: CalendarClock,
     title: "Review reschedule request",
     description:
-      "Approving books the requested schedule under the new reference and notifies the customer. Rejecting keeps the current appointment and emails the customer that the request was not approved.",
+      "Approving books the requested schedule under the new reference and notifies the customer. Rejecting keeps the current appointment and emails and texts the customer that the request was not approved.",
     confirm: "Approve new schedule",
     reject: "Reject request",
   },

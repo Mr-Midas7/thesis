@@ -1,6 +1,7 @@
 /**
- * Wording and formatting for customer emails. These are plain functions with
- * no secrets or network access, so the content can be checked without sending.
+ * Wording and formatting for customer emails and text messages. These are
+ * plain functions with no secrets or network access, so the content can be
+ * checked without sending.
  */
 
 export function escapeHtml(value: string | number | null | undefined) {
@@ -28,6 +29,16 @@ export function formatAppointmentTime(time: string) {
     hour12: true,
     timeZone: "Asia/Manila",
   }).format(date);
+}
+
+/** A short date for text messages, e.g. "Oct 20, 2026". */
+export function formatSmsDate(date: string) {
+  return new Intl.DateTimeFormat("en-PH", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "Asia/Manila",
+  }).format(new Date(`${date}T12:00:00+08:00`));
 }
 
 export type ShopContact = { name: string; phone: string; email: string };
@@ -158,4 +169,39 @@ export function rescheduleNotApprovedEmail({
     text,
     html,
   };
+}
+
+function smsSchedule(date: string, time: string) {
+  return `${formatSmsDate(date)} at ${formatAppointmentTime(time)}`;
+}
+
+/** Text message for a pending booking request the shop rejected (fits one SMS). */
+export function bookingNotAcceptedSms({
+  appointment,
+  contact,
+}: {
+  appointment: AppointmentSummary;
+  contact: ShopContact;
+}) {
+  return `Fake Rider: Sorry, we could not accept your booking request (Ref: ${appointment.referenceCode}) for ${smsSchedule(appointment.appointmentDate, appointment.startTime)}. Please book another time or call ${contact.phone}.`;
+}
+
+/** Text message for a reschedule request the shop rejected (fits one SMS). */
+export function rescheduleNotApprovedSms({
+  appointment,
+  requestedDate,
+  requestedStartTime,
+  contact,
+}: {
+  /** The customer's current appointment, which stays as it is. */
+  appointment: AppointmentSummary;
+  requestedDate: string | null;
+  requestedStartTime: string | null;
+  contact: ShopContact;
+}) {
+  const request =
+    requestedDate && requestedStartTime
+      ? `Your request to move ${appointment.referenceCode} to ${smsSchedule(requestedDate, requestedStartTime)} was not approved.`
+      : `Your reschedule request for ${appointment.referenceCode} was not approved.`;
+  return `Fake Rider: ${request} Your booking stays on ${smsSchedule(appointment.appointmentDate, appointment.startTime)}. Call ${contact.phone}.`;
 }

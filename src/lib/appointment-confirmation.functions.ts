@@ -6,10 +6,14 @@ import { z } from "zod";
 import type { Database } from "@/integrations/supabase/types";
 import {
   bookingNotAcceptedEmail,
+  bookingNotAcceptedSms,
   escapeHtml,
   formatAppointmentDate,
   formatAppointmentTime,
+  formatSmsDate,
   rescheduleNotApprovedEmail,
+  rescheduleNotApprovedSms,
+  type AppointmentSummary,
   type EmailContent,
   type ShopContact,
 } from "./customer-emails";
@@ -72,7 +76,6 @@ type TextBeeConfig = {
   simSubscriptionId?: number;
 };
 
-const TEXTBEE_DEMO_PHONE = "09242698505";
 const DELIVERY_LEASE_MS = 5 * 60 * 1000;
 
 type ConfirmationSmsResult = {
@@ -118,22 +121,9 @@ function formatDuration(durationMinutes: number) {
     .join(" ");
 }
 
-function formatSmsDate(date: string) {
-  return new Intl.DateTimeFormat("en-PH", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    timeZone: "Asia/Manila",
-  }).format(new Date(`${date}T12:00:00+08:00`));
-}
-
 function formatPhilippineMobileE164(phone: string) {
   const localNumber = normalizePhilippineMobile(phone);
   return localNumber ? `+63${localNumber.slice(1)}` : null;
-}
-
-function isTextBeeDemoPhone(phone: string) {
-  return phone.trim() === TEXTBEE_DEMO_PHONE;
 }
 
 function deliveryLeaseExpired(updatedAt: string | null | undefined) {
@@ -150,6 +140,31 @@ function redactProviderDetail(value: string) {
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 400);
+}
+
+/** Sends one text message through TextBee; throws when TextBee does not accept it. */
+async function sendTextBeeSms(config: TextBeeConfig, recipient: string, message: string) {
+  const body: {
+    recipients: string[];
+    message: string;
+    deviceId?: string;
+    simSubscriptionId?: number;
+  } = {
+    recipients: [recipient],
+    message,
+  };
+  if (config.deviceId) body.deviceId = config.deviceId;
+  if (config.simSubscriptionId !== undefined) body.simSubscriptionId = config.simSubscriptionId;
+
+  const response = await fetch("https://api.textbee.dev/api/v1/gateway/send-sms", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": config.apiKey,
+    },
+    body: JSON.stringify(body),
+  });
+  await assertTextBeeAccepted(response);
 }
 
 async function assertTextBeeAccepted(response: Response) {
@@ -419,19 +434,6 @@ async function sendQueuedConfirmationSms(appointmentId: string): Promise<Confirm
     return { sent: false, skipped: false, error: null };
   }
 
-  if (!isTextBeeDemoPhone(delivery.recipient_phone)) {
-    const { error: skipError } = await supabaseAdmin
-      .from("appointment_confirmation_sms")
-      .update({
-        status: "skipped",
-        last_error: null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("id", delivery.id);
-    if (skipError) console.error("[Confirmation SMS] skip-state update failed", skipError);
-    return { sent: false, skipped: true, error: null };
-  }
-
   const configured = textBeeConfig();
   if ("error" in configured) {
     await supabaseAdmin
@@ -478,29 +480,7 @@ async function sendQueuedConfirmationSms(appointmentId: string): Promise<Confirm
     ]
       .filter(Boolean)
       .join(" ");
-    const body: {
-      recipients: string[];
-      message: string;
-      deviceId?: string;
-      simSubscriptionId?: number;
-    } = {
-      recipients: [recipient],
-      message,
-    };
-    if (configured.config.deviceId) body.deviceId = configured.config.deviceId;
-    if (configured.config.simSubscriptionId !== undefined) {
-      body.simSubscriptionId = configured.config.simSubscriptionId;
-    }
-
-    const response = await fetch("https://api.textbee.dev/api/v1/gateway/send-sms", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": configured.config.apiKey,
-      },
-      body: JSON.stringify(body),
-    });
-    await assertTextBeeAccepted(response);
+    await sendTextBeeSms(configured.config, recipient, message);
 
     const { error: sentError } = await supabaseAdmin
       .from("appointment_confirmation_sms")
@@ -666,19 +646,6 @@ async function markCompletionNotificationSent(deliveryId: string, channel: Compl
     );
 }
 
-async function markCompletionNotificationSkipped(deliveryId: string) {
-  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { error } = await supabaseAdmin
-    .from("appointment_completion_notifications")
-    .update({
-      status: "skipped",
-      last_error: null,
-      updated_at: new Date().toISOString(),
-    })
-    .eq("id", deliveryId);
-  if (error) console.error("[Completion SMS] skip-state update failed", error);
-}
-
 async function loadCompletedAppointment(appointmentId: string) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { data: appointment, error } = await supabaseAdmin
@@ -802,11 +769,6 @@ async function sendQueuedCompletionSms(appointmentId: string): Promise<Confirmat
     return { sent: false, skipped: false, error: "The completion SMS could not be queued." };
   }
 
-  if (!isTextBeeDemoPhone(claim.recipient)) {
-    await markCompletionNotificationSkipped(claim.id);
-    return { sent: false, skipped: true, error: null };
-  }
-
   const configured = textBeeConfig();
   if ("error" in configured) {
     await resetCompletionNotification(claim.id, new Error(configured.error), "sms");
@@ -827,25 +789,7 @@ async function sendQueuedCompletionSms(appointmentId: string): Promise<Confirmat
     ]
       .filter(Boolean)
       .join(" ");
-    const body: {
-      recipients: string[];
-      message: string;
-      deviceId?: string;
-      simSubscriptionId?: number;
-    } = { recipients: [recipient], message };
-    if (configured.config.deviceId) body.deviceId = configured.config.deviceId;
-    if (configured.config.simSubscriptionId !== undefined) {
-      body.simSubscriptionId = configured.config.simSubscriptionId;
-    }
-    const response = await fetch("https://api.textbee.dev/api/v1/gateway/send-sms", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-api-key": configured.config.apiKey,
-      },
-      body: JSON.stringify(body),
-    });
-    await assertTextBeeAccepted(response);
+    await sendTextBeeSms(configured.config, recipient, message);
     await markCompletionNotificationSent(claim.id, "sms");
     return { sent: true, skipped: false, error: null };
   } catch (error) {
@@ -889,7 +833,7 @@ async function sendCompletionNotifications(appointmentId: string) {
 
 type CustomerEmailResult = { sent: true } | { sent: false; error: string };
 
-/** The shop's contact details as set in Settings, for customer emails. */
+/** The shop's contact details as set in Settings, for customer emails and texts. */
 async function shopContact(): Promise<ShopContact> {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { data, error } = await supabaseAdmin
@@ -936,65 +880,133 @@ async function deliverCustomerEmail(
   }
 }
 
-/** Tells the customer their pending booking request was not accepted. */
-async function sendBookingNotAcceptedEmail(appointmentId: string): Promise<CustomerEmailResult> {
+type NoticeDelivery = { sent: boolean; error: string | null };
+
+/** One text message to a customer. Failures are logged and reported to the admin, not retried. */
+async function deliverCustomerSms(
+  label: string,
+  phone: string,
+  message: string,
+  failure: string,
+): Promise<NoticeDelivery> {
+  const recipient = formatPhilippineMobileE164(phone);
+  if (!recipient) return { sent: false, error: `${failure} The mobile number is invalid.` };
+  const configured = textBeeConfig();
+  if ("error" in configured) {
+    console.error(`[${label}] configuration unavailable`, { reason: configured.error });
+    return { sent: false, error: `${failure} ${configured.error}` };
+  }
+  try {
+    await sendTextBeeSms(configured.config, recipient, message);
+    return { sent: true, error: null };
+  } catch (error) {
+    console.error(`[${label}] send failed`, error);
+    return { sent: false, error: failure };
+  }
+}
+
+/** The appointment details a customer notice needs, or null if it cannot be loaded. */
+async function loadNoticeAppointment(appointmentId: string, status?: "rejected") {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const { data: appointment, error } = await supabaseAdmin
+  let query = supabaseAdmin
     .from("appointments")
     .select(
-      "reference_code,customer_name,email,appointment_date,start_time,moto_brand,moto_model,plate_number,appointment_services(service_name)",
+      "reference_code,customer_name,email,phone,appointment_date,start_time,moto_brand,moto_model,plate_number,appointment_services(service_name)",
     )
-    .eq("id", appointmentId)
-    .eq("status", "rejected")
-    .maybeSingle();
+    .eq("id", appointmentId);
+  if (status) query = query.eq("status", status);
+  const { data: appointment, error } = await query.maybeSingle();
   if (error || !appointment) {
-    console.error("[Booking not accepted email] appointment lookup failed", error);
-    return {
-      sent: false,
-      error: "The booking was rejected, but the customer email could not be prepared.",
-    };
+    console.error("[Customer notice] appointment lookup failed", error);
+    return null;
   }
-  const recipient = appointment.email?.trim().toLowerCase();
-  if (!recipient) {
-    return {
-      sent: false,
-      error:
-        "The booking was rejected. This customer has no email on file, so please let them know by phone.",
-    };
-  }
+  const summary: AppointmentSummary = {
+    referenceCode: appointment.reference_code,
+    customerName: appointment.customer_name,
+    appointmentDate: appointment.appointment_date,
+    startTime: appointment.start_time,
+    services: (appointment.appointment_services ?? []).map((service) => service.service_name),
+    motorcycle: [appointment.moto_brand, appointment.moto_model].filter(Boolean).join(" "),
+    plateNumber: appointment.plate_number,
+  };
+  return {
+    summary,
+    email: appointment.email?.trim().toLowerCase() || null,
+    phone: appointment.phone,
+  };
+}
 
-  const content = bookingNotAcceptedEmail({
-    appointment: {
-      referenceCode: appointment.reference_code,
-      customerName: appointment.customer_name,
-      appointmentDate: appointment.appointment_date,
-      startTime: appointment.start_time,
-      services: (appointment.appointment_services ?? []).map((service) => service.service_name),
-      motorcycle: [appointment.moto_brand, appointment.moto_model].filter(Boolean).join(" "),
-      plateNumber: appointment.plate_number,
-    },
-    contact: await shopContact(),
-    bookingUrl: publicPageUrl("/book"),
+/**
+ * Emails and texts the customer at the same time. Without an email on file the
+ * text alone is sent; the admin is asked to call only when neither went out.
+ */
+async function deliverNotice({
+  label,
+  outcome,
+  appointment,
+  email,
+  sms,
+}: {
+  label: string;
+  /** What happened, e.g. "The booking was rejected". */
+  outcome: string;
+  appointment: { email: string | null; phone: string };
+  email: EmailContent;
+  sms: string;
+}): Promise<{ emailDelivery: NoticeDelivery; smsDelivery: NoticeDelivery }> {
+  const [emailDelivery, smsDelivery] = await Promise.all([
+    appointment.email
+      ? deliverCustomerEmail(
+          `${label} email`,
+          appointment.email,
+          email,
+          `${outcome}, but the email to the customer could not be sent.`,
+        ).then((result) => (result.sent ? { sent: true, error: null } : result))
+      : Promise.resolve({ sent: false, error: null }),
+    deliverCustomerSms(
+      `${label} SMS`,
+      appointment.phone,
+      sms,
+      `${outcome}, but the text message to the customer could not be sent.`,
+    ),
+  ]);
+  if (!appointment.email && !smsDelivery.sent) {
+    smsDelivery.error = `${smsDelivery.error} This customer has no email on file, so please let them know by phone.`;
+  }
+  return { emailDelivery, smsDelivery };
+}
+
+/** Tells the customer their pending booking request was not accepted. */
+async function notifyBookingNotAccepted(appointmentId: string) {
+  const appointment = await loadNoticeAppointment(appointmentId, "rejected");
+  if (!appointment) {
+    return {
+      emailDelivery: {
+        sent: false,
+        error: "The booking was rejected, but the customer could not be notified.",
+      },
+      smsDelivery: { sent: false, error: null },
+    };
+  }
+  const contact = await shopContact();
+  return deliverNotice({
+    label: "Booking not accepted",
+    outcome: "The booking was rejected",
+    appointment,
+    email: bookingNotAcceptedEmail({
+      appointment: appointment.summary,
+      contact,
+      bookingUrl: publicPageUrl("/book"),
+    }),
+    sms: bookingNotAcceptedSms({ appointment: appointment.summary, contact }),
   });
-  return deliverCustomerEmail(
-    "Booking not accepted email",
-    recipient,
-    content,
-    "The booking was rejected, but the email to the customer could not be sent.",
-  );
 }
 
 /** Tells the customer their reschedule request was not approved. */
-async function sendRescheduleNotApprovedEmail(appointmentId: string): Promise<CustomerEmailResult> {
+async function notifyRescheduleNotApproved(appointmentId: string) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const [appointmentRes, requestRes] = await Promise.all([
-    supabaseAdmin
-      .from("appointments")
-      .select(
-        "reference_code,customer_name,email,appointment_date,start_time,moto_brand,moto_model,plate_number,appointment_services(service_name)",
-      )
-      .eq("id", appointmentId)
-      .maybeSingle(),
+  const [appointment, requestRes] = await Promise.all([
+    loadNoticeAppointment(appointmentId),
     // Rejecting clears the request from the appointment; its history keeps the requested time.
     supabaseAdmin
       .from("appointment_reschedule_history")
@@ -1005,50 +1017,35 @@ async function sendRescheduleNotApprovedEmail(appointmentId: string): Promise<Cu
       .limit(1)
       .maybeSingle(),
   ]);
-  const appointment = appointmentRes.data;
-  if (appointmentRes.error || !appointment) {
-    console.error(
-      "[Reschedule not approved email] appointment lookup failed",
-      appointmentRes.error,
-    );
+  if (!appointment) {
     return {
-      sent: false,
-      error: "The reschedule request was rejected, but the customer email could not be prepared.",
+      emailDelivery: {
+        sent: false,
+        error: "The reschedule request was rejected, but the customer could not be notified.",
+      },
+      smsDelivery: { sent: false, error: null },
     };
   }
   if (requestRes.error) {
-    console.warn("[Reschedule not approved email] request lookup failed", requestRes.error);
+    console.warn("[Reschedule not approved] request lookup failed", requestRes.error);
   }
-  const recipient = appointment.email?.trim().toLowerCase();
-  if (!recipient) {
-    return {
-      sent: false,
-      error:
-        "The reschedule request was rejected. This customer has no email on file, so please let them know by phone.",
-    };
-  }
-
-  const content = rescheduleNotApprovedEmail({
-    appointment: {
-      referenceCode: appointment.reference_code,
-      customerName: appointment.customer_name,
-      appointmentDate: appointment.appointment_date,
-      startTime: appointment.start_time,
-      services: (appointment.appointment_services ?? []).map((service) => service.service_name),
-      motorcycle: [appointment.moto_brand, appointment.moto_model].filter(Boolean).join(" "),
-      plateNumber: appointment.plate_number,
-    },
+  const contact = await shopContact();
+  const requested = {
     requestedDate: requestRes.data?.to_date ?? null,
     requestedStartTime: requestRes.data?.to_start_time ?? null,
-    contact: await shopContact(),
-    appointmentUrl: publicPageUrl("/my-appointment"),
+  };
+  return deliverNotice({
+    label: "Reschedule not approved",
+    outcome: "The reschedule request was rejected",
+    appointment,
+    email: rescheduleNotApprovedEmail({
+      appointment: appointment.summary,
+      ...requested,
+      contact,
+      appointmentUrl: publicPageUrl("/my-appointment"),
+    }),
+    sms: rescheduleNotApprovedSms({ appointment: appointment.summary, ...requested, contact }),
   });
-  return deliverCustomerEmail(
-    "Reschedule not approved email",
-    recipient,
-    content,
-    "The reschedule request was rejected, but the email to the customer could not be sent.",
-  );
 }
 
 async function requireActiveAdminSession() {
@@ -1147,11 +1144,13 @@ export const reviewPendingAppointmentWithConfirmation = createServerFn({ method:
     });
     if (error) return { ok: false as const, error: error.message };
     if (data.decision === "rejected") {
-      const emailDelivery = await sendBookingNotAcceptedEmail(data.appointmentId);
+      const { emailDelivery, smsDelivery } = await notifyBookingNotAccepted(data.appointmentId);
       return {
         ok: true as const,
         emailSent: emailDelivery.sent,
-        emailError: emailDelivery.sent ? null : emailDelivery.error,
+        emailError: emailDelivery.error,
+        smsSent: smsDelivery.sent,
+        smsError: smsDelivery.error,
       };
     }
 
@@ -1176,11 +1175,13 @@ export const reviewRescheduleRequestWithConfirmation = createServerFn({ method: 
     });
     if (error) return { ok: false as const, error: error.message };
     if (data.decision === "rejected") {
-      const emailDelivery = await sendRescheduleNotApprovedEmail(data.appointmentId);
+      const { emailDelivery, smsDelivery } = await notifyRescheduleNotApproved(data.appointmentId);
       return {
         ok: true as const,
         emailSent: emailDelivery.sent,
-        emailError: emailDelivery.sent ? null : emailDelivery.error,
+        emailError: emailDelivery.error,
+        smsSent: smsDelivery.sent,
+        smsError: smsDelivery.error,
       };
     }
 
@@ -1250,11 +1251,13 @@ export const updateAppointmentWithConfirmation = createServerFn({ method: "POST"
     });
     if (error) return { ok: false as const, error: error.message };
     if (isBeingRejected) {
-      const emailDelivery = await sendBookingNotAcceptedEmail(data.appointmentId);
+      const { emailDelivery, smsDelivery } = await notifyBookingNotAccepted(data.appointmentId);
       return {
         ok: true as const,
         emailSent: emailDelivery.sent,
-        emailError: emailDelivery.sent ? null : emailDelivery.error,
+        emailError: emailDelivery.error,
+        smsSent: smsDelivery.sent,
+        smsError: smsDelivery.error,
       };
     }
     if (!isBeingConfirmed && !isBeingCompleted) return { ok: true as const, emailSent: false };

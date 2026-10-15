@@ -71,7 +71,6 @@ import {
   DEFAULT_BOOKING_TERMS,
   DEFAULT_BOOKING_HOURS,
   PHONE_VALIDATION_MESSAGE,
-  SHOP,
   MAX_BOOKING_SERVICE_SELECTIONS,
   bookingDurationOverflowMinutes,
   formatDateLong,
@@ -1595,10 +1594,6 @@ function BookPage() {
                   Nothing is submitted until you confirm on the next step.
                 </p>
               </div>
-              <p className="mt-3 text-center text-xs text-muted-foreground">
-                Need help? Call or text{" "}
-                <span className="font-medium text-foreground">{SHOP.phone}</span>
-              </p>
             </aside>
           </div>
 
