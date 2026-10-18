@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { format } from "date-fns";
-import { CalendarRange, ChevronDown, Download, FileText, History, RefreshCw } from "lucide-react";
+import { CalendarRange, ChevronDown, History, Printer, RefreshCw } from "lucide-react";
 import type { DateRange } from "react-day-picker";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
@@ -18,25 +18,10 @@ import {
 } from "@/components/admin/data-list";
 import { PageHeader } from "@/components/admin/page-header";
 import { PaginationControls } from "@/components/admin/pagination-controls";
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from "@/components/ui/alert-dialog";
+import { PrintDocument, PrintTable } from "@/components/admin/print-document";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
@@ -52,13 +37,9 @@ import {
   manilaMonthDateRange,
   manilaYearDateRange,
 } from "@/lib/admin-date-range";
-import {
-  formatBusinessTimestamp,
-  getShopLogoDataUrl,
-  SHOP_EXPORT_NAME,
-  SHOP_OWNER_NAME,
-} from "@/lib/export-branding";
+import { formatBusinessTimestamp } from "@/lib/export-branding";
 import { recordAdminActivityEvent } from "@/lib/admin-activity";
+import { usePrintWhenReady } from "@/lib/print-document";
 import { addDays, manilaNow } from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
@@ -76,6 +57,7 @@ const actionOptions = [
   "restored",
   "deleted",
   "exported",
+  "printed",
   "signed in",
   "signed out",
 ];
@@ -116,7 +98,12 @@ type ActivityLog = {
   ip_address: string | null;
 };
 
-type ExportFormat = "pdf" | "docx";
+type ActivityPrint = {
+  records: ActivityLog[];
+  generatedAt: string;
+  coverage: string;
+  scope: string;
+};
 type ActivityPeriod = "all" | "today" | "7d" | "month" | "year" | "custom";
 type ActivityDateRange = { from: string; to: string };
 
@@ -129,9 +116,9 @@ function ActivityLogPage() {
   const [activityPeriod, setActivityPeriod] = useState<ActivityPeriod>("all");
   const [activityCustomDateRange, setActivityCustomDateRange] = useState<DateRange>();
   const [page, setPage] = useState(0);
-  const [pendingExport, setPendingExport] = useState<ExportFormat | null>(null);
-  const [isExporting, setIsExporting] = useState(false);
-  const [exportError, setExportError] = useState<string | null>(null);
+  const [printJob, setPrintJob] = useState<ActivityPrint | null>(null);
+  const [isPrinting, setIsPrinting] = useState(false);
+  const [printError, setPrintError] = useState<string | null>(null);
   const deferredSearch = useDeferredValue(search);
   const filtersAreUpdating = search !== deferredSearch;
   const today = manilaNow().date;
@@ -243,223 +230,64 @@ function ActivityLogPage() {
     }
   }
 
-  function exportScope(recordCount: number) {
-    const recordLabel = recordCount === 1 ? "activity record" : "activity records";
-    if (!hasFilters) return `All ${recordCount} ${recordLabel} retained for the last 50 days.`;
-    const selectedFilters = [
+  usePrintWhenReady(printJob && `Admin Activity Log - ${printJob.coverage}`, () =>
+    setPrintJob(null),
+  );
+
+  /** The dates the printout covers, as shown on its first page. */
+  function printCoverage() {
+    if (!fromDate || !toDate) return "All retained activity (last 50 days)";
+    const label = activityPeriodLabel(activityPeriod, activityCustomDateRange);
+    const dates =
+      fromDate === toDate
+        ? formatActivityDate(fromDate)
+        : `${formatActivityDate(fromDate)} to ${formatActivityDate(toDate)}`;
+    return activityPeriod === "custom" ? dates : `${label} (${dates})`;
+  }
+
+  /** The filters behind the printout, as shown on its first page. */
+  function printScope(recordCount: number) {
+    return [
+      `${recordCount} ${recordCount === 1 ? "activity record" : "activity records"}`,
+      `Action: ${action === "all" ? "All actions" : action}`,
+      `Category: ${resource === "all" ? "All categories" : resource}`,
       deferredSearch.trim() ? `Search: ${deferredSearch.trim()}` : "",
-      action !== "all" ? `Action: ${action}` : "",
-      resource !== "all" ? `Category: ${resource}` : "",
-      activityPeriod !== "all"
-        ? `Date: ${activityPeriodLabel(activityPeriod, activityCustomDateRange)}`
-        : "",
-    ].filter(Boolean);
-    return `All ${recordCount} ${recordLabel} matching ${selectedFilters.join("; ")}.`;
+    ]
+      .filter(Boolean)
+      .join(" · ");
   }
 
-  async function exportPdf(records: ActivityLog[], scope: string) {
-    const [{ jsPDF }, { default: autoTable }] = await Promise.all([
-      import("jspdf"),
-      import("jspdf-autotable"),
-    ]);
-    const doc = new jsPDF({ orientation: "landscape" });
-    const logoDataUrl = await getShopLogoDataUrl();
-    const pageWidth = doc.internal.pageSize.getWidth();
-    doc.setFontSize(16);
-    const logoSize = 24;
-    const brandGap = 6;
-    const brandStartX = (pageWidth - logoSize - brandGap - doc.getTextWidth(SHOP_EXPORT_NAME)) / 2;
-    doc.addImage(logoDataUrl, "PNG", brandStartX, 10, logoSize, logoSize);
-    doc.text(SHOP_EXPORT_NAME, brandStartX + logoSize + brandGap, 26);
-    doc.setFontSize(11);
-    doc.text("ADMIN ACTIVITY LOG", 14, 54);
-    doc.setFontSize(9);
-    doc.text(`Generated: ${formatBusinessTimestamp()}`, 14, 60);
-    const scopeLines = doc.splitTextToSize(`Scope: ${scope}`, pageWidth - 28);
-    doc.text(scopeLines, 14, 66);
-    const tableStartY = 66 + scopeLines.length * 5 + 4;
-
-    autoTable(doc, {
-      startY: tableStartY,
-      head: [
-        [
-          "Date",
-          "Time",
-          "User",
-          "Action",
-          "Category",
-          "Record",
-          "Record ID",
-          "IP address",
-          "Changed fields",
-        ],
-      ],
-      body: exportRows(records),
-      theme: "grid",
-      margin: { bottom: 48 },
-      styles: { fontSize: 7 },
-      headStyles: { fillColor: [220, 220, 220], textColor: [0, 0, 0] },
-    });
-
-    const pageHeight = doc.internal.pageSize.getHeight();
-    const signatureX = pageWidth - 78;
-    const signatureLineY = pageHeight - 29;
-    doc.setPage(doc.getNumberOfPages());
-    doc.setDrawColor(80);
-    doc.line(signatureX, signatureLineY, pageWidth - 14, signatureLineY);
-    doc.setFontSize(10);
-    doc.text(SHOP_OWNER_NAME, pageWidth - 46, signatureLineY + 6, { align: "center" });
-    doc.setFontSize(8);
-    doc.text("Shop Owner / Authorized Signatory", pageWidth - 46, signatureLineY + 11, {
-      align: "center",
-    });
-    doc.text("Signature over printed name", pageWidth - 46, signatureLineY - 3, {
-      align: "center",
-    });
-    doc.save(`fake-rider-activity-log-${fileDate()}.pdf`);
-  }
-
-  async function exportDocx(records: ActivityLog[], scope: string) {
-    const {
-      AlignmentType,
-      BorderStyle,
-      Document,
-      ImageRun,
-      Packer,
-      PageOrientation,
-      Paragraph,
-      Table,
-      TableCell,
-      TableLayoutType,
-      TableRow,
-      TextRun,
-      WidthType,
-    } = await import("docx");
-    const logoDataUrl = await getShopLogoDataUrl();
-    const cell = (text: string, header = false) =>
-      new TableCell({
-        ...(header ? { shading: { fill: "E5E7EB" } } : {}),
-        children: [
-          new Paragraph({
-            children: [new TextRun({ text, bold: header, size: header ? 18 : 16 })],
-          }),
-        ],
-      });
-    const headers = [
-      "Date",
-      "Time",
-      "User",
-      "Action",
-      "Category",
-      "Record",
-      "Record ID",
-      "IP address",
-      "Changed fields",
-    ];
-    const table = new Table({
-      width: { size: 100, type: WidthType.PERCENTAGE },
-      columnWidths: [1250, 900, 1900, 2250, 1650, 1900, 2200, 1250, 2100],
-      layout: TableLayoutType.FIXED,
-      borders: {
-        top: { style: BorderStyle.SINGLE, size: 4, color: "555555" },
-        bottom: { style: BorderStyle.SINGLE, size: 4, color: "555555" },
-        left: { style: BorderStyle.SINGLE, size: 4, color: "555555" },
-        right: { style: BorderStyle.SINGLE, size: 4, color: "555555" },
-        insideHorizontal: { style: BorderStyle.SINGLE, size: 2, color: "AAAAAA" },
-        insideVertical: { style: BorderStyle.SINGLE, size: 2, color: "AAAAAA" },
-      },
-      rows: [
-        new TableRow({ tableHeader: true, children: headers.map((header) => cell(header, true)) }),
-        ...exportRows(records).map(
-          (row) => new TableRow({ children: row.map((value) => cell(value)) }),
-        ),
-      ],
-    });
-    const document = new Document({
-      sections: [
-        {
-          properties: {
-            page: {
-              size: { width: 16840, height: 11900, orientation: PageOrientation.LANDSCAPE },
-              margin: { top: 720, bottom: 720, left: 720, right: 720 },
-            },
-          },
-          children: [
-            new Paragraph({
-              alignment: AlignmentType.CENTER,
-              spacing: { after: 180 },
-              children: [
-                new ImageRun({
-                  data: dataUrlToBytes(logoDataUrl),
-                  type: "png",
-                  transformation: { width: 36, height: 20 },
-                }),
-                new TextRun({ text: `  ${SHOP_EXPORT_NAME}`, bold: true, size: 30 }),
-              ],
-            }),
-            new Paragraph({
-              children: [new TextRun({ text: "ADMIN ACTIVITY LOG", bold: true, size: 24 })],
-              spacing: { after: 80 },
-            }),
-            new Paragraph({
-              text: `Generated: ${formatBusinessTimestamp()}`,
-              spacing: { after: 50 },
-            }),
-            new Paragraph({ text: `Scope: ${scope}`, spacing: { after: 180 } }),
-            table,
-            new Paragraph({ text: "", spacing: { before: 520 } }),
-            new Paragraph({
-              alignment: AlignmentType.RIGHT,
-              children: [new TextRun({ text: "Signature over printed name", size: 16 })],
-            }),
-            new Paragraph({
-              alignment: AlignmentType.RIGHT,
-              children: [new TextRun({ text: "____________________________", size: 20 })],
-            }),
-            new Paragraph({
-              alignment: AlignmentType.RIGHT,
-              children: [new TextRun({ text: SHOP_OWNER_NAME, bold: true, size: 18 })],
-            }),
-            new Paragraph({
-              alignment: AlignmentType.RIGHT,
-              children: [new TextRun({ text: "Shop Owner / Authorized Signatory", size: 16 })],
-            }),
-          ],
-        },
-      ],
-    });
-    downloadFile(await Packer.toBlob(document), `fake-rider-activity-log-${fileDate()}.docx`);
-  }
-
-  async function confirmExport() {
-    const format = pendingExport;
-    if (!format || isExporting) return;
-
+  async function printActivityLog() {
+    if (isPrinting) return;
+    setIsPrinting(true);
     try {
-      setIsExporting(true);
-      setExportError(null);
+      setPrintError(null);
+      // The printout lists every matching record, not only the current page.
       const records = await fetchAllFilteredRows();
-      const scope = exportScope(records.length);
-      if (format === "pdf") await exportPdf(records, scope);
-      if (format === "docx") await exportDocx(records, scope);
-
+      setPrintJob({
+        records,
+        generatedAt: formatBusinessTimestamp(),
+        coverage: printCoverage(),
+        scope: printScope(records.length),
+      });
       try {
         await recordAdminActivityEvent({
-          action: "exported",
+          action: "printed",
           resourceType: "Activity Log",
-          targetLabel: `${format.toUpperCase()} export`,
-          summary: `Exported ${records.length} activity ${records.length === 1 ? "record" : "records"} as ${format.toUpperCase()}.`,
-          changedFields: ["export_format"],
+          targetLabel: "Admin Activity Log",
+          summary: `Opened the print dialog for ${records.length} activity ${records.length === 1 ? "record" : "records"}.`,
+          changedFields: ["date_range", "print_format"],
         });
         queryClient.invalidateQueries({ queryKey: ["admin-activity-logs"] });
-      } catch {
-        setExportError("The file was exported, but its activity entry could not be recorded.");
+      } catch (error) {
+        // An audit-log failure must not stop a valid printout.
+        console.error("Could not record activity log print:", error);
       }
-    } catch {
-      setExportError("Could not create the activity log export. Please try again.");
+    } catch (error) {
+      console.error("Could not prepare the activity log for printing:", error);
+      setPrintError("Could not prepare the activity log for printing. Please try again.");
     } finally {
-      setIsExporting(false);
-      setPendingExport(null);
+      setIsPrinting(false);
     }
   }
 
@@ -473,29 +301,21 @@ function ActivityLogPage() {
             <Button variant="outline" onClick={refresh} disabled={logs.isFetching}>
               <RefreshCw className={logs.isFetching ? "animate-spin" : ""} /> Refresh
             </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button
-                  variant="outline"
-                  disabled={(logs.data?.total ?? 0) === 0 || logs.isFetching || filtersAreUpdating}
-                >
-                  <Download /> Export
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                <DropdownMenuItem onSelect={() => setPendingExport("pdf")}>
-                  <FileText /> Export PDF table
-                </DropdownMenuItem>
-                <DropdownMenuItem onSelect={() => setPendingExport("docx")}>
-                  <FileText /> Export DOCX table
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
+            <Button
+              variant="outline"
+              className="font-display uppercase"
+              onClick={() => void printActivityLog()}
+              disabled={
+                (logs.data?.total ?? 0) === 0 || logs.isFetching || filtersAreUpdating || isPrinting
+              }
+            >
+              <Printer /> {isPrinting ? "Preparing print..." : "Print log"}
+            </Button>
           </div>
         }
       />
 
-      {exportError && <InlineAlert>{exportError}</InlineAlert>}
+      {printError && <InlineAlert>{printError}</InlineAlert>}
 
       <ListToolbar summary={logs.data && filterDescription}>
         <ToolbarSearch
@@ -672,29 +492,7 @@ function ActivityLogPage() {
         />
       </ListCard>
 
-      <AlertDialog
-        open={pendingExport !== null}
-        onOpenChange={(open) => {
-          if (!open) setPendingExport(null);
-        }}
-      >
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Confirm activity log export</AlertDialogTitle>
-            <AlertDialogDescription>
-              Export {logs.data?.total ?? 0}{" "}
-              {(logs.data?.total ?? 0) === 1 ? "activity record" : "activity records"} as a{" "}
-              {pendingExport?.toUpperCase()} table?
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel disabled={isExporting}>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmExport} disabled={isExporting}>
-              {isExporting ? "Exporting..." : `Export ${pendingExport?.toUpperCase()}`}
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      <PrintActivityLog job={printJob} />
     </AdminPage>
   );
 }
@@ -914,7 +712,7 @@ function formatActivityTime(time: string) {
   return `${hour % 12 || 12}:${minutes} ${hour >= 12 ? "PM" : "AM"}`;
 }
 
-function exportRows(rows: ActivityLog[]) {
+function printRows(rows: ActivityLog[]) {
   return rows.map((row) => [
     formatActivityDate(row.activity_date),
     formatActivityTime(row.activity_time),
@@ -928,21 +726,37 @@ function exportRows(rows: ActivityLog[]) {
   ]);
 }
 
-function dataUrlToBytes(dataUrl: string) {
-  const encoded = dataUrl.split(",", 2)[1] ?? "";
-  const binary = window.atob(encoded);
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-}
-
-function downloadFile(file: Blob, filename: string) {
-  const url = URL.createObjectURL(file);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
-function fileDate() {
-  return manilaNow().date;
+/** The printable activity log: every matching record in one table. */
+function PrintActivityLog({ job }: { job: ActivityPrint | null }) {
+  if (!job) return null;
+  return (
+    <PrintDocument
+      info={{
+        title: "Admin Activity Log",
+        subtitle: "Activity record",
+        generatedAt: job.generatedAt,
+        coverage: job.coverage,
+        scope: job.scope,
+      }}
+    >
+      <PrintTable
+        title="Activity records"
+        headers={[
+          "Date",
+          "Time",
+          "User",
+          "Action",
+          "Category",
+          "Record",
+          "Record ID",
+          "IP address",
+          "Changed fields",
+        ]}
+        columnWidths={["8%", "6%", "14%", "8%", "10%", "14%", "16%", "9%", "15%"]}
+        rows={printRows(job.records)}
+        emptyMessage="No activity matches these filters."
+        lastColumn="text"
+      />
+    </PrintDocument>
+  );
 }

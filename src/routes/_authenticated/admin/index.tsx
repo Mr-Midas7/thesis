@@ -69,14 +69,67 @@ type DashboardAppointment = {
   appointment_date: string;
   start_time: string;
   status: string;
-  moto_brand: string;
-  moto_model: string;
-  phone: string;
-  total_estimate: number;
   serviceName: string;
-  rescheduled_from_appointment_id: string | null;
-  rescheduled_to_appointment_id: string | null;
 };
+
+type StatusCounts = Record<
+  "pending" | "confirmed" | "in_progress" | "completed" | "rescheduled" | "cancelled" | "no_show",
+  number
+>;
+
+/** Counted in the database (get_admin_dashboard_summary). */
+type DashboardSummary = {
+  current: { appointments: number; customers: number; revenue: number; statuses: StatusCounts };
+  previous: { appointments: number; customers: number; revenue: number };
+  needs_action: { new_bookings: number; reschedule_requests: number };
+};
+
+type ChartRow = {
+  period: string;
+  completed: number;
+  confirmed: number;
+  cancelled: number;
+  in_progress: number;
+};
+
+const LIST_COLUMNS =
+  "id,reference_code,customer_name,appointment_date,start_time,status,appointment_services(service_name)";
+
+/** Appointments the dashboard lists, as counted by get_admin_dashboard_summary. */
+function activeAppointmentsQuery() {
+  return (
+    supabase
+      .from("appointments")
+      .select(LIST_COLUMNS)
+      // Completed appointments always count, as in the financial report.
+      .or("is_archived.eq.false,status.eq.completed")
+      // A rescheduled booking's old record is replaced by its new appointment.
+      .is("rescheduled_to_appointment_id", null)
+      .not("status", "in", "(cancelled,rejected,no_show)")
+      .order("appointment_date")
+      .order("start_time")
+      .limit(5)
+  );
+}
+
+function toDashboardAppointments(
+  rows: {
+    id: string;
+    reference_code: string;
+    customer_name: string;
+    appointment_date: string;
+    start_time: string;
+    status: string;
+    appointment_services: { service_name: string }[] | null;
+  }[],
+): DashboardAppointment[] {
+  return rows.map(({ appointment_services, ...appointment }) => ({
+    ...appointment,
+    serviceName:
+      (appointment_services ?? []).map((service) => service.service_name).join(", ") ||
+      "Service appointment",
+  }));
+}
 
 type Trend = {
   direction: "up" | "down" | "flat";
@@ -95,169 +148,130 @@ function Dashboard() {
   const [chartCustomDateRange, setChartCustomDateRange] = useState<DateRange>();
   const selectedDateIso = calendarDateToIso(selectedDate);
 
-  const data = useQuery({
-    queryKey: ["admin-dashboard", selectedDateIso],
-    queryFn: async (): Promise<DashboardAppointment[]> => {
-      const { data: appointments, error } = await supabase
-        .from("appointments")
-        .select("*")
-        // Completed appointments always count, as in the financial report.
-        .or("is_archived.eq.false,status.eq.completed")
-        .order("appointment_date")
-        .order("start_time");
-      if (error) throw error;
-
-      const { data: appointmentServices } = await supabase
-        .from("appointment_services")
-        .select("appointment_id,service_name");
-      const serviceNamesByAppointment = new Map<string, string[]>();
-      for (const service of appointmentServices ?? []) {
-        const names = serviceNamesByAppointment.get(service.appointment_id) ?? [];
-        names.push(service.service_name);
-        serviceNamesByAppointment.set(service.appointment_id, names);
-      }
-
-      return (appointments ?? []).map((appointment) => ({
-        id: appointment.id,
-        reference_code: appointment.reference_code,
-        customer_name: appointment.customer_name,
-        appointment_date: appointment.appointment_date,
-        start_time: appointment.start_time,
-        status: appointment.status,
-        moto_brand: appointment.moto_brand,
-        moto_model: appointment.moto_model,
-        phone: appointment.phone,
-        total_estimate: Number(appointment.total_estimate),
-        rescheduled_from_appointment_id: appointment.rescheduled_from_appointment_id,
-        rescheduled_to_appointment_id: appointment.rescheduled_to_appointment_id,
-        serviceName:
-          serviceNamesByAppointment.get(appointment.id)?.join(", ") || "Service appointment",
-      }));
-    },
-  });
-
-  const list = data.data ?? [];
-  const active = list.filter(
-    (appointment) => !["cancelled", "rejected", "no_show"].includes(appointment.status),
-  );
-
   const dashboardBuckets = useMemo(
     () => buildOverviewBuckets(selectedDate, dashboardPeriod, dashboardCustomDateRange),
     [dashboardCustomDateRange, dashboardPeriod, selectedDate],
   );
   const dashboardRange = rangeFromBuckets(dashboardBuckets, selectedDateIso);
   const previousDashboardRange = previousRange(dashboardRange);
-  const dashboardAppointments = list.filter((appointment) =>
-    isInRange(appointment, dashboardRange),
-  );
-  const previousDashboardAppointments = list.filter((appointment) =>
-    isInRange(appointment, previousDashboardRange),
-  );
-  const dashboardActive = dashboardAppointments.filter(
-    (appointment) => !["cancelled", "rejected", "no_show"].includes(appointment.status),
-  );
-  const previousDashboardActive = previousDashboardAppointments.filter(
-    (appointment) => !["cancelled", "rejected", "no_show"].includes(appointment.status),
-  );
-  const dashboardSchedule = dashboardActive.slice(0, 5);
-  const upcoming = active
-    .filter(
-      (appointment) =>
-        appointment.appointment_date > dashboardRange.to &&
-        appointment.status !== "rescheduled" &&
-        !appointment.rescheduled_to_appointment_id,
-    )
-    .slice(0, 5);
-  const dashboardPending = dashboardActive.filter(
-    (appointment) => appointment.status === "pending",
-  );
-  const previousDashboardPending = previousDashboardActive.filter(
-    (appointment) => appointment.status === "pending",
-  );
-  const dashboardCustomers = new Set(dashboardActive.map((appointment) => appointment.phone)).size;
-  const previousDashboardCustomers = new Set(
-    previousDashboardActive.map((appointment) => appointment.phone),
-  ).size;
-  const dashboardRevenue = dashboardAppointments
-    .filter((appointment) => appointment.status === "completed")
-    .reduce((sum, appointment) => sum + appointment.total_estimate, 0);
-  const previousDashboardRevenue = previousDashboardAppointments
-    .filter((appointment) => appointment.status === "completed")
-    .reduce((sum, appointment) => sum + appointment.total_estimate, 0);
+
+  const summary = useQuery({
+    queryKey: ["admin-dashboard", "summary", dashboardRange.from, dashboardRange.to],
+    queryFn: async (): Promise<DashboardSummary> => {
+      const { data, error } = await supabase.rpc("get_admin_dashboard_summary", {
+        p_from: dashboardRange.from,
+        p_to: dashboardRange.to,
+        p_previous_from: previousDashboardRange.from,
+        p_previous_to: previousDashboardRange.to,
+      });
+      if (error) throw error;
+      return data as unknown as DashboardSummary;
+    },
+  });
+
+  const schedule = useQuery({
+    queryKey: ["admin-dashboard", "schedule", dashboardRange.from, dashboardRange.to],
+    queryFn: async () => {
+      const { data, error } = await activeAppointmentsQuery()
+        .gte("appointment_date", dashboardRange.from)
+        .lte("appointment_date", dashboardRange.to);
+      if (error) throw error;
+      return toDashboardAppointments(data ?? []);
+    },
+  });
+
+  const upcoming = useQuery({
+    queryKey: ["admin-dashboard", "upcoming", dashboardRange.to],
+    queryFn: async () => {
+      const { data, error } = await activeAppointmentsQuery()
+        .gt("appointment_date", dashboardRange.to)
+        .neq("status", "rescheduled");
+      if (error) throw error;
+      return toDashboardAppointments(data ?? []);
+    },
+  });
 
   const chartBuckets = useMemo(
     () => buildOverviewBuckets(selectedDate, chartPeriod, chartCustomDateRange),
     [chartCustomDateRange, chartPeriod, selectedDate],
   );
+  const chartRange = rangeFromBuckets(chartBuckets, selectedDateIso);
+  // A year is shown by month; every other period by day.
+  const chartByMonth = chartPeriod === "year";
+  const chart = useQuery({
+    queryKey: ["admin-dashboard", "chart", chartRange.from, chartRange.to, chartByMonth],
+    queryFn: async () => {
+      const { data, error } = await supabase.rpc("get_admin_dashboard_chart", {
+        p_from: chartRange.from,
+        p_to: chartRange.to,
+        p_by_month: chartByMonth,
+      });
+      if (error) throw error;
+      return new Map(((data ?? []) as unknown as ChartRow[]).map((row) => [row.period, row]));
+    },
+  });
   const appointmentOverview = chartBuckets.map((bucket) => {
-    const dayAppointments = list.filter(
-      (appointment) =>
-        appointment.appointment_date >= bucket.from && appointment.appointment_date <= bucket.to,
-    );
+    const row = chart.data?.get(bucket.from);
     return {
       day: bucket.label,
-      completed: dayAppointments.filter((appointment) => appointment.status === "completed").length,
-      confirmed: dayAppointments.filter((appointment) => appointment.status === "confirmed").length,
-      cancelled: dayAppointments.filter((appointment) =>
-        ["cancelled", "rejected", "no_show"].includes(appointment.status),
-      ).length,
-      in_progress: dayAppointments.filter((appointment) => appointment.status === "in_progress")
-        .length,
+      completed: row?.completed ?? 0,
+      confirmed: row?.confirmed ?? 0,
+      cancelled: row?.cancelled ?? 0,
+      in_progress: row?.in_progress ?? 0,
     };
   });
+
+  const current = summary.data?.current;
+  const previous = summary.data?.previous;
+  const statusCounts = current?.statuses;
+  const loadFailed = summary.isError || schedule.isError || upcoming.isError || chart.isError;
   const bookingStatuses = [
     {
       key: "pending",
       label: "Pending",
-      value: dashboardAppointments.filter((appointment) => appointment.status === "pending").length,
+      value: statusCounts?.pending ?? 0,
       color: "var(--primary)",
       dotClassName: "bg-primary",
     },
     {
       key: "confirmed",
       label: "Confirmed",
-      value: dashboardAppointments.filter((appointment) => appointment.status === "confirmed")
-        .length,
+      value: statusCounts?.confirmed ?? 0,
       color: "var(--chart-3)",
       dotClassName: "bg-chart-3",
     },
     {
       key: "in_progress",
       label: "In Progress",
-      value: dashboardAppointments.filter((appointment) => appointment.status === "in_progress")
-        .length,
+      value: statusCounts?.in_progress ?? 0,
       color: "var(--chart-4)",
       dotClassName: "bg-chart-4",
     },
     {
       key: "completed",
       label: "Complete",
-      value: dashboardAppointments.filter((appointment) => appointment.status === "completed")
-        .length,
+      value: statusCounts?.completed ?? 0,
       color: "var(--chart-2)",
       dotClassName: "bg-chart-2",
     },
     {
       key: "rescheduled",
       label: "Rescheduled",
-      value: dashboardAppointments.filter((appointment) => appointment.status === "rescheduled")
-        .length,
+      value: statusCounts?.rescheduled ?? 0,
       color: "var(--chart-5)",
       dotClassName: "bg-chart-5",
     },
     {
       key: "cancelled",
       label: "Canceled",
-      value: dashboardAppointments.filter((appointment) =>
-        ["cancelled", "rejected"].includes(appointment.status),
-      ).length,
+      value: statusCounts?.cancelled ?? 0,
       color: "var(--destructive)",
       dotClassName: "bg-destructive",
     },
     {
       key: "no_show",
       label: "No Show",
-      value: dashboardAppointments.filter((appointment) => appointment.status === "no_show").length,
+      value: statusCounts?.no_show ?? 0,
       color: "var(--muted-foreground)",
       dotClassName: "bg-muted-foreground",
     },
@@ -282,7 +296,7 @@ function Dashboard() {
         }
       />
 
-      {data.isError && (
+      {loadFailed && (
         <InlineAlert>
           Could not load the dashboard data. Please refresh the page and try again.
         </InlineAlert>
@@ -293,37 +307,38 @@ function Dashboard() {
           icon={CalendarCheck}
           iconClassName="bg-chart-4/15 text-chart-4"
           label={dashboardPeriod === "today" ? "Today's appointments" : "Appointments"}
-          value={String(dashboardActive.length)}
+          value={current ? String(current.appointments) : "—"}
           trend={makeTrend(
-            dashboardActive.length,
-            previousDashboardActive.length,
+            current?.appointments ?? 0,
+            previous?.appointments ?? 0,
             "vs. previous period",
           )}
         />
-        <DashboardStat
-          icon={CalendarClock}
-          iconClassName="bg-emerald-500/15 text-emerald-400"
-          label="Pending approval"
-          value={String(dashboardPending.length)}
-          trend={makeTrend(
-            dashboardPending.length,
-            previousDashboardPending.length,
-            "vs. previous period",
-          )}
+        <NeedsActionStat
+          newBookings={summary.data?.needs_action.new_bookings}
+          rescheduleRequests={summary.data?.needs_action.reschedule_requests}
         />
         <DashboardStat
           icon={Users}
           iconClassName="bg-primary/15 text-primary"
           label="Unique customers"
-          value={String(dashboardCustomers)}
-          trend={makeTrend(dashboardCustomers, previousDashboardCustomers, "vs. previous period")}
+          value={current ? String(current.customers) : "—"}
+          trend={makeTrend(
+            current?.customers ?? 0,
+            previous?.customers ?? 0,
+            "vs. previous period",
+          )}
         />
         <DashboardStat
           icon={PhilippinePeso}
           iconClassName="bg-accent/15 text-accent"
           label="Completed revenue"
-          value={formatPHP(dashboardRevenue)}
-          trend={makeTrend(dashboardRevenue, previousDashboardRevenue, "vs. previous period")}
+          value={current ? formatPHP(Number(current.revenue)) : "—"}
+          trend={makeTrend(
+            Number(current?.revenue ?? 0),
+            Number(previous?.revenue ?? 0),
+            "vs. previous period",
+          )}
         />
       </div>
 
@@ -457,13 +472,13 @@ function Dashboard() {
         <SchedulePanel
           title={dashboardPeriod === "today" ? "Today's schedule" : "Appointments"}
           empty="No appointments found for this period."
-          rows={dashboardSchedule}
+          rows={schedule.data ?? []}
           showDate={dashboardPeriod !== "today"}
         />
         <SchedulePanel
           title="Upcoming appointments"
           empty="No upcoming appointments yet."
-          rows={upcoming}
+          rows={upcoming.data ?? []}
           upcoming
         />
       </div>
@@ -485,7 +500,7 @@ function DashboardStat({
   trend: Trend;
 }) {
   return (
-    <Card className="border-border/70 bg-card/60">
+    <Card className="h-full border-border/70 bg-card/60">
       <CardContent className="p-4 sm:p-5">
         <div className="flex items-center gap-3">
           <span
@@ -518,6 +533,60 @@ function DashboardStat({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/** Bookings and reschedule requests waiting for the shop, whatever their date. */
+function NeedsActionStat({
+  newBookings,
+  rescheduleRequests,
+}: {
+  newBookings: number | undefined;
+  rescheduleRequests: number | undefined;
+}) {
+  const loaded = newBookings !== undefined && rescheduleRequests !== undefined;
+  const total = (newBookings ?? 0) + (rescheduleRequests ?? 0);
+  return (
+    <Link
+      to="/admin/appointments"
+      search={{ status: "needs_action" }}
+      aria-label={`Needs action: ${total} waiting. Open the list.`}
+      className="group rounded-xl focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+    >
+      <Card className="h-full border-border/70 bg-card/60 transition-colors group-hover:border-primary/50">
+        <CardContent className="p-4 sm:p-5">
+          <div className="flex items-center gap-3">
+            <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-emerald-500/15 text-emerald-400">
+              <CalendarClock className="size-4" aria-hidden="true" />
+            </span>
+            <p className="text-xs tracking-wider text-muted-foreground uppercase">Needs action</p>
+          </div>
+          <div className="mt-3 flex items-end justify-between gap-3">
+            <div>
+              <p
+                className={cn(
+                  "font-display text-2xl",
+                  total > 0 ? "text-primary" : "text-foreground",
+                )}
+              >
+                {loaded ? total : "—"}
+              </p>
+              <p className="mt-2 text-xs font-medium text-muted-foreground">
+                {newBookings ?? 0} new {newBookings === 1 ? "booking" : "bookings"}
+              </p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                {rescheduleRequests ?? 0} reschedule{" "}
+                {rescheduleRequests === 1 ? "request" : "requests"}
+              </p>
+            </div>
+            <ChevronRight
+              className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary"
+              aria-hidden="true"
+            />
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
   );
 }
 
@@ -825,10 +894,6 @@ function previousRange(range: IsoDateRange): IsoDateRange {
     from: addDays(range.from, -days),
     to: addDays(range.to, -days),
   };
-}
-
-function isInRange(appointment: DashboardAppointment, range: IsoDateRange) {
-  return appointment.appointment_date >= range.from && appointment.appointment_date <= range.to;
 }
 
 function overviewPeriodLabel(period: OverviewPeriod, customRange?: DateRange) {

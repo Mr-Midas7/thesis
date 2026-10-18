@@ -8,7 +8,8 @@ export const SHOP = {
   phone: "0916 126 3317",
   email: "joemartato4@gmail.com",
   facebook: "https://www.facebook.com/profile.php?id=100082988659961",
-  messenger: "https://www.facebook.com/messages/t/101547759281909/",
+  // m.me opens the Messenger app on phones and messenger.com on computers.
+  messenger: "https://m.me/101547759281909",
   noticeHours: 48,
   timeZone: "Asia/Manila",
 };

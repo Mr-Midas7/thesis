@@ -17,6 +17,16 @@ export type ProductRow = {
   is_featured: boolean;
 };
 
+/**
+ * Opens the shop's Messenger chat with a message naming the item already typed
+ * in; the customer still presses Send.
+ */
+function messengerReserveLink(product: ProductRow) {
+  const item = [product.brand, product.name].filter(Boolean).join(" ");
+  const message = `Hi! I would like to reserve ${item} (${formatPHP(product.price)}). Is it still available?`;
+  return `${SHOP.messenger}?text=${encodeURIComponent(message)}`;
+}
+
 export function ProductCard({ product }: { product: ProductRow }) {
   return (
     <Card className="group flex h-full flex-col overflow-hidden border-border/70 bg-card/70 py-0 transition-colors hover:border-primary/60 lg:min-w-0">
@@ -60,7 +70,7 @@ export function ProductCard({ product }: { product: ProductRow }) {
         {product.in_stock ? (
           <div className="mt-auto pt-4">
             <Button asChild variant="outline" size="sm" className="w-full uppercase">
-              <a href={SHOP.messenger} target="_blank" rel="noopener noreferrer">
+              <a href={messengerReserveLink(product)} target="_blank" rel="noopener noreferrer">
                 Reserve via Messenger
               </a>
             </Button>

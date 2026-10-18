@@ -1,7 +1,8 @@
 import { useMutation } from "@tanstack/react-query";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { ArrowLeft, Eye, EyeOff, Lock } from "lucide-react";
+import { ArrowLeft, Check, Eye, EyeOff, Loader2, Lock, Mail, MailCheck } from "lucide-react";
 import { useEffect, useState } from "react";
+import { z } from "zod";
 
 import logo from "@/assets/logo-shp.png.asset.json";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,8 @@ import { supabase } from "@/integrations/supabase/client";
 import { recordAdminActivityEvent } from "@/lib/admin-activity";
 
 export const Route = createFileRoute("/auth")({
+  // reset=done: the password was just changed on /reset-password.
+  validateSearch: z.object({ reset: z.literal("done").optional() }),
   head: () => ({
     meta: [
       { title: "Admin Login | Fake Rider Motorparts" },
@@ -38,6 +41,9 @@ function AuthPage() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [errors, setErrors] = useState<{ email?: string; password?: string }>({});
+  const { reset } = Route.useSearch();
+  const [mode, setMode] = useState<"sign-in" | "forgot">("sign-in");
+  const [resetSentTo, setResetSentTo] = useState<string | null>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -111,6 +117,32 @@ function AuthPage() {
     },
   });
 
+  const sendReset = useMutation({
+    mutationFn: async () => {
+      const address = email.trim().toLowerCase();
+      const { error } = await supabase.auth.resetPasswordForEmail(address, {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (error) throw error;
+      return address;
+    },
+    onSuccess: (address) => setResetSentTo(address),
+    onError: (error: Error & { status?: number }) => {
+      setErrors({
+        email:
+          error.status === 429 || /rate limit|too many/i.test(error.message)
+            ? "Too many reset emails were requested. Wait a few minutes and try again."
+            : "We could not send the reset email. Please try again shortly.",
+      });
+    },
+  });
+
+  function showSignIn() {
+    setMode("sign-in");
+    setResetSentTo(null);
+    setErrors({});
+  }
+
   function validate() {
     const nextErrors: { email?: string; password?: string } = {};
     if (!/^\S+@\S+\.\S+$/.test(email.trim())) nextErrors.email = "Enter a valid email address.";
@@ -124,76 +156,163 @@ function AuthPage() {
       <Card className="w-full max-w-md border-border/70 bg-card/70">
         <CardContent className="p-8">
           <img src={logo.url} alt="Fake Rider Motorparts logo" className="mx-auto h-24 w-auto" />
-          <h1 className="mt-4 text-center font-display text-2xl uppercase">Admin login</h1>
+          <h1 className="mt-4 text-center font-display text-2xl uppercase">
+            {mode === "forgot" ? "Reset password" : "Admin login"}
+          </h1>
           <p className="mt-1 text-center text-sm text-muted-foreground">
-            Administrator access only.
+            {mode === "forgot"
+              ? "Enter your admin email and we'll send a link to set a new password."
+              : "Administrator access only."}
           </p>
+          {reset === "done" && mode === "sign-in" && (
+            <p
+              role="status"
+              className="mt-4 flex items-start gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm text-emerald-700 dark:text-emerald-400"
+            >
+              <Check className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+              Your password was changed. Sign in with your new password.
+            </p>
+          )}
 
-          <form
-            className="mt-6 space-y-4"
-            onSubmit={(e) => {
-              e.preventDefault();
-              if (validate()) signIn.mutate();
-            }}
-          >
-            <div className="space-y-1.5">
-              <Label>Email</Label>
-              <Input
-                type="email"
-                value={email}
-                onChange={(e) => {
-                  setEmail(e.target.value.toLowerCase());
-                  setErrors((current) => {
-                    const { email: _, ...rest } = current;
-                    return rest;
-                  });
+          {mode === "forgot" ? (
+            resetSentTo ? (
+              <div className="mt-6 space-y-4">
+                <p
+                  role="status"
+                  className="flex items-start gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm text-emerald-700 dark:text-emerald-400"
+                >
+                  <MailCheck className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+                  If {resetSentTo} belongs to an admin account, a reset link is on its way. The link
+                  works once.
+                </p>
+                <Button
+                  type="button"
+                  className="w-full font-display uppercase"
+                  onClick={showSignIn}
+                >
+                  Back to sign in
+                </Button>
+              </div>
+            ) : (
+              <form
+                className="mt-6 space-y-4"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  if (!/^\S+@\S+\.\S+$/.test(email.trim())) {
+                    setErrors({ email: "Enter a valid email address." });
+                    return;
+                  }
+                  sendReset.mutate();
                 }}
-                placeholder="admin@fakerider.ph"
-                required
-                aria-invalid={!!errors.email}
-              />
-              <FieldError message={errors.email} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="admin-password">Password</Label>
-              <div className="relative">
+              >
+                <div className="space-y-1.5">
+                  <Label htmlFor="reset-email">Email</Label>
+                  <Input
+                    id="reset-email"
+                    type="email"
+                    autoComplete="email"
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value.toLowerCase());
+                      setErrors({});
+                    }}
+                    placeholder="admin@fakerider.ph"
+                    aria-invalid={!!errors.email}
+                  />
+                  <FieldError message={errors.email} />
+                </div>
+                <Button
+                  type="submit"
+                  className="w-full font-display uppercase"
+                  disabled={sendReset.isPending}
+                >
+                  {sendReset.isPending ? <Loader2 className="animate-spin" /> : <Mail />} Send reset
+                  link
+                </Button>
+                <Button type="button" variant="ghost" className="w-full" onClick={showSignIn}>
+                  Back to sign in
+                </Button>
+              </form>
+            )
+          ) : (
+            <form
+              className="mt-6 space-y-4"
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (validate()) signIn.mutate();
+              }}
+            >
+              <div className="space-y-1.5">
+                <Label>Email</Label>
                 <Input
-                  id="admin-password"
-                  type={showPassword ? "text" : "password"}
-                  value={password}
+                  type="email"
+                  value={email}
                   onChange={(e) => {
-                    setPassword(e.target.value);
+                    setEmail(e.target.value.toLowerCase());
                     setErrors((current) => {
-                      const { password: _, ...rest } = current;
+                      const { email: _, ...rest } = current;
                       return rest;
                     });
                   }}
+                  placeholder="admin@fakerider.ph"
                   required
-                  aria-invalid={!!errors.password}
-                  className="pr-11"
+                  aria-invalid={!!errors.email}
                 />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="absolute top-0 right-0 text-muted-foreground hover:text-foreground"
-                  onClick={() => setShowPassword((visible) => !visible)}
-                  aria-label={showPassword ? "Hide password" : "Show password"}
-                  aria-pressed={showPassword}
-                >
-                  {showPassword ? <EyeOff /> : <Eye />}
-                </Button>
+                <FieldError message={errors.email} />
               </div>
-              <FieldError message={errors.password} />
-            </div>
-            <Button
-              type="submit"
-              className="w-full font-display uppercase"
-              disabled={signIn.isPending}
-            >
-              {signIn.isPending ? <Lock className="animate-pulse" /> : <Lock />} Sign in
-            </Button>
-          </form>
+              <div className="space-y-1.5">
+                <Label htmlFor="admin-password">Password</Label>
+                <div className="relative">
+                  <Input
+                    id="admin-password"
+                    type={showPassword ? "text" : "password"}
+                    value={password}
+                    onChange={(e) => {
+                      setPassword(e.target.value);
+                      setErrors((current) => {
+                        const { password: _, ...rest } = current;
+                        return rest;
+                      });
+                    }}
+                    required
+                    aria-invalid={!!errors.password}
+                    className="pr-11"
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="absolute top-0 right-0 text-muted-foreground hover:text-foreground"
+                    onClick={() => setShowPassword((visible) => !visible)}
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    aria-pressed={showPassword}
+                  >
+                    {showPassword ? <EyeOff /> : <Eye />}
+                  </Button>
+                </div>
+                <FieldError message={errors.password} />
+                <div className="flex justify-end">
+                  <button
+                    type="button"
+                    className="text-xs font-medium text-primary hover:underline focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    onClick={() => {
+                      setMode("forgot");
+                      setErrors({});
+                    }}
+                  >
+                    Forgot password?
+                  </button>
+                </div>
+              </div>
+              <Button
+                type="submit"
+                className="w-full font-display uppercase"
+                disabled={signIn.isPending}
+              >
+                {signIn.isPending ? <Lock className="animate-pulse" /> : <Lock />} Sign in
+              </Button>
+            </form>
+          )}
 
           <Button asChild variant="ghost" className="mt-4 w-full justify-center text-sm">
             <Link to="/">

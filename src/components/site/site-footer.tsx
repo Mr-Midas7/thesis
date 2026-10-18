@@ -80,9 +80,6 @@ export function SiteFooter({ className }: { className?: string }) {
             <Link to="/shop" className="hover:text-foreground">
               Parts & Accessories
             </Link>
-            <Link to="/auth" className="hover:text-foreground">
-              Admin login
-            </Link>
           </div>
         </div>
       </div>

@@ -4,9 +4,11 @@ import { format } from "date-fns";
 import {
   CalendarRange,
   CalendarSearch,
+  Check,
   ChevronDown,
   Filter,
   Loader2,
+  Pencil,
   Plus,
   RotateCcw,
   Trash2,
@@ -27,7 +29,6 @@ import {
 import { PageHeader } from "@/components/admin/page-header";
 import {
   AlertDialog,
-  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -41,6 +42,7 @@ import { FieldError } from "@/components/ui/field-error";
 import {
   Dialog,
   DialogContent,
+  DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
@@ -95,6 +97,7 @@ type ScheduleWithCrew = {
 
 type WorkingMechanic = {
   id: string;
+  crew_id: string;
   schedule_date: string;
   name: string;
   role: string;
@@ -116,6 +119,111 @@ type CrewMember = {
   name: string;
   role: string;
 };
+
+/** A booking, or a later day of a multi-day booking, assigned to a mechanic. */
+type ShiftWork = {
+  key: string;
+  referenceCode: string;
+  customerName: string;
+  startTime: string;
+  durationMinutes: number;
+};
+
+/** What change_crew_schedule returns: the bookings it gave to other mechanics. */
+type ShiftChangeResult = {
+  moved: { reference_code: string; start_time: string; mechanic: string }[];
+};
+
+const ACTIVE_WORK_STATUSES = ["pending", "confirmed", "in_progress", "rescheduled"] as const;
+
+async function fetchShiftWork(crewId: string, date: string): Promise<ShiftWork[]> {
+  const [appointments, continuations] = await Promise.all([
+    supabase
+      .from("appointments")
+      .select("id,reference_code,customer_name,start_time,booking_duration_minutes")
+      .eq("assigned_crew_id", crewId)
+      .eq("appointment_date", date)
+      .eq("is_archived", false)
+      .is("rescheduled_to_appointment_id", null)
+      .in("status", [...ACTIVE_WORK_STATUSES]),
+    supabase
+      .from("appointment_continuations")
+      .select(
+        "id,start_time,booking_duration_minutes,appointments!inner(reference_code,customer_name)",
+      )
+      .eq("assigned_crew_id", crewId)
+      .eq("appointment_date", date)
+      .eq("appointments.is_archived", false)
+      .is("appointments.rescheduled_to_appointment_id", null)
+      .in("appointments.status", [...ACTIVE_WORK_STATUSES]),
+  ]);
+  if (appointments.error) throw appointments.error;
+  if (continuations.error) throw continuations.error;
+  return [
+    ...(appointments.data ?? []).map((appointment) => ({
+      key: appointment.id,
+      referenceCode: appointment.reference_code,
+      customerName: appointment.customer_name,
+      startTime: String(appointment.start_time).slice(0, 5),
+      durationMinutes: appointment.booking_duration_minutes ?? 0,
+    })),
+    ...(continuations.data ?? []).map((continuation) => ({
+      key: continuation.id,
+      referenceCode: continuation.appointments.reference_code,
+      customerName: continuation.appointments.customer_name,
+      startTime: String(continuation.start_time).slice(0, 5),
+      durationMinutes: continuation.booking_duration_minutes,
+    })),
+  ].sort((first, second) => first.startTime.localeCompare(second.startTime));
+}
+
+function minutesOf(time: string) {
+  const [hours, minutes] = time.split(":").map(Number);
+  return (hours ?? 0) * 60 + (minutes ?? 0);
+}
+
+/** Work that no longer fits between the new start and end. */
+function workOutsideHours(work: ShiftWork[], start: string, end: string) {
+  return work.filter(
+    (item) =>
+      minutesOf(item.startTime) < minutesOf(start) ||
+      minutesOf(item.startTime) + item.durationMinutes > minutesOf(end),
+  );
+}
+
+function shiftLabel(start: string | null, end: string | null) {
+  if (!start || !end) return "Not set";
+  return PRESET_LABELS[`${start}|${end}`] ?? `${formatTime(start)} – ${formatTime(end)}`;
+}
+
+function movedSummary(result: ShiftChangeResult) {
+  return result.moved
+    .map(
+      (booking) =>
+        ` ${booking.reference_code} (${formatTime(booking.start_time.slice(0, 5))}) now goes to ${booking.mechanic}.`,
+    )
+    .join("");
+}
+
+function shiftChangeError(error: { message?: string; hint?: string }, action: "remove" | "edit") {
+  if (error.hint === "crew_shift_conflict") {
+    return `${error.message} Reschedule or cancel that booking first, or ${
+      action === "remove" ? "keep this shift" : "choose hours that still cover it"
+    }.`;
+  }
+  if (/no longer exists|must end after it starts/i.test(error.message ?? "")) {
+    return error.message ?? "";
+  }
+  console.error("Shift change failed:", error);
+  return "Could not change this shift. Please try again.";
+}
+
+function listDays(dates: string[]) {
+  const labels = dates.map((date) => format(dateFromKey(date), "MMM d"));
+  return labels.length > 1
+    ? `${labels.slice(0, -1).join(", ")} and ${labels.at(-1)}`
+    : (labels[0] ?? "");
+}
 
 function dateToKey(date: Date) {
   return calendarDateToIso(date);
@@ -350,8 +458,13 @@ function AvailabilityPage() {
   const [assignmentErrors, setAssignmentErrors] = useState<
     Partial<Record<"dates" | "mechanic" | "customStart" | "customEnd", string | undefined>>
   >({});
-  const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<WorkingMechanic | null>(null);
+  const [editTarget, setEditTarget] = useState<WorkingMechanic | null>(null);
+  const [editShift, setEditShift] = useState("whole-day");
+  const [editStart, setEditStart] = useState("");
+  const [editEnd, setEditEnd] = useState("");
+  const [shiftError, setShiftError] = useState<string | null>(null);
+  const [shiftNotice, setShiftNotice] = useState<string | null>(null);
 
   const crew = useQuery({
     queryKey: ["crew-active"],
@@ -405,7 +518,8 @@ function AvailabilityPage() {
             note: payload.note || null,
           };
         }),
-        { onConflict: "crew_id,schedule_date", ignoreDuplicates: true },
+        // A day marked as not working is replaced by the new shift.
+        { onConflict: "crew_id,schedule_date" },
       );
       if (error) throw error;
     },
@@ -431,25 +545,113 @@ function AvailabilityPage() {
     },
   });
 
-  const deleteSchedule = useMutation({
-    mutationFn: async (id: string) => {
-      const { error } = await supabase.from("crew_schedules").delete().eq("id", id);
+  const shiftTarget = removeTarget ?? editTarget;
+  const shiftWork = useQuery({
+    queryKey: ["crew-shift-work", shiftTarget?.crew_id, shiftTarget?.schedule_date],
+    enabled: Boolean(shiftTarget),
+    queryFn: () => fetchShiftWork(shiftTarget!.crew_id, shiftTarget!.schedule_date),
+  });
+
+  const changeShift = useMutation({
+    mutationFn: async (input: {
+      scheduleId: string;
+      remove: boolean;
+      start?: string;
+      end?: string;
+    }) => {
+      const { data, error } = await supabase.rpc("change_crew_schedule", {
+        p_schedule_id: input.scheduleId,
+        p_remove: input.remove,
+        p_start_time: input.start ? `${input.start}:00` : null,
+        p_end_time: input.end ? `${input.end}:00` : null,
+      });
       if (error) throw error;
+      return data as unknown as ShiftChangeResult;
     },
     onSuccess: () => {
-      setActionError(null);
       qc.invalidateQueries({ queryKey: ["crew-schedules-all"] });
-    },
-    onError: (err: Error) => {
-      const msg = err.message.toLowerCase();
-      if (msg.includes("not found") || msg.includes("no rows")) {
-        setActionError("This schedule no longer exists. Refresh the list and try again.");
-      } else {
-        console.error("Schedule delete failed:", err);
-        setActionError("Could not remove this schedule. Please try again.");
-      }
+      qc.invalidateQueries({ queryKey: ["crew-shift-work"] });
+      qc.invalidateQueries({ queryKey: ["admin-appointments"] });
+      qc.invalidateQueries({ queryKey: ["admin-dashboard"], exact: false });
     },
   });
+
+  function openRemove(row: WorkingMechanic) {
+    setShiftError(null);
+    setShiftNotice(null);
+    setRemoveTarget(row);
+  }
+
+  function openEdit(row: WorkingMechanic) {
+    const preset = Object.entries(SHIFT_PRESETS).find(
+      ([, hours]) => hours.start === row.start_time && hours.end === row.end_time,
+    )?.[0];
+    setEditShift(preset ?? "custom");
+    setEditStart(preset ? "" : (row.start_time ?? ""));
+    setEditEnd(preset ? "" : (row.end_time ?? ""));
+    setShiftError(null);
+    setShiftNotice(null);
+    setEditTarget(row);
+  }
+
+  /** The hours chosen in the edit dialog, or null if they are incomplete. */
+  function chosenEditHours() {
+    if (editShift !== "custom") {
+      const preset = SHIFT_PRESETS[editShift as keyof typeof SHIFT_PRESETS];
+      return { start: preset.start, end: preset.end };
+    }
+    return editStart && editEnd && editStart < editEnd ? { start: editStart, end: editEnd } : null;
+  }
+
+  async function confirmRemove() {
+    if (!removeTarget) return;
+    setShiftError(null);
+    try {
+      const result = await changeShift.mutateAsync({ scheduleId: removeTarget.id, remove: true });
+      setShiftNotice(
+        `Removed ${removeTarget.name}'s shift on ${formatDateLong(removeTarget.schedule_date)}.${movedSummary(result)}`,
+      );
+      setRemoveTarget(null);
+    } catch (error) {
+      setShiftError(shiftChangeError(error as { message?: string; hint?: string }, "remove"));
+    }
+  }
+
+  async function saveEdit() {
+    if (!editTarget) return;
+    const hours = chosenEditHours();
+    if (!hours) {
+      setShiftError(
+        !editStart || !editEnd
+          ? "Select a start and an end time."
+          : "End time must be after start time.",
+      );
+      return;
+    }
+    if (hours.start === editTarget.start_time && hours.end === editTarget.end_time) {
+      setEditTarget(null);
+      return;
+    }
+    setShiftError(null);
+    try {
+      const result = await changeShift.mutateAsync({
+        scheduleId: editTarget.id,
+        remove: false,
+        ...hours,
+      });
+      setShiftNotice(
+        `Changed ${editTarget.name}'s shift on ${formatDateLong(editTarget.schedule_date)} to ${shiftLabel(hours.start, hours.end)}.${movedSummary(result)}`,
+      );
+      setEditTarget(null);
+    } catch (error) {
+      setShiftError(shiftChangeError(error as { message?: string; hint?: string }, "edit"));
+    }
+  }
+
+  const editHours = chosenEditHours();
+  const editAffected = editHours
+    ? workOutsideHours(shiftWork.data ?? [], editHours.start, editHours.end)
+    : [];
 
   const assignDateStrs = useMemo(() => assignDates.map(dateToKey), [assignDates]);
   const roleOptions = useMemo(
@@ -481,6 +683,7 @@ function AvailabilityPage() {
       )
       .map((schedule) => ({
         id: schedule.id,
+        crew_id: schedule.crew_id,
         schedule_date: schedule.schedule_date as string,
         name: schedule.crew_members?.name ?? crewMap.get(schedule.crew_id)?.name ?? "Unknown",
         role: schedule.crew_members?.role ?? "Mechanic",
@@ -538,19 +741,25 @@ function AvailabilityPage() {
       return;
     }
 
-    const existingDates = new Set(
+    const workingDates = new Set(
       (schedules.data ?? [])
-        .filter((schedule) => schedule.crew_id === assignMechanic && schedule.schedule_date)
-        .map((schedule) => schedule.schedule_date),
+        .filter(
+          (schedule) =>
+            schedule.crew_id === assignMechanic && schedule.is_working && schedule.schedule_date,
+        )
+        .map((schedule) => schedule.schedule_date as string),
     );
-    const newDateStrs = assignDateStrs.filter((date) => !existingDates.has(date));
-
-    if (newDateStrs.length === 0) {
-      setAssignmentErrors({ dates: "The mechanic is already assigned on each selected day." });
+    const alreadyWorking = assignDateStrs.filter((date) => workingDates.has(date)).sort();
+    if (alreadyWorking.length > 0) {
+      const mechanicName =
+        (crew.data ?? []).find((member) => member.id === assignMechanic)?.name ?? "This mechanic";
+      setAssignmentErrors({
+        dates: `${mechanicName} already has a shift on ${listDays(alreadyWorking)}. Unselect ${
+          alreadyWorking.length === 1 ? "that day" : "those days"
+        }, or use Edit on the existing shift.`,
+      });
       return;
     }
-
-    const skippedDays = assignDateStrs.length - newDateStrs.length;
 
     let startTime: string;
     let endTime: string;
@@ -579,7 +788,7 @@ function AvailabilityPage() {
       setAssignmentErrors({});
       await saveSchedule.mutateAsync({
         crew_id: assignMechanic,
-        schedule_dates: newDateStrs,
+        schedule_dates: assignDateStrs,
         start_time: startTime,
         end_time: endTime,
         is_working: true,
@@ -590,7 +799,6 @@ function AvailabilityPage() {
       setCustomStart("");
       setCustomEnd("");
       setDialogOpen(false);
-      void skippedDays;
     } catch {
       // Error is shown inline by the mutation callback.
     }
@@ -616,7 +824,15 @@ function AvailabilityPage() {
           </Button>
         }
       />
-      {actionError && <InlineAlert>{actionError}</InlineAlert>}
+      {shiftNotice && (
+        <p
+          role="status"
+          className="mb-4 flex items-start gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/5 p-3 text-sm text-emerald-700 dark:text-emerald-400"
+        >
+          <Check className="mt-0.5 size-4 shrink-0" aria-hidden="true" />
+          <span>{shiftNotice}</span>
+        </p>
+      )}
 
       <ListToolbar
         summary={
@@ -747,27 +963,33 @@ function AvailabilityPage() {
                 card: "wide",
                 className: "w-56",
                 cell: (w) => (
-                  <span className="text-sm">
-                    {w.start_time && w.end_time
-                      ? (PRESET_LABELS[`${w.start_time}|${w.end_time}`] ??
-                        `${formatTime(w.start_time)} – ${formatTime(w.end_time)}`)
-                      : "Not set"}
-                  </span>
+                  <span className="text-sm">{shiftLabel(w.start_time, w.end_time)}</span>
                 ),
               },
             ]}
-            actionsClassName="w-32"
+            // Icons only on small laptops, where the labels would squeeze the table.
+            actionsClassName="w-32 xl:w-52"
             actions={(w) =>
               w.is_date_assignment ? (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                  onClick={() => setDeleteTarget(w.id)}
-                  aria-label={`Remove ${w.name}'s assignment on ${formatDateLong(w.schedule_date)}`}
-                >
-                  <Trash2 /> Remove
-                </Button>
+                <>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => openEdit(w)}
+                    aria-label={`Edit ${w.name}'s shift on ${formatDateLong(w.schedule_date)}`}
+                  >
+                    <Pencil /> <span className="lg:max-xl:sr-only">Edit</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => openRemove(w)}
+                    aria-label={`Remove ${w.name}'s shift on ${formatDateLong(w.schedule_date)}`}
+                  >
+                    <Trash2 /> <span className="lg:max-xl:sr-only">Remove</span>
+                  </Button>
+                </>
               ) : null
             }
           />
@@ -775,31 +997,100 @@ function AvailabilityPage() {
       </ListCard>
 
       <AlertDialog
-        open={Boolean(deleteTarget)}
-        onOpenChange={(nextOpen) => !nextOpen && setDeleteTarget(null)}
+        open={Boolean(removeTarget)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !changeShift.isPending) setRemoveTarget(null);
+        }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Remove this crew assignment?</AlertDialogTitle>
+            <AlertDialogTitle>Remove this shift?</AlertDialogTitle>
             <AlertDialogDescription>
-              This removes the selected working-day assignment. You can add it again later if
-              needed.
+              {removeTarget &&
+                `${removeTarget.name} · ${formatDateLong(removeTarget.schedule_date)} · ${shiftLabel(removeTarget.start_time, removeTarget.end_time)}`}
             </AlertDialogDescription>
           </AlertDialogHeader>
+          <ShiftWorkNotice
+            loading={shiftWork.isLoading}
+            failed={shiftWork.isError}
+            affected={shiftWork.data ?? []}
+            emptyMessage={`No bookings are assigned to ${removeTarget?.name ?? "this mechanic"} on this day.`}
+          />
+          {shiftError && <InlineAlert className="mb-0">{shiftError}</InlineAlert>}
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={deleteSchedule.isPending}>Cancel</AlertDialogCancel>
-            <AlertDialogAction
-              disabled={deleteSchedule.isPending}
-              onClick={() => {
-                if (deleteTarget) deleteSchedule.mutate(deleteTarget);
-                setDeleteTarget(null);
-              }}
+            <AlertDialogCancel disabled={changeShift.isPending}>Cancel</AlertDialogCancel>
+            <Button
+              variant="destructive"
+              onClick={() => void confirmRemove()}
+              disabled={changeShift.isPending || shiftWork.isLoading || shiftWork.isError}
             >
-              Remove assignment
-            </AlertDialogAction>
+              {changeShift.isPending && <Loader2 className="animate-spin" />}
+              {(shiftWork.data?.length ?? 0) > 0 ? "Remove and move bookings" : "Remove shift"}
+            </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <Dialog
+        open={Boolean(editTarget)}
+        onOpenChange={(nextOpen) => {
+          if (!nextOpen && !changeShift.isPending) setEditTarget(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="font-display uppercase">Edit shift</DialogTitle>
+            <DialogDescription>
+              {editTarget && `${editTarget.name} · ${formatDateLong(editTarget.schedule_date)}`}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <ShiftHoursFields
+              shift={editShift}
+              start={editStart}
+              end={editEnd}
+              onShiftChange={(value) => {
+                setEditShift(value);
+                setEditStart(value === "custom" ? (editTarget?.start_time ?? "") : "");
+                setEditEnd(value === "custom" ? (editTarget?.end_time ?? "") : "");
+                setShiftError(null);
+              }}
+              onStartChange={(value) => {
+                setEditStart(value);
+                setShiftError(null);
+              }}
+              onEndChange={(value) => {
+                setEditEnd(value);
+                setShiftError(null);
+              }}
+            />
+            <ShiftWorkNotice
+              loading={shiftWork.isLoading}
+              failed={shiftWork.isError}
+              affected={editAffected}
+              emptyMessage={`Every booking assigned to ${editTarget?.name ?? "this mechanic"} on this day fits these hours.`}
+            />
+            {shiftError && <InlineAlert className="mb-0">{shiftError}</InlineAlert>}
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setEditTarget(null)}
+              disabled={changeShift.isPending}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void saveEdit()}
+              disabled={changeShift.isPending || shiftWork.isLoading || shiftWork.isError}
+            >
+              {changeShift.isPending && <Loader2 className="animate-spin" />}
+              Save shift
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Assign crew dialog */}
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
@@ -859,76 +1150,25 @@ function AvailabilityPage() {
               <FieldError message={assignmentErrors.mechanic} />
             </div>
 
-            <div className="space-y-1.5">
-              <Label>Shift</Label>
-              <Select
-                value={assignShift}
-                onValueChange={(v) => {
-                  setAssignShift(v);
-                  setCustomStart("");
-                  setCustomEnd("");
-                }}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="whole-day">Whole Day (8:00 AM – 5:00 PM)</SelectItem>
-                  <SelectItem value="morning">Morning (8:00 AM – 12:00 PM)</SelectItem>
-                  <SelectItem value="afternoon">Afternoon (1:00 PM – 5:00 PM)</SelectItem>
-                  <SelectItem value="custom">Custom Time Range</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {assignShift === "custom" && (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label>Start</Label>
-                  <Select
-                    value={customStart}
-                    onValueChange={(value) => {
-                      setCustomStart(value);
-                      setAssignmentErrors((current) => ({ ...current, customStart: undefined }));
-                    }}
-                  >
-                    <SelectTrigger className="w-full" aria-invalid={!!assignmentErrors.customStart}>
-                      <SelectValue placeholder="Start time" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {shopTimeOptions().map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FieldError message={assignmentErrors.customStart} />
-                </div>
-                <div className="space-y-1">
-                  <Label>End</Label>
-                  <Select
-                    value={customEnd}
-                    onValueChange={(value) => {
-                      setCustomEnd(value);
-                      setAssignmentErrors((current) => ({ ...current, customEnd: undefined }));
-                    }}
-                  >
-                    <SelectTrigger className="w-full" aria-invalid={!!assignmentErrors.customEnd}>
-                      <SelectValue placeholder="End time" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {shopTimeOptions().map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <FieldError message={assignmentErrors.customEnd} />
-                </div>
-              </div>
-            )}
+            <ShiftHoursFields
+              shift={assignShift}
+              start={customStart}
+              end={customEnd}
+              errors={assignmentErrors}
+              onShiftChange={(value) => {
+                setAssignShift(value);
+                setCustomStart("");
+                setCustomEnd("");
+              }}
+              onStartChange={(value) => {
+                setCustomStart(value);
+                setAssignmentErrors((current) => ({ ...current, customStart: undefined }));
+              }}
+              onEndChange={(value) => {
+                setCustomEnd(value);
+                setAssignmentErrors((current) => ({ ...current, customEnd: undefined }));
+              }}
+            />
           </div>
           <DialogFooter>
             <Button type="button" variant="outline" onClick={() => setDialogOpen(false)}>
@@ -942,5 +1182,131 @@ function AvailabilityPage() {
         </DialogContent>
       </Dialog>
     </AdminPage>
+  );
+}
+
+/** The shift preset picker, with start and end times for a custom shift. */
+function ShiftHoursFields({
+  shift,
+  start,
+  end,
+  errors = {},
+  onShiftChange,
+  onStartChange,
+  onEndChange,
+}: {
+  shift: string;
+  start: string;
+  end: string;
+  errors?: { customStart?: string | undefined; customEnd?: string | undefined };
+  onShiftChange: (value: string) => void;
+  onStartChange: (value: string) => void;
+  onEndChange: (value: string) => void;
+}) {
+  return (
+    <>
+      <div className="space-y-1.5">
+        <Label>Shift</Label>
+        <Select value={shift} onValueChange={onShiftChange}>
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="whole-day">Whole Day (8:00 AM – 5:00 PM)</SelectItem>
+            <SelectItem value="morning">Morning (8:00 AM – 12:00 PM)</SelectItem>
+            <SelectItem value="afternoon">Afternoon (1:00 PM – 5:00 PM)</SelectItem>
+            <SelectItem value="custom">Custom Time Range</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
+
+      {shift === "custom" && (
+        <div className="grid grid-cols-2 gap-3">
+          <div className="space-y-1">
+            <Label>Start</Label>
+            <Select value={start} onValueChange={onStartChange}>
+              <SelectTrigger className="w-full" aria-invalid={!!errors.customStart}>
+                <SelectValue placeholder="Start time" />
+              </SelectTrigger>
+              <SelectContent>
+                {shopTimeOptions().map((t) => (
+                  <SelectItem key={t.value} value={t.value}>
+                    {t.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FieldError message={errors.customStart} />
+          </div>
+          <div className="space-y-1">
+            <Label>End</Label>
+            <Select value={end} onValueChange={onEndChange}>
+              <SelectTrigger className="w-full" aria-invalid={!!errors.customEnd}>
+                <SelectValue placeholder="End time" />
+              </SelectTrigger>
+              <SelectContent>
+                {shopTimeOptions().map((t) => (
+                  <SelectItem key={t.value} value={t.value}>
+                    {t.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <FieldError message={errors.customEnd} />
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+/** The bookings a shift change moves to another mechanic. */
+function ShiftWorkNotice({
+  loading,
+  failed,
+  affected,
+  emptyMessage,
+}: {
+  loading: boolean;
+  failed: boolean;
+  affected: ShiftWork[];
+  emptyMessage: string;
+}) {
+  if (loading) {
+    return (
+      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+        <Loader2 className="size-4 animate-spin" aria-hidden="true" /> Checking this mechanic's
+        bookings...
+      </p>
+    );
+  }
+  if (failed) {
+    return (
+      <InlineAlert className="mb-0">
+        Could not check this mechanic's bookings. Close this and try again.
+      </InlineAlert>
+    );
+  }
+  if (affected.length === 0) {
+    return <p className="text-sm text-muted-foreground">{emptyMessage}</p>;
+  }
+  return (
+    <div className="rounded-lg border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+      <p className="font-medium text-foreground">
+        {affected.length === 1
+          ? "This booking moves to another free mechanic:"
+          : `These ${affected.length} bookings move to other free mechanics:`}
+      </p>
+      <ul className="mt-2 space-y-1 text-muted-foreground">
+        {affected.map((item) => (
+          <li key={item.key}>
+            {formatTime(item.startTime)} · {item.customerName} · {item.referenceCode}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-2 text-xs text-muted-foreground">
+        If no one else is free for one of them, nothing changes.
+      </p>
+    </div>
   );
 }

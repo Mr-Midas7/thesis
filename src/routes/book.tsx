@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   CircleAlert,
   Clock,
+  History,
   Info,
   Loader2,
   Pencil,
@@ -66,6 +67,12 @@ import {
   computeAvailableSlots,
   computeFullyBookedDates,
 } from "@/lib/availability";
+import {
+  BOOKING_DRAFT_LIFETIME_MINUTES,
+  clearBookingDraft,
+  loadBookingDraft,
+  saveBookingDraft,
+} from "@/lib/booking-draft";
 import { createBooking, getAvailability, getRescheduleDetails } from "@/lib/booking.functions";
 import {
   DEFAULT_BOOKING_TERMS,
@@ -106,6 +113,49 @@ const searchSchema = z.object({
 });
 
 const turnstileEnabled = Boolean(import.meta.env["VITE_TURNSTILE_SITE_KEY"]);
+
+function emptyBookingForm() {
+  return {
+    firstName: "",
+    middleName: "",
+    lastName: "",
+    phone: "",
+    email: "",
+    motoBrand: "",
+    motoModel: "",
+    motoVariant: "",
+    motoYear: String(new Date().getFullYear()),
+    plateNumber: "",
+    notes: "",
+    wantsProducts: null as boolean | null,
+  };
+}
+
+const bookingDraftSchema = z.object({
+  form: z.object({
+    firstName: z.string(),
+    middleName: z.string(),
+    lastName: z.string(),
+    phone: z.string(),
+    email: z.string(),
+    motoBrand: z.string(),
+    motoModel: z.string(),
+    motoVariant: z.string(),
+    motoYear: z.string(),
+    plateNumber: z.string(),
+    notes: z.string(),
+    wantsProducts: z.boolean().nullable(),
+  }),
+  serviceIds: z.array(z.string()),
+  date: z.string(),
+  startTime: z.string(),
+});
+type BookingDraft = z.infer<typeof bookingDraftSchema>;
+
+function parseBookingDraft(value: unknown) {
+  const parsed = bookingDraftSchema.safeParse(value);
+  return parsed.success ? parsed.data : null;
+}
 const BOOKING_PAGES = ["Booking details", "Review & submit"] as const;
 
 export const Route = createFileRoute("/book")({
@@ -192,20 +242,7 @@ function BookPage() {
   const rescheduleDetailsFn = useServerFn(getRescheduleDetails);
   const search = useSearch({ from: "/book" });
 
-  const [form, setForm] = useState({
-    firstName: "",
-    middleName: "",
-    lastName: "",
-    phone: "",
-    email: "",
-    motoBrand: "",
-    motoModel: "",
-    motoVariant: "",
-    motoYear: String(new Date().getFullYear()),
-    plateNumber: "",
-    notes: "",
-    wantsProducts: null as boolean | null,
-  });
+  const [form, setForm] = useState(emptyBookingForm);
   const [serviceIds, setServiceIds] = useState<string[]>(
     search.serviceId ? [search.serviceId] : [],
   );
@@ -501,6 +538,53 @@ function BookPage() {
     if (field in validationFocusTargets) clearErrors(field as keyof Errors);
   }
 
+  // Restore an unfinished booking once the page is open in the browser. A
+  // service, date or time in the link (from "Book this service") wins.
+  const [draftLoaded, setDraftLoaded] = useState(false);
+  const [draftRestored, setDraftRestored] = useState(false);
+  useEffect(() => {
+    if (draftLoaded) return;
+    const draft = isReschedule ? null : loadBookingDraft(parseBookingDraft);
+    if (draft) {
+      setForm(draft.form);
+      if (!search.serviceId) setServiceIds(draft.serviceIds);
+      if (!search.date) {
+        setDate(draft.date);
+        setStartTime(draft.startTime);
+      }
+      setDraftRestored(true);
+    }
+    setDraftLoaded(true);
+  }, [draftLoaded, isReschedule, search.serviceId, search.date]);
+
+  // Keep the draft up to date while the customer fills in the form.
+  useEffect(() => {
+    if (!draftLoaded || isReschedule || result) return;
+    const draft: BookingDraft = { form, serviceIds, date, startTime };
+    const hasInput =
+      Object.entries(form).some(
+        ([field, value]) => field !== "motoYear" && value !== "" && value !== null,
+      ) ||
+      serviceIds.length > 0 ||
+      date !== "";
+    if (hasInput) saveBookingDraft(draft);
+    else clearBookingDraft();
+  }, [draftLoaded, isReschedule, result, form, serviceIds, date, startTime]);
+
+  function startOver() {
+    clearBookingDraft();
+    setDraftRestored(false);
+    setForm(emptyBookingForm());
+    setServiceIds([]);
+    setServiceCategory("all");
+    setServiceSearch("");
+    resetSchedule();
+    setTerms(false);
+    setErrors({});
+    setDuplicateBookingMessage(null);
+    setBookingPage("details");
+  }
+
   function resetSchedule() {
     setDate("");
     setStartTime("");
@@ -613,6 +697,7 @@ function BookPage() {
         availability.refetch();
         return;
       }
+      clearBookingDraft();
       setResult(
         "continuationSegments" in res
           ? {
@@ -956,6 +1041,24 @@ function BookPage() {
             onSelectDetails={returnToBookingDetails}
           />
         </div>
+
+        {draftRestored && (
+          <div
+            role="status"
+            className="mt-6 flex flex-col gap-3 rounded-lg border border-primary/40 bg-primary/5 p-3 text-sm sm:flex-row sm:items-center sm:justify-between"
+          >
+            <p className="flex items-start gap-2">
+              <History className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+              <span>
+                We kept the details you entered earlier. An unfinished booking is cleared after{" "}
+                {BOOKING_DRAFT_LIFETIME_MINUTES} minutes without changes.
+              </span>
+            </p>
+            <Button type="button" variant="outline" size="sm" onClick={startOver}>
+              Start over
+            </Button>
+          </div>
+        )}
 
         <form
           className="mt-8"

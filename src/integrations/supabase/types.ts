@@ -1384,6 +1384,32 @@ export type Database = {
         };
         Returns: Json;
       };
+      get_admin_dashboard_summary: {
+        Args: {
+          p_from: string;
+          p_to: string;
+          p_previous_from: string;
+          p_previous_to: string;
+        };
+        Returns: Json;
+      };
+      get_admin_dashboard_chart: {
+        Args: {
+          p_from: string;
+          p_to: string;
+          p_by_month?: boolean;
+        };
+        Returns: Json;
+      };
+      change_crew_schedule: {
+        Args: {
+          p_schedule_id: string;
+          p_remove: boolean;
+          p_start_time?: string | null;
+          p_end_time?: string | null;
+        };
+        Returns: Json;
+      };
       purge_expired_admin_activity_logs: {
         Args: Record<PropertyKey, never>;
         Returns: undefined;

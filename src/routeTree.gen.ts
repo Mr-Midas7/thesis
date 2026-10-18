@@ -14,6 +14,7 @@ import { Route as AuthenticatedRouteRouteImport } from './routes/_authenticated/
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as BookRouteImport } from './routes/book'
 import { Route as MyAppointmentRouteImport } from './routes/my-appointment'
+import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as ShopRouteImport } from './routes/shop'
 import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/admin'
@@ -56,6 +57,11 @@ const BookRoute = BookRouteImport.update({
 const MyAppointmentRoute = MyAppointmentRouteImport.update({
   id: '/my-appointment',
   path: '/my-appointment',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ResetPasswordRoute = ResetPasswordRouteImport.update({
+  id: '/reset-password',
+  path: '/reset-password',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ServicesRoute = ServicesRouteImport.update({
@@ -173,6 +179,7 @@ export interface FileRoutesByFullPath {
   '/auth': typeof AuthRoute
   '/book': typeof BookRoute
   '/my-appointment': typeof MyAppointmentRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/services': typeof ServicesRoute
   '/shop': typeof ShopRoute
   '/admin': typeof AuthenticatedAdminRouteWithChildren
@@ -198,6 +205,7 @@ export interface FileRoutesByTo {
   '/auth': typeof AuthRoute
   '/book': typeof BookRoute
   '/my-appointment': typeof MyAppointmentRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/services': typeof ServicesRoute
   '/shop': typeof ShopRoute
   '/admin/activity-log': typeof AuthenticatedAdminActivityLogRoute
@@ -224,6 +232,7 @@ export interface FileRoutesById {
   '/auth': typeof AuthRoute
   '/book': typeof BookRoute
   '/my-appointment': typeof MyAppointmentRoute
+  '/reset-password': typeof ResetPasswordRoute
   '/services': typeof ServicesRoute
   '/shop': typeof ShopRoute
   '/_authenticated/admin': typeof AuthenticatedAdminRouteWithChildren
@@ -251,6 +260,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/book'
     | '/my-appointment'
+    | '/reset-password'
     | '/services'
     | '/shop'
     | '/admin'
@@ -276,6 +286,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/book'
     | '/my-appointment'
+    | '/reset-password'
     | '/services'
     | '/shop'
     | '/admin/activity-log'
@@ -301,6 +312,7 @@ export interface FileRouteTypes {
     | '/auth'
     | '/book'
     | '/my-appointment'
+    | '/reset-password'
     | '/services'
     | '/shop'
     | '/_authenticated/admin'
@@ -328,6 +340,7 @@ export interface RootRouteChildren {
   AuthRoute: typeof AuthRoute
   BookRoute: typeof BookRoute
   MyAppointmentRoute: typeof MyAppointmentRoute
+  ResetPasswordRoute: typeof ResetPasswordRoute
   ServicesRoute: typeof ServicesRoute
   ShopRoute: typeof ShopRoute
 }
@@ -367,6 +380,13 @@ declare module '@tanstack/react-router' {
       path: '/my-appointment'
       fullPath: '/my-appointment'
       preLoaderRoute: typeof MyAppointmentRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/reset-password': {
+      id: '/reset-password'
+      path: '/reset-password'
+      fullPath: '/reset-password'
+      preLoaderRoute: typeof ResetPasswordRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/services': {
@@ -563,6 +583,7 @@ const rootRouteChildren: RootRouteChildren = {
   AuthRoute: AuthRoute,
   BookRoute: BookRoute,
   MyAppointmentRoute: MyAppointmentRoute,
+  ResetPasswordRoute: ResetPasswordRoute,
   ServicesRoute: ServicesRoute,
   ShopRoute: ShopRoute,
 }

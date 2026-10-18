@@ -119,6 +119,8 @@ import { cn } from "@/lib/utils";
 export const Route = createFileRoute("/_authenticated/admin/appointments")({
   validateSearch: z.object({
     appointmentId: z.string().uuid().optional(),
+    // The dashboard's Needs action card opens the list with this filter.
+    status: z.literal("needs_action").optional(),
   }),
   component: AppointmentsPage,
 });
@@ -325,7 +327,7 @@ function AppointmentsPage() {
   const reviewRescheduleFn = useServerFn(reviewRescheduleRequestWithConfirmation);
   const serviceProgressFn = useServerFn(updateAppointmentServiceProgressWithNotifications);
   const search = Route.useSearch();
-  const [status, setStatus] = useState("all");
+  const [status, setStatus] = useState<string>(search.status ?? "all");
   const [term, setTerm] = useState("");
   const [openId, setOpenId] = useState<string | null>(null);
   const [isEditing, setIsEditing] = useState(false);
@@ -368,14 +370,22 @@ function AppointmentsPage() {
             count: "exact",
           },
         )
-        .eq("is_archived", false)
-        .order("appointment_date", { ascending: false })
-        .order("start_time");
+        .eq("is_archived", false);
 
       if (focusedAppointmentId) {
         query = query.eq("id", focusedAppointmentId);
       } else {
-        if (status !== "all") query = query.eq("status", status);
+        if (status === "needs_action") {
+          // New bookings to approve and reschedule requests to review, as
+          // counted on the dashboard.
+          query = query
+            .is("rescheduled_to_appointment_id", null)
+            .or(
+              "status.eq.pending,and(pending_reschedule_request_id.not.is.null,status.in.(pending,confirmed))",
+            );
+        } else if (status !== "all") {
+          query = query.eq("status", status);
+        }
         if (dateRange) {
           query = query
             .gte("appointment_date", dateRange.from)
@@ -390,6 +400,10 @@ function AppointmentsPage() {
         }
         query = query.range(page * pageSize, page * pageSize + pageSize - 1);
       }
+      // Waiting requests are listed soonest first; everything else newest first.
+      query = query
+        .order("appointment_date", { ascending: status === "needs_action" })
+        .order("start_time");
 
       const { data, error, count } = await query;
       if (error) throw error;
@@ -1083,6 +1097,7 @@ function AppointmentsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">All statuses</SelectItem>
+                <SelectItem value="needs_action">Needs action</SelectItem>
                 {APPOINTMENT_STATUSES.map((s) => (
                   <SelectItem key={s} value={s}>
                     {statusLabel(s)}
