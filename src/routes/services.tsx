@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
+import { ServiceBookingRow } from "@/components/site/service-booking-row";
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
 import { Badge } from "@/components/ui/badge";
@@ -55,10 +56,13 @@ function ServicesPage() {
     <div className="min-h-screen">
       <SiteHeader />
       <main className="site-container py-12">
-        <p className="text-xs tracking-[0.3em] text-accent uppercase">Service menu</p>
+        <p className="text-xs tracking-[0.3em] text-orange-700 uppercase dark:text-accent">
+          Service menu
+        </p>
         <h1 className="font-display text-4xl font-bold uppercase md:text-5xl">Services</h1>
         <p className="mt-2 max-w-2xl text-muted-foreground">
-          Browse our provided services. Final details depend on the actual condition of your unit.
+          Browse our services. Prices start at the small-bike rate; large bikes cost more, and parts
+          are quoted separately. Final details depend on the actual condition of your unit.
         </p>
 
         <div className="mt-8">
@@ -92,7 +96,7 @@ function ServicesPage() {
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {filtered?.map((s) => (
               <Card key={s.id} className="border-border/70 bg-card/60">
-                <CardContent className="p-5">
+                <CardContent className="flex h-full flex-col p-5">
                   <div className="flex items-center gap-2">
                     <Badge
                       variant="outline"
@@ -103,6 +107,7 @@ function ServicesPage() {
                     <h2 className="font-display text-lg tracking-wide uppercase">{s.name}</h2>
                   </div>
                   <ExpandableServiceDescription description={s.description} serviceName={s.name} />
+                  <ServiceBookingRow service={s} />
                 </CardContent>
               </Card>
             ))}

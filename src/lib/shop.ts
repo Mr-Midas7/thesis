@@ -1,10 +1,21 @@
 import { z } from "zod";
 
+const OPEN_DAYS = "Monday to Saturday";
+const OPEN_TIMES = "8:00 AM – 5:00 PM";
+// The shop's Google Maps listing, "Fake Rider Motoparts and Accessories", and its pin.
+const MAPS_LISTING_URL = "https://maps.google.com/?cid=7858024619263222524";
+const COORDINATES = "9.6281673,123.8865123";
+
 export const SHOP = {
   name: "Fake Rider Motorparts",
   tagline: "Motorparts, Accessories & Race-Grade Service",
   address: "Purok Bangkal Sta. Cruz, Baclayon, Bohol, Philippines",
-  hours: "Monday to Saturday, 8:00 AM - 5:00 PM",
+  hours: `${OPEN_DAYS}, ${OPEN_TIMES}`,
+  openDays: OPEN_DAYS,
+  openTimes: OPEN_TIMES,
+  // Every map and directions link points at the same spot.
+  mapsUrl: MAPS_LISTING_URL,
+  mapEmbedUrl: `https://maps.google.com/maps?q=${COORDINATES}&z=16&output=embed`,
   phone: "0916 126 3317",
   email: "joemartato4@gmail.com",
   facebook: "https://www.facebook.com/profile.php?id=100082988659961",

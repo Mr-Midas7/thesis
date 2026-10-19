@@ -1,5 +1,5 @@
 import { Link } from "@tanstack/react-router";
-import { Menu } from "lucide-react";
+import { Menu, X } from "lucide-react";
 import { useState } from "react";
 
 import logo from "@/assets/logo-shp.png.asset.json";
@@ -19,7 +19,7 @@ export function SiteHeader() {
 
   return (
     <header className="sticky top-0 z-50 border-b border-border/70 bg-background/85 backdrop-blur">
-      <div className="site-container grid h-20 grid-cols-[minmax(0,1fr)_auto] items-center gap-4 md:grid-cols-[auto_minmax(0,1fr)_auto]">
+      <div className="site-container grid h-20 grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-2 sm:gap-4 md:grid-cols-[auto_minmax(0,1fr)_auto]">
         <Link to="/" className="flex items-center">
           <img
             src={logo.url}
@@ -58,15 +58,25 @@ export function SiteHeader() {
           <ThemeToggle />
         </div>
 
+        {/* On phones the booking button stays in view next to the menu. */}
+        <Button
+          asChild
+          size="sm"
+          className="justify-self-end font-display tracking-wide uppercase md:hidden"
+        >
+          <Link to="/book" onClick={() => setOpen(false)}>
+            Book now
+          </Link>
+        </Button>
         <Button
           variant="ghost"
           size="icon"
           className="justify-self-end md:hidden"
-          aria-label="Toggle menu"
+          aria-label={open ? "Close menu" : "Open menu"}
           aria-expanded={open}
           onClick={() => setOpen((v) => !v)}
         >
-          <Menu />
+          {open ? <X /> : <Menu />}
         </Button>
       </div>
 
@@ -84,11 +94,6 @@ export function SiteHeader() {
               {l.label}
             </Link>
           ))}
-          <Button asChild className="mt-2 font-display tracking-wide uppercase">
-            <Link to="/book" onClick={() => setOpen(false)}>
-              Book Now
-            </Link>
-          </Button>
           <ThemeToggle showLabel className="mt-2 w-full justify-start" />
         </nav>
       </div>
