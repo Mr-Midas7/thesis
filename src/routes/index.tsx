@@ -107,28 +107,34 @@ function Home() {
 
       <main>
         <section className="relative isolate overflow-hidden border-b border-border/50 bg-neutral-900">
-          <img
-            src="/shopfront-1600.webp"
-            srcSet="/shopfront-800.webp 800w, /shopfront-1600.webp 1600w"
-            sizes="100vw"
-            alt=""
+          {/* Phones get the garage and the mechanic at work; wider screens get the right
+              two-thirds of the shopfront, so nothing busy sits behind the headline.
+              License plates are blurred in both. */}
+          <picture>
+            <source media="(max-width: 767px)" srcSet="/hero-phone.webp" />
+            <img
+              src="/hero-wide.webp"
+              alt=""
+              aria-hidden="true"
+              fetchPriority="high"
+              className="absolute inset-0 -z-10 h-full w-full object-cover md:object-[75%_65%]"
+            />
+          </picture>
+          {/* Phones: an even shade, since the text spans the full width. Wider screens:
+              dark behind the text and light on the right, so the photo reads as daytime. */}
+          <div
             aria-hidden="true"
-            fetchPriority="high"
-            className="absolute inset-0 -z-10 h-full w-full object-cover"
+            className="absolute inset-0 -z-10 bg-black/60 md:bg-transparent md:bg-gradient-to-r md:from-black/85 md:via-black/55 md:via-45% md:to-black/5"
           />
           <div
             aria-hidden="true"
-            className="absolute inset-0 -z-10 bg-gradient-to-r from-black/90 via-black/75 to-black/25"
-          />
-          <div
-            aria-hidden="true"
-            className="absolute inset-0 -z-10 bg-gradient-to-t from-black/45 via-transparent to-black/10"
+            className="absolute inset-0 -z-10 bg-gradient-to-t from-black/40 via-transparent to-transparent"
           />
 
           <div className="site-container py-16 md:py-28">
             <div className="max-w-2xl">
               <Badge
-                className="mb-4 border-white/30 bg-black/25 text-accent uppercase"
+                className="mb-4 border-white/30 bg-black/40 text-orange-400 uppercase"
                 variant="outline"
               >
                 Local Pit Stop &middot; Philippines

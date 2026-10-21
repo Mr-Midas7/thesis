@@ -1439,8 +1439,7 @@ function BookPage() {
                     Shop products
                   </p>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    Would you like to avail shop products during your service? Specific products are
-                    selected by the shop only if needed during the actual service.
+                    Would you like to use shop-provided products for your service?
                   </p>
                   <div
                     id="booking-products"
@@ -1451,7 +1450,7 @@ function BookPage() {
                     aria-invalid={Boolean(errors.wantsProducts)}
                   >
                     {[
-                      { value: true, label: "Yes, if needed" },
+                      { value: true, label: "Yes," },
                       { value: false, label: "No, service only" },
                     ].map((option) => {
                       const selected = form.wantsProducts === option.value;
