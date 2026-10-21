@@ -6,6 +6,7 @@ import {
   CalendarDays,
   CalendarRange,
   CheckCircle2,
+  ChevronDown,
   CircleDollarSign,
   Filter,
   Info,
@@ -34,6 +35,7 @@ import { PaginationControls } from "@/components/admin/pagination-controls";
 import { Button } from "@/components/ui/button";
 import { Calendar } from "@/components/ui/calendar";
 import { Card, CardContent } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Dialog,
   DialogContent,
@@ -45,6 +47,7 @@ import {
 import { FieldError } from "@/components/ui/field-error";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import {
   Select,
   SelectContent,
@@ -85,7 +88,8 @@ type ReportFilters = {
   from: string;
   to: string;
   category: string;
-  serviceName: string;
+  /** Empty means all services. */
+  serviceNames: string[];
 };
 
 type CatalogService = { id: string; name: string; category: string };
@@ -173,7 +177,7 @@ function ReportsPage() {
     referenceCode: string;
     services: string[];
   } | null>(null);
-  const { from, to, category, serviceName } = filters;
+  const { from, to, category, serviceNames } = filters;
   const customDateError =
     draftFilters.periodPreset === "custom" && (!draftFilters.from || !draftFilters.to)
       ? "Select both a start and end date."
@@ -195,13 +199,13 @@ function ReportsPage() {
   });
 
   const data = useQuery({
-    queryKey: ["reports", { from, to, category, serviceName, page }],
+    queryKey: ["reports", { from, to, category, serviceNames, page }],
     queryFn: () =>
       getReportPage({
         from,
         to,
         category,
-        serviceName,
+        serviceNames,
         limit: pageSize,
         offset: page * pageSize,
       }),
@@ -224,7 +228,7 @@ function ReportsPage() {
   const financialReport = data.data;
   const metrics = financialReport?.metrics;
   const reportData = makeReportData(financialReport?.rows ?? [], metrics);
-  const reportTitle = "Financial Report (Summary)";
+  const reportTitle = "Financial Report";
   const revenueRows =
     revenuePeriod === "daily"
       ? (financialReport?.daily_revenue ?? [])
@@ -232,7 +236,10 @@ function ReportsPage() {
   const appliedFilters = [
     { label: "Completed on", value: formatDateRange(from, to) },
     { label: "Service category", value: category === "all" ? "All categories" : category },
-    { label: "Specific service", value: serviceName === "all" ? "All services" : serviceName },
+    {
+      label: serviceNames.length > 1 ? "Services" : "Specific service",
+      value: serviceNames.length ? serviceNames.join(", ") : "All services",
+    },
     { label: "Transactions", value: "Completed only" },
   ];
   const reportScope = appliedFilters
@@ -274,7 +281,7 @@ function ReportsPage() {
     setIsPrinting(true);
     try {
       setPrintError(null);
-      const allRows = await getAllReportRows({ from, to, category, serviceName });
+      const allRows = await getAllReportRows({ from, to, category, serviceNames });
       // Print totals and completed metrics are derived from the complete
       // filtered result set, not the currently visible paginated page.
       const completeReportData = makeReportData(allRows.rows, allRows.metrics, {
@@ -321,7 +328,7 @@ function ReportsPage() {
   return (
     <AdminPage>
       <PageHeader
-        title="Financial Report (Summary)"
+        title="Financial Report"
         description="Track completed revenue, service performance, and product sales for the selected period."
         action={
           <Button
@@ -342,7 +349,7 @@ function ReportsPage() {
           <Select
             value={draftFilters.category}
             onValueChange={(value) =>
-              setDraftFilters((current) => ({ ...current, category: value, serviceName: "all" }))
+              setDraftFilters((current) => ({ ...current, category: value, serviceNames: [] }))
             }
           >
             <SelectTrigger aria-label="Filter by service category" className="w-full sm:w-44">
@@ -357,24 +364,13 @@ function ReportsPage() {
               ))}
             </SelectContent>
           </Select>
-          <Select
-            value={draftFilters.serviceName}
-            onValueChange={(value) =>
-              setDraftFilters((current) => ({ ...current, serviceName: value }))
+          <ServiceMultiSelect
+            options={serviceOptions}
+            value={draftFilters.serviceNames}
+            onChange={(serviceNames) =>
+              setDraftFilters((current) => ({ ...current, serviceNames }))
             }
-          >
-            <SelectTrigger aria-label="Filter by service" className="w-full sm:w-52">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All services</SelectItem>
-              {serviceOptions.map((item) => (
-                <SelectItem key={item.id} value={item.name}>
-                  {item.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          />
           <div className="col-span-2 sm:w-52">
             <PeriodPicker
               value={draftFilters.periodPreset}
@@ -1036,7 +1032,7 @@ async function getReportPage(input: {
   from: string;
   to: string;
   category: string;
-  serviceName: string;
+  serviceNames: string[];
   limit: number;
   offset: number;
 }) {
@@ -1044,7 +1040,7 @@ async function getReportPage(input: {
     p_from: input.from,
     p_to: input.to,
     p_category: input.category === "all" ? null : input.category,
-    p_service_name: input.serviceName === "all" ? null : input.serviceName,
+    p_service_names: input.serviceNames.length ? input.serviceNames : null,
     p_limit: input.limit,
     p_offset: input.offset,
   });
@@ -1167,7 +1163,7 @@ function getInitialFilters(today: string): ReportFilters {
     periodPreset: "this_month",
     ...range,
     category: "all",
-    serviceName: "all",
+    serviceNames: [],
   };
 }
 
@@ -1211,7 +1207,6 @@ function PrintReport({ payload }: { payload: PrintPayload | null }) {
     <PrintDocument
       info={{
         title: payload.title,
-        subtitle: "Reporting summary",
         generatedAt: payload.generatedAt,
         coverage: payload.period,
         scope: payload.scope,
@@ -1361,5 +1356,86 @@ function Stat({
         <p className="mt-2 truncate text-[11px] text-muted-foreground">{detail}</p>
       </CardContent>
     </Card>
+  );
+}
+
+/** Pick any number of services; none picked means all services. */
+function ServiceMultiSelect({
+  options,
+  value,
+  onChange,
+}: {
+  options: CatalogService[];
+  value: string[];
+  onChange: (serviceNames: string[]) => void;
+}) {
+  const label =
+    value.length === 0
+      ? "All services"
+      : value.length === 1
+        ? value[0]
+        : `${value.length} services`;
+  const toggle = (name: string, checked: boolean) =>
+    onChange(checked ? [...value, name] : value.filter((item) => item !== name));
+
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          aria-label={`Filter by service: ${value.length ? value.join(", ") : "all services"}`}
+          className="w-full justify-between font-normal sm:w-52"
+        >
+          <span className="truncate">{label}</span>
+          <ChevronDown className="size-4 shrink-0 opacity-50" aria-hidden="true" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-72 p-0">
+        <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2">
+          <p className="text-sm font-medium">
+            {value.length ? `${value.length} selected` : "All services"}
+          </p>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-7 px-2 text-xs"
+            disabled={value.length === 0}
+            onClick={() => onChange([])}
+          >
+            Clear
+          </Button>
+        </div>
+        <ul className="max-h-72 overflow-y-auto p-1">
+          {options.map((item) => {
+            const id = `report-service-${item.id}`;
+            const checked = value.includes(item.name);
+            return (
+              <li key={item.id}>
+                <label
+                  htmlFor={id}
+                  className="flex cursor-pointer items-center gap-2.5 rounded-md px-2 py-2 text-sm hover:bg-muted"
+                >
+                  <Checkbox
+                    id={id}
+                    checked={checked}
+                    onCheckedChange={(next) => toggle(item.name, next === true)}
+                  />
+                  <span className="min-w-0 flex-1 truncate" title={item.name}>
+                    {item.name}
+                  </span>
+                </label>
+              </li>
+            );
+          })}
+          {options.length === 0 && (
+            <li className="px-2 py-3 text-sm text-muted-foreground">
+              No services in this category.
+            </li>
+          )}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }

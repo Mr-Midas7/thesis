@@ -14,16 +14,16 @@ import { supabase } from "@/integrations/supabase/client";
 export const Route = createFileRoute("/services")({
   head: () => ({
     meta: [
-      { title: "Motorcycle Services & Price List | Fake Rider" },
+      { title: "Motorcycle Services | Fake Rider" },
       {
         name: "description",
         content:
-          "PMS, change oil, suspension tuning, brakes, tires and engine work with transparent peso pricing at Fake Rider Motorparts.",
+          "PMS, change oil, suspension tuning, brakes, tires and engine work at Fake Rider Motorparts. Book online.",
       },
-      { property: "og:title", content: "Services & Prices | Fake Rider Motorparts" },
+      { property: "og:title", content: "Services | Fake Rider Motorparts" },
       {
         property: "og:description",
-        content: "Transparent service pricing for every motorcycle job we handle.",
+        content: "Every motorcycle service we offer, ready to book online.",
       },
     ],
   }),
@@ -61,8 +61,8 @@ function ServicesPage() {
         </p>
         <h1 className="font-display text-4xl font-bold uppercase md:text-5xl">Services</h1>
         <p className="mt-2 max-w-2xl text-muted-foreground">
-          Browse our services. Prices start at the small-bike rate; large bikes cost more, and parts
-          are quoted separately. Final details depend on the actual condition of your unit.
+          Browse our services and tap Book to reserve one. The booking form shows the price for your
+          motorcycle. Final details depend on the actual condition of your unit.
         </p>
 
         <div className="mt-8">

@@ -1379,7 +1379,7 @@ export type Database = {
           p_from: string;
           p_limit?: number;
           p_offset?: number;
-          p_service_name?: string | null;
+          p_service_names?: string[] | null;
           p_to: string;
         };
         Returns: Json;

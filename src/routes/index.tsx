@@ -88,7 +88,7 @@ function Home() {
     queryFn: async () => {
       const { data, error, count } = await supabase
         .from("services")
-        .select("id,name,description,price,large_bike_price", { count: "exact" })
+        .select("id,name,description", { count: "exact" })
         .eq("is_active", true)
         .eq("is_archived", false)
         .order("sort_order")
@@ -205,7 +205,7 @@ function Home() {
           <SectionHeading
             eyebrow="Service menu"
             title="What our pit crew can do"
-            description="Prices start at the small-bike rate; large bikes cost more. Parts are quoted separately."
+            description="Pick a service to book it. You see the price for your motorcycle on the booking form."
           />
           <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
             {services.data?.rows.map((service, index) => (
@@ -239,9 +239,7 @@ function Home() {
             </p>
           )}
           <SectionLink to="/services">
-            {services.data?.total
-              ? `See all ${services.data.total} services`
-              : "See all services and prices"}
+            {services.data?.total ? `See all ${services.data.total} services` : "See all services"}
           </SectionLink>
         </section>
 

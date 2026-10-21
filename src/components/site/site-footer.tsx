@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 const QUICK_LINKS = [
   { to: "/book", label: "Book an appointment" },
   { to: "/my-appointment", label: "View or cancel a booking" },
-  { to: "/services", label: "Services & prices" },
+  { to: "/services", label: "Our services" },
   { to: "/shop", label: "Parts & Accessories" },
 ] as const;
 

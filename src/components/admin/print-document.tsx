@@ -8,8 +8,8 @@ import { SHOP } from "@/lib/shop";
 
 export type PrintDocumentInfo = {
   title: string;
-  /** The small line under the title, e.g. "Reporting summary". */
-  subtitle: string;
+  /** An optional small line under the title, e.g. "Activity record". */
+  subtitle?: string;
   generatedAt: string;
   coverage: string;
   scope: string;
@@ -56,7 +56,7 @@ export function PrintDocument({
                       <p>{SHOP_EXPORT_NAME}</p>
                       <p>{SHOP.tagline}</p>
                       <h1>{info.title}</h1>
-                      <p>{info.subtitle}</p>
+                      {info.subtitle && <p>{info.subtitle}</p>}
                     </div>
                     <p className="report-print-generated">
                       Generated
