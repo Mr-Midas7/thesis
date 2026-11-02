@@ -18,6 +18,9 @@ import { Route as ResetPasswordRouteImport } from './routes/reset-password'
 import { Route as ServicesRouteImport } from './routes/services'
 import { Route as ShopRouteImport } from './routes/shop'
 import { Route as AuthenticatedAdminRouteImport } from './routes/_authenticated/admin'
+import { Route as ApiOfflineStatusRouteImport } from './routes/api/offline-status'
+import { Route as ApiOfflineSyncRouteImport } from './routes/api/offline-sync'
+import { Route as ApiScheduledNotificationsRouteImport } from './routes/api/scheduled-notifications'
 import { Route as AuthenticatedAdminIndexRouteImport } from './routes/_authenticated/admin/index'
 import { Route as AuthenticatedAdminActivityLogRouteImport } from './routes/_authenticated/admin/activity-log'
 import { Route as AuthenticatedAdminAppointmentsRouteImport } from './routes/_authenticated/admin/appointments'
@@ -79,6 +82,22 @@ const AuthenticatedAdminRoute = AuthenticatedAdminRouteImport.update({
   path: '/admin',
   getParentRoute: () => AuthenticatedRouteRoute,
 } as any)
+const ApiOfflineStatusRoute = ApiOfflineStatusRouteImport.update({
+  id: '/api/offline-status',
+  path: '/api/offline-status',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiOfflineSyncRoute = ApiOfflineSyncRouteImport.update({
+  id: '/api/offline-sync',
+  path: '/api/offline-sync',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const ApiScheduledNotificationsRoute =
+  ApiScheduledNotificationsRouteImport.update({
+    id: '/api/scheduled-notifications',
+    path: '/api/scheduled-notifications',
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const AuthenticatedAdminIndexRoute = AuthenticatedAdminIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -183,6 +202,9 @@ export interface FileRoutesByFullPath {
   '/services': typeof ServicesRoute
   '/shop': typeof ShopRoute
   '/admin': typeof AuthenticatedAdminRouteWithChildren
+  '/api/offline-status': typeof ApiOfflineStatusRoute
+  '/api/offline-sync': typeof ApiOfflineSyncRoute
+  '/api/scheduled-notifications': typeof ApiScheduledNotificationsRoute
   '/admin/activity-log': typeof AuthenticatedAdminActivityLogRoute
   '/admin/appointments': typeof AuthenticatedAdminAppointmentsRoute
   '/admin/archive': typeof AuthenticatedAdminArchiveRoute
@@ -208,6 +230,9 @@ export interface FileRoutesByTo {
   '/reset-password': typeof ResetPasswordRoute
   '/services': typeof ServicesRoute
   '/shop': typeof ShopRoute
+  '/api/offline-status': typeof ApiOfflineStatusRoute
+  '/api/offline-sync': typeof ApiOfflineSyncRoute
+  '/api/scheduled-notifications': typeof ApiScheduledNotificationsRoute
   '/admin/activity-log': typeof AuthenticatedAdminActivityLogRoute
   '/admin/appointments': typeof AuthenticatedAdminAppointmentsRoute
   '/admin/archive': typeof AuthenticatedAdminArchiveRoute
@@ -236,6 +261,9 @@ export interface FileRoutesById {
   '/services': typeof ServicesRoute
   '/shop': typeof ShopRoute
   '/_authenticated/admin': typeof AuthenticatedAdminRouteWithChildren
+  '/api/offline-status': typeof ApiOfflineStatusRoute
+  '/api/offline-sync': typeof ApiOfflineSyncRoute
+  '/api/scheduled-notifications': typeof ApiScheduledNotificationsRoute
   '/_authenticated/admin/activity-log': typeof AuthenticatedAdminActivityLogRoute
   '/_authenticated/admin/appointments': typeof AuthenticatedAdminAppointmentsRoute
   '/_authenticated/admin/archive': typeof AuthenticatedAdminArchiveRoute
@@ -264,6 +292,9 @@ export interface FileRouteTypes {
     | '/services'
     | '/shop'
     | '/admin'
+    | '/api/offline-status'
+    | '/api/offline-sync'
+    | '/api/scheduled-notifications'
     | '/admin/activity-log'
     | '/admin/appointments'
     | '/admin/archive'
@@ -289,6 +320,9 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/services'
     | '/shop'
+    | '/api/offline-status'
+    | '/api/offline-sync'
+    | '/api/scheduled-notifications'
     | '/admin/activity-log'
     | '/admin/appointments'
     | '/admin/archive'
@@ -316,6 +350,9 @@ export interface FileRouteTypes {
     | '/services'
     | '/shop'
     | '/_authenticated/admin'
+    | '/api/offline-status'
+    | '/api/offline-sync'
+    | '/api/scheduled-notifications'
     | '/_authenticated/admin/activity-log'
     | '/_authenticated/admin/appointments'
     | '/_authenticated/admin/archive'
@@ -343,6 +380,9 @@ export interface RootRouteChildren {
   ResetPasswordRoute: typeof ResetPasswordRoute
   ServicesRoute: typeof ServicesRoute
   ShopRoute: typeof ShopRoute
+  ApiOfflineStatusRoute: typeof ApiOfflineStatusRoute
+  ApiOfflineSyncRoute: typeof ApiOfflineSyncRoute
+  ApiScheduledNotificationsRoute: typeof ApiScheduledNotificationsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -409,6 +449,27 @@ declare module '@tanstack/react-router' {
       fullPath: '/admin'
       preLoaderRoute: typeof AuthenticatedAdminRouteImport
       parentRoute: typeof AuthenticatedRouteRoute
+    }
+    '/api/offline-status': {
+      id: '/api/offline-status'
+      path: '/api/offline-status'
+      fullPath: '/api/offline-status'
+      preLoaderRoute: typeof ApiOfflineStatusRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/offline-sync': {
+      id: '/api/offline-sync'
+      path: '/api/offline-sync'
+      fullPath: '/api/offline-sync'
+      preLoaderRoute: typeof ApiOfflineSyncRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/api/scheduled-notifications': {
+      id: '/api/scheduled-notifications'
+      path: '/api/scheduled-notifications'
+      fullPath: '/api/scheduled-notifications'
+      preLoaderRoute: typeof ApiScheduledNotificationsRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/_authenticated/admin/': {
       id: '/_authenticated/admin/'
@@ -586,6 +647,9 @@ const rootRouteChildren: RootRouteChildren = {
   ResetPasswordRoute: ResetPasswordRoute,
   ServicesRoute: ServicesRoute,
   ShopRoute: ShopRoute,
+  ApiOfflineStatusRoute: ApiOfflineStatusRoute,
+  ApiOfflineSyncRoute: ApiOfflineSyncRoute,
+  ApiScheduledNotificationsRoute: ApiScheduledNotificationsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

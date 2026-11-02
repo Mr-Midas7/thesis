@@ -5,6 +5,9 @@ import type { ReactNode } from "react";
 import { SHOP } from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
+/** Set to "1" only in the offline copy (.env.offline). */
+const OFFLINE = import.meta.env["VITE_OFFLINE"] === "1";
+
 const QUICK_LINKS = [
   { to: "/book", label: "Book an appointment" },
   { to: "/my-appointment", label: "View or cancel a booking" },
@@ -34,14 +37,22 @@ export function SiteFooter({ className }: { className?: string }) {
             aria-label="Open Fake Rider Motorparts location in Google Maps"
             className="group relative block w-40 shrink-0 overflow-hidden rounded-xl border border-border/70 bg-muted/30 transition-colors hover:border-primary/60 md:w-auto"
           >
-            <iframe
-              title="Map showing the Fake Rider Motorparts location"
-              src={SHOP.mapEmbedUrl}
-              loading="lazy"
-              tabIndex={-1}
-              referrerPolicy="strict-origin-when-cross-origin"
-              className="pointer-events-none block h-28 w-full border-0 md:h-40"
-            />
+            {OFFLINE ? (
+              // The offline copy cannot load Google's map, so it shows the address instead.
+              <div className="flex h-28 w-full flex-col items-center justify-center gap-1 px-3 pb-7 text-center md:h-40">
+                <MapPin className="h-6 w-6 text-primary" aria-hidden="true" />
+                <span className="text-xs text-muted-foreground">Baclayon, Bohol</span>
+              </div>
+            ) : (
+              <iframe
+                title="Map showing the Fake Rider Motorparts location"
+                src={SHOP.mapEmbedUrl}
+                loading="lazy"
+                tabIndex={-1}
+                referrerPolicy="strict-origin-when-cross-origin"
+                className="pointer-events-none block h-28 w-full border-0 md:h-40"
+              />
+            )}
             <span className="absolute inset-x-0 bottom-0 flex items-center gap-1.5 bg-background/85 px-2.5 py-1.5 text-xs font-medium text-foreground backdrop-blur-sm md:gap-2 md:px-3 md:py-2">
               <MapPin className="h-3.5 w-3.5 text-primary" aria-hidden="true" /> Open in Google Maps
             </span>

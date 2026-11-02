@@ -32,7 +32,12 @@ function createSupabaseFetch(supabaseKey: string): typeof fetch {
 function createSupabaseClient() {
   // Use import.meta.env for client-side (Vite build-time replacement)
   // Fall back to process.env for SSR (server-side rendering)
-  const SUPABASE_URL = import.meta.env["VITE_SUPABASE_URL"] || process.env["SUPABASE_URL"];
+  // The offline copy's browser goes through the app server's /supabase proxy
+  // (vite.config.ts), so phones on the laptop's hotspot reach the local database.
+  const SUPABASE_URL =
+    import.meta.env["VITE_OFFLINE"] === "1" && typeof window !== "undefined"
+      ? `${window.location.origin}/supabase`
+      : import.meta.env["VITE_SUPABASE_URL"] || process.env["SUPABASE_URL"];
   const SUPABASE_PUBLISHABLE_KEY =
     import.meta.env["VITE_SUPABASE_PUBLISHABLE_KEY"] || process.env["SUPABASE_PUBLISHABLE_KEY"];
 

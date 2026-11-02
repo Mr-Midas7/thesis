@@ -10,7 +10,6 @@ export type PrintDocumentInfo = {
   title: string;
   /** An optional small line under the title, e.g. "Activity record". */
   subtitle?: string;
-  generatedAt: string;
   coverage: string;
   scope: string;
 };
@@ -32,9 +31,8 @@ export function PrintDocument({
   return createPortal(
     <div className="report-print-root">
       <style>{PRINT_DOCUMENT_STYLES}</style>
-      <div className="report-print-sheets" />
-      {/* Printed only if the document could not be laid out on sheets. */}
-      <table className="report-print-page report-print-flow">
+      {/* Its header and footer rows repeat on every printed page as margins. */}
+      <table className="report-print-page">
         <thead>
           <tr>
             <td />
@@ -49,34 +47,27 @@ export function PrintDocument({
           <tr>
             <td>
               <article className="report-print-document">
-                <div className="report-print-content">
-                  <header className="report-print-header">
-                    <img src={exportLogoUrl} alt="" className="report-print-logo" />
-                    <div className="report-print-heading">
-                      <p>{SHOP_EXPORT_NAME}</p>
-                      <p>{SHOP.tagline}</p>
-                      <h1>{info.title}</h1>
-                      {info.subtitle && <p>{info.subtitle}</p>}
-                    </div>
-                    <p className="report-print-generated">
-                      Generated
-                      <br />
-                      {info.generatedAt}
-                    </p>
-                  </header>
-                  <div className="report-print-rule" />
-                  <section className="report-print-meta">
-                    <div>
-                      <span>Coverage</span>
-                      <strong>{info.coverage}</strong>
-                    </div>
-                    <div>
-                      <span>Report scope</span>
-                      <strong>{info.scope}</strong>
-                    </div>
-                  </section>
-                  {children}
-                </div>
+                <header className="report-print-header">
+                  <img src={exportLogoUrl} alt="" className="report-print-logo" />
+                  <div className="report-print-heading">
+                    <p>{SHOP_EXPORT_NAME}</p>
+                    <p>{SHOP.tagline}</p>
+                    <h1>{info.title}</h1>
+                    {info.subtitle && <p>{info.subtitle}</p>}
+                  </div>
+                </header>
+                <div className="report-print-rule" />
+                <section className="report-print-meta">
+                  <div>
+                    <span>Coverage</span>
+                    <strong>{info.coverage}</strong>
+                  </div>
+                  <div>
+                    <span>Report scope</span>
+                    <strong>{info.scope}</strong>
+                  </div>
+                </section>
+                {children}
                 <div className="report-print-signoff">
                   <footer className="report-print-footer">
                     <div>
@@ -90,7 +81,6 @@ export function PrintDocument({
                       <div />
                     </div>
                   </footer>
-                  <p className="report-print-timestamp">Generated on {info.generatedAt}</p>
                 </div>
               </article>
             </td>

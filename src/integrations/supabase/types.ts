@@ -506,6 +506,53 @@ export type Database = {
           },
         ];
       };
+      appointment_reminders: {
+        Row: {
+          appointment_id: string;
+          attempt_count: number;
+          channel: string;
+          created_at: string;
+          id: string;
+          last_error: string | null;
+          recipient: string;
+          sent_at: string | null;
+          status: string;
+          updated_at: string;
+        };
+        Insert: {
+          appointment_id: string;
+          attempt_count?: number;
+          channel: string;
+          created_at?: string;
+          id?: string;
+          last_error?: string | null;
+          recipient: string;
+          sent_at?: string | null;
+          status?: string;
+          updated_at?: string;
+        };
+        Update: {
+          appointment_id?: string;
+          attempt_count?: number;
+          channel?: string;
+          created_at?: string;
+          id?: string;
+          last_error?: string | null;
+          recipient?: string;
+          sent_at?: string | null;
+          status?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "appointment_reminders_appointment_id_fkey";
+            columns: ["appointment_id"];
+            isOneToOne: false;
+            referencedRelation: "appointments";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       appointment_action_verifications: {
         Row: {
           action: string;
@@ -983,6 +1030,27 @@ export type Database = {
         };
         Relationships: [];
       };
+      scheduled_notification_runs: {
+        Row: {
+          id: boolean;
+          last_error: string | null;
+          last_finished_at: string | null;
+          last_started_at: string | null;
+        };
+        Insert: {
+          id?: boolean;
+          last_error?: string | null;
+          last_finished_at?: string | null;
+          last_started_at?: string | null;
+        };
+        Update: {
+          id?: boolean;
+          last_error?: string | null;
+          last_finished_at?: string | null;
+          last_started_at?: string | null;
+        };
+        Relationships: [];
+      };
       schedule_blocks: {
         Row: {
           archived_at: string | null;
@@ -1240,6 +1308,10 @@ export type Database = {
           appointment_id: string;
           reference_code: string;
         }[];
+      };
+      queue_due_appointment_reminders: {
+        Args: Record<PropertyKey, never>;
+        Returns: number;
       };
       review_pending_appointment: {
         Args: {

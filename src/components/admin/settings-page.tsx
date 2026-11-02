@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { User } from "@supabase/supabase-js";
 import {
+  BellRing,
   Building2,
   Eye,
   EyeOff,
@@ -29,12 +30,20 @@ import { Card, CardContent } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field-error";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import { recordAdminActivityEvent } from "@/lib/admin-activity";
 import { DEFAULT_BOOKING_HOURS, DEFAULT_BOOKING_TERMS, SHOP } from "@/lib/shop";
-import { cn } from "@/lib/utils";
+import { cn, randomId } from "@/lib/utils";
 
 type SettingsTab = "shop" | "account";
 
@@ -51,6 +60,8 @@ type ShopSettingsForm = {
   allowSameDayAppointments: boolean;
   cancellationNoticeHours: number;
   reschedulingNoticeHours: number;
+  sendReminders: boolean;
+  reminderHoursBefore: number;
 };
 
 type AccountForm = {
@@ -80,13 +91,27 @@ const defaultSettings: ShopSettingsForm = {
   allowSameDayAppointments: false,
   cancellationNoticeHours: SHOP.noticeHours,
   reschedulingNoticeHours: SHOP.noticeHours,
+  sendReminders: true,
+  reminderHoursBefore: 24,
 };
+
+/** Reminder timings offered in Settings, plus the saved one if it differs. */
+function reminderHourOptions(saved: number) {
+  return [...new Set([2, 6, 12, 24, 48, saved])].sort((a, b) => a - b);
+}
+
+function reminderTimingLabel(hours: number) {
+  if (hours % 24 === 0) return hours === 24 ? "1 day before" : `${hours / 24} days before`;
+  return hours === 1 ? "1 hour before" : `${hours} hours before`;
+}
 
 const settingFieldLabels: Array<[keyof ShopSettingsForm, string]> = [
   ["address", "Address"],
   ["contactNumber", "Contact number"],
   ["contactEmail", "Contact email"],
   ["bookingTerms", "Booking terms & conditions"],
+  ["sendReminders", "Appointment reminders"],
+  ["reminderHoursBefore", "Reminder timing"],
 ];
 
 const tabLabels: Record<Exclude<SettingsTab, "account">, string> = {
@@ -94,7 +119,14 @@ const tabLabels: Record<Exclude<SettingsTab, "account">, string> = {
 };
 
 const settingKeysByTab: Record<Exclude<SettingsTab, "account">, Array<keyof ShopSettingsForm>> = {
-  shop: ["address", "contactNumber", "contactEmail", "bookingTerms"],
+  shop: [
+    "address",
+    "contactNumber",
+    "contactEmail",
+    "bookingTerms",
+    "sendReminders",
+    "reminderHoursBefore",
+  ],
 };
 
 function fromDatabase(row: {
@@ -110,6 +142,8 @@ function fromDatabase(row: {
   allow_same_day_appointments: boolean;
   cancellation_notice_hours: number;
   rescheduling_notice_hours: number;
+  notify_reminder: boolean;
+  reminder_hours_before: number;
 }): ShopSettingsForm {
   return {
     address: row.address,
@@ -124,6 +158,8 @@ function fromDatabase(row: {
     allowSameDayAppointments: row.allow_same_day_appointments,
     cancellationNoticeHours: row.cancellation_notice_hours,
     reschedulingNoticeHours: row.rescheduling_notice_hours,
+    sendReminders: row.notify_reminder,
+    reminderHoursBefore: row.reminder_hours_before,
   };
 }
 
@@ -144,7 +180,7 @@ async function uploadAsset(file: File, folder: string) {
   if (file.size > 5 * 1024 * 1024) throw new Error("Images must be 5 MB or smaller.");
 
   const extension = file.type.split("/")[1] ?? "png";
-  const path = `${folder}/${crypto.randomUUID()}.${extension}`;
+  const path = `${folder}/${randomId()}.${extension}`;
   const { error } = await supabase.storage.from("shop-assets").upload(path, file, {
     cacheControl: "3600",
     contentType: file.type,
@@ -245,6 +281,8 @@ export function SettingsPage() {
         contact_number: next.contactNumber.trim(),
         contact_email: next.contactEmail.trim().toLowerCase(),
         booking_terms: next.bookingTerms.trim(),
+        notify_reminder: next.sendReminders,
+        reminder_hours_before: next.reminderHoursBefore,
       };
       const { error } = await supabase
         .from("shop_settings")
@@ -542,6 +580,46 @@ export function SettingsPage() {
                       />
                     </Field>
                   </div>
+                </CardContent>
+              </Card>
+              <Card className="border-border/70 bg-card/60">
+                <CardContent className="space-y-4 p-5 sm:p-6">
+                  <div className="flex items-start gap-3">
+                    <BellRing className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                    <div>
+                      <p className="font-medium">Appointment reminders</p>
+                      <p className="mt-1 text-sm text-muted-foreground">
+                        Customers with a confirmed appointment get a reminder by email and text. It
+                        is skipped when the booking was confirmed in the last 12 hours, since the
+                        confirmation has the same details.
+                      </p>
+                    </div>
+                  </div>
+                  <label className="flex items-center gap-3 text-sm">
+                    <Switch
+                      checked={settings.sendReminders}
+                      onCheckedChange={(checked) => setSetting("sendReminders", checked)}
+                    />
+                    Send appointment reminders
+                  </label>
+                  <Field label="When to send">
+                    <Select
+                      value={String(settings.reminderHoursBefore)}
+                      onValueChange={(value) => setSetting("reminderHoursBefore", Number(value))}
+                      disabled={!settings.sendReminders}
+                    >
+                      <SelectTrigger aria-label="When to send reminders" className="w-full sm:w-64">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {reminderHourOptions(settings.reminderHoursBefore).map((hours) => (
+                          <SelectItem key={hours} value={String(hours)}>
+                            {reminderTimingLabel(hours)} the appointment
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </Field>
                 </CardContent>
               </Card>
               <SaveButton

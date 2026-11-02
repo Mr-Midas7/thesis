@@ -88,7 +88,7 @@ import {
   normalizePhilippineMobile,
   sanitizePhilippineMobileInput,
 } from "@/lib/shop";
-import { cn } from "@/lib/utils";
+import { cn, randomId } from "@/lib/utils";
 
 const searchSchema = z.object({
   date: z.string().refine(isValidCalendarDate, "Enter a valid appointment date.").optional(),
@@ -265,7 +265,7 @@ function BookPage() {
     continuationSegments?: Array<{ date: string; startTime: string; durationMinutes: number }>;
   } | null>(null);
   const [turnstileToken, setTurnstileToken] = useState("");
-  const [bookingRequestId, setBookingRequestId] = useState(() => crypto.randomUUID());
+  const [bookingRequestId, setBookingRequestId] = useState(() => randomId());
   const isReschedule = Boolean(search.reschedule && search.phone);
   const [rescheduleReason, setRescheduleReason] = useState("");
   const [reschedulePrefillReady, setReschedulePrefillReady] = useState(!isReschedule);
@@ -687,13 +687,13 @@ function BookPage() {
           setDate("");
           setStartTime("");
           setTurnstileToken("");
-          setBookingRequestId(crypto.randomUUID());
+          setBookingRequestId(randomId());
           availability.refetch();
           return;
         }
         setErrors((current) => ({ ...current, schedule: res.error }));
         setTurnstileToken("");
-        setBookingRequestId(crypto.randomUUID());
+        setBookingRequestId(randomId());
         availability.refetch();
         return;
       }

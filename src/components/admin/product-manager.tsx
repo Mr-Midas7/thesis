@@ -39,6 +39,7 @@ import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { supabase } from "@/integrations/supabase/client";
 import { formatPHP } from "@/lib/shop";
+import { randomId } from "@/lib/utils";
 
 type Product = {
   id: string;
@@ -695,7 +696,7 @@ function invalidateProductQueries(queryClient: ReturnType<typeof useQueryClient>
 
 async function uploadImage(file: File): Promise<string> {
   const extension = file.name.split(".").pop()?.toLowerCase() ?? "jpg";
-  const path = `${crypto.randomUUID()}.${extension}`;
+  const path = `${randomId()}.${extension}`;
   const { error } = await supabase.storage.from("products").upload(path, file, {
     cacheControl: "3600",
     upsert: false,

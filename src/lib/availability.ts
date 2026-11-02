@@ -238,6 +238,13 @@ export type ComputedSlot = {
   disabled: boolean;
   notBookable: boolean;
   recommended: boolean;
+  /**
+   * Whether the shop normally takes this service at this time. False for hours
+   * without capacity (such as lunch) and for times too soon, or too late for
+   * the service to finish. Pages hide these and grey out the other disabled
+   * times, which are taken or blocked.
+   */
+  offered: boolean;
 };
 
 type InternalComputedSlot = ComputedSlot & { capacity: number };
@@ -463,6 +470,7 @@ function computeAvailableSlotsFromSource(
       disabled,
       notBookable,
       recommended: false,
+      offered: slot.capacity > 0 && !notBookable,
     };
   });
 

@@ -36,3 +36,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Offline copy: live data (customer details), local database settings and
+# copied images. Never commit these; the repository is public.
+offline/data/
+offline/storage/
+offline/supabase/.temp/
+offline/supabase/.branches/
+.env.offline

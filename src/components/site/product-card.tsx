@@ -18,6 +18,18 @@ export type ProductRow = {
   is_featured: boolean;
 };
 
+/** Set to "1" only in the offline copy (.env.offline). */
+const OFFLINE = import.meta.env["VITE_OFFLINE"] === "1";
+
+/**
+ * The offline copy keeps the live database's image addresses and serves the
+ * copied files through the app's /supabase proxy instead.
+ */
+function imageSrc(url: string) {
+  const path = url.indexOf("/storage/v1/object/public/");
+  return OFFLINE && path !== -1 ? `/supabase${url.slice(path)}` : url;
+}
+
 /**
  * Opens the shop's Messenger chat with a message naming the item already typed
  * in; the customer still presses Send.
@@ -47,7 +59,7 @@ export function ProductCard({
       >
         {product.image_url ? (
           <img
-            src={product.image_url}
+            src={imageSrc(product.image_url)}
             alt={product.name}
             loading="lazy"
             className="h-full w-full object-contain p-3 transition-transform duration-300 group-hover:scale-105"

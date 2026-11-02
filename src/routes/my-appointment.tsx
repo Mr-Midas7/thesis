@@ -90,7 +90,7 @@ import {
   statusLabel,
   statusTone,
 } from "@/lib/shop";
-import { cn } from "@/lib/utils";
+import { cn, randomId } from "@/lib/utils";
 
 export const Route = createFileRoute("/my-appointment")({
   head: () => ({
@@ -168,6 +168,13 @@ function MyAppointment() {
   const [appt, setAppt] = useState<
     null | Extract<Awaited<ReturnType<typeof lookupAppointment>>, { ok: true }>["appointment"]
   >(null);
+  // The lookup masks the mobile number. A reschedule verification returns it in
+  // full, and it is kept for that appointment even if the verification expires.
+  const [verifiedPhone, setVerifiedPhone] = useState<{ reference: string; phone: string } | null>(
+    null,
+  );
+  const reschedulePhone =
+    appt && verifiedPhone?.reference === appt.reference ? verifiedPhone.phone : null;
 
   useEffect(() => {
     setSupportsSlideTransition(
@@ -191,10 +198,14 @@ function MyAppointment() {
           serviceIds: rescheduleServiceIds,
           rescheduling: true,
           rescheduleReference: appt?.reference,
-          reschedulePhone: appt?.phone,
+          ...(reschedulePhone ? { reschedulePhone } : {}),
         },
       }),
-    enabled: isRescheduling && Boolean(appt) && rescheduleServiceIds.length > 0,
+    enabled:
+      isRescheduling &&
+      Boolean(appt) &&
+      Boolean(reschedulePhone) &&
+      rescheduleServiceIds.length > 0,
   });
   const bookingTerms = useQuery({
     queryKey: ["public-booking-terms"],
@@ -321,6 +332,8 @@ function MyAppointment() {
   const rescheduleMutation = useMutation({
     mutationFn: async () => {
       if (!appt) throw new Error("Appointment details are no longer available.");
+      const phone = normalizePhilippineMobile(reschedulePhone ?? "");
+      if (!phone) throw new Error("The verified mobile number is missing.");
       const result = await createRescheduleRequest({
         data: {
           // The server reloads and trusts the original appointment record. These
@@ -328,7 +341,7 @@ function MyAppointment() {
           firstName: appt.firstName,
           middleName: appt.middleName,
           lastName: appt.lastName,
-          phone: normalizePhilippineMobile(appt.phone)!,
+          phone,
           motoBrand: "Original",
           motoModel: "Appointment",
           motoVariant: "",
@@ -338,10 +351,11 @@ function MyAppointment() {
           date: newDate,
           startTime: newStartTime,
           notes: "",
+          wantsProducts: false,
           turnstileToken: rescheduleTurnstileToken,
           // Keep this value stable for retries so a lost response returns the
           // originally reserved reference instead of creating a new request.
-          idempotencyKey: rescheduleRequestId ?? crypto.randomUUID(),
+          idempotencyKey: rescheduleRequestId ?? randomId(),
           termsAccepted: true as const,
           rescheduleReference: appt.reference,
           rescheduleReason: rescheduleReason.trim(),
@@ -415,7 +429,7 @@ function MyAppointment() {
     setNewDate("");
     setNewStartTime("");
     setRescheduleReason("");
-    setRescheduleRequestId(crypto.randomUUID());
+    setRescheduleRequestId(randomId());
     setRescheduleTurnstileToken("");
     setRescheduleConfirmation(null);
     setRescheduleTermsAccepted(false);
@@ -464,6 +478,8 @@ function MyAppointment() {
       return;
     }
     setRescheduleVerification({ ...verification, reference: appt.reference });
+    if (verification.phone)
+      setVerifiedPhone({ reference: appt.reference, phone: verification.phone });
     if (isRescheduling) {
       // Verified again mid-way: keep the chosen schedule and return to the review step.
       setRescheduleErrors(({ request: _, ...current }) => current);
@@ -1084,12 +1100,35 @@ function MyAppointment() {
                     {appt.rescheduleRequestPending &&
                       appt.requestedRescheduleDate &&
                       appt.requestedRescheduleStartTime && (
-                        <Notice tone="accent" title="Reschedule request awaiting review">
-                          Your request to move this appointment to{" "}
-                          {formatDateLong(appt.requestedRescheduleDate)} at{" "}
-                          {formatTime(appt.requestedRescheduleStartTime)} is awaiting the
-                          shop&apos;s review. Your current appointment remains reserved until then.
-                          {appt.requestedRescheduleReference && (
+                        <Notice
+                          tone="accent"
+                          title={
+                            appt.foundByRescheduleRequest && appt.requestedRescheduleReference
+                              ? `Reschedule request ${appt.requestedRescheduleReference} is awaiting review`
+                              : "Reschedule request awaiting review"
+                          }
+                        >
+                          {appt.foundByRescheduleRequest && appt.requestedRescheduleReference ? (
+                            <>
+                              <strong>{appt.requestedRescheduleReference}</strong> is the reference
+                              for your request to move appointment <strong>{appt.reference}</strong>{" "}
+                              to {formatDateLong(appt.requestedRescheduleDate)} at{" "}
+                              {formatTime(appt.requestedRescheduleStartTime)}. The shop hasn&apos;t
+                              reviewed it yet, so the details shown here are still for{" "}
+                              {appt.reference}, which stays reserved until then. Once the request is
+                              approved, {appt.requestedRescheduleReference} becomes your
+                              appointment&apos;s reference.
+                            </>
+                          ) : (
+                            <>
+                              Your request to move this appointment to{" "}
+                              {formatDateLong(appt.requestedRescheduleDate)} at{" "}
+                              {formatTime(appt.requestedRescheduleStartTime)} is awaiting the
+                              shop&apos;s review. Your current appointment remains reserved until
+                              then.
+                            </>
+                          )}
+                          {!appt.foundByRescheduleRequest && appt.requestedRescheduleReference && (
                             <>
                               {" "}
                               Your reserved new reference is{" "}
@@ -1124,7 +1163,7 @@ function MyAppointment() {
 
                     <dl className="grid gap-4 sm:grid-cols-2">
                       <Row label="Customer" value={appt.customerName} />
-                      <Row label="Mobile number" value={appt.phone} />
+                      <Row label="Mobile number" value={appt.phoneHint} />
                       <Row label="Motorcycle" value={appt.motorcycle} />
                       <Row label="Plate number" value={appt.plateNumber} />
                     </dl>
@@ -1267,7 +1306,7 @@ function MyAppointment() {
                     </SummaryBlock>
                     <SummaryBlock label="Customer">
                       <p className="font-medium">{appt.customerName}</p>
-                      <p className="text-muted-foreground">{appt.phone}</p>
+                      <p className="text-muted-foreground">{reschedulePhone ?? appt.phoneHint}</p>
                     </SummaryBlock>
                     <SummaryBlock label="Motorcycle">
                       <p className="font-medium">{appt.motorcycle}</p>

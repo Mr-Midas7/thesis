@@ -5,6 +5,8 @@ import { z } from "zod";
 
 import type { Database } from "@/integrations/supabase/types";
 import {
+  appointmentReminderEmail,
+  appointmentReminderSms,
   bookingNotAcceptedEmail,
   bookingNotAcceptedSms,
   escapeHtml,
@@ -83,6 +85,52 @@ type ConfirmationSmsResult = {
   skipped: boolean;
   error: string | null;
 };
+
+/** An Android phone running SMS Gateway for Android in Local Server mode. */
+type PhoneGatewayConfig = {
+  url: string;
+  username: string;
+  password: string;
+  /** Bookings created before this were copied from the live site and are never texted. */
+  bookingsFrom: Date;
+};
+
+type SmsConfig =
+  ({ provider: "phone" } & PhoneGatewayConfig) | ({ provider: "textbee" } & TextBeeConfig);
+
+const COPIED_BOOKING_NOT_TEXTED =
+  "No text was sent: this booking was copied from the live site, so the offline copy does not text its customer.";
+
+/**
+ * SMS_GATEWAY_URL (the offline copy) sends through a phone on the local network,
+ * which needs no internet. Otherwise TextBee is used.
+ */
+function smsConfig(): { config: SmsConfig } | { error: string } {
+  const gatewayUrl = process.env["SMS_GATEWAY_URL"]?.trim().replace(/\/+$/, "");
+  if (!gatewayUrl) {
+    const textBee = textBeeConfig();
+    return "error" in textBee ? textBee : { config: { provider: "textbee", ...textBee.config } };
+  }
+
+  const username = process.env["SMS_GATEWAY_USERNAME"]?.trim() ?? "";
+  const password = process.env["SMS_GATEWAY_PASSWORD"]?.trim() ?? "";
+  const bookingsFrom = new Date(process.env["OFFLINE_COPY_TAKEN_AT"]?.trim() ?? "");
+  let validUrl = false;
+  try {
+    validUrl = ["http:", "https:"].includes(new URL(gatewayUrl).protocol);
+  } catch {
+    validUrl = false;
+  }
+  if (!validUrl || !username || !password || Number.isNaN(bookingsFrom.getTime())) {
+    return {
+      error:
+        "SMS is not configured correctly. Set SMS_GATEWAY_URL, SMS_GATEWAY_USERNAME, SMS_GATEWAY_PASSWORD and OFFLINE_COPY_TAKEN_AT.",
+    };
+  }
+  return {
+    config: { provider: "phone", url: gatewayUrl, username, password, bookingsFrom },
+  };
+}
 
 function textBeeConfig(): { config: TextBeeConfig } | { error: string } {
   const apiKey = process.env["TEXTBEE_API_KEY"]?.trim();
@@ -203,6 +251,69 @@ async function assertTextBeeAccepted(response: Response) {
     }
     throw error;
   }
+}
+
+/** Sends one text message through the phone gateway; throws when the phone does not accept it. */
+async function sendPhoneGatewaySms(config: PhoneGatewayConfig, recipient: string, message: string) {
+  let response: Response;
+  try {
+    response = await fetch(`${config.url}/message`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Basic ${btoa(`${config.username}:${config.password}`)}`,
+      },
+      body: JSON.stringify({ textMessage: { text: message }, phoneNumbers: [recipient] }),
+      signal: AbortSignal.timeout(15_000),
+    });
+  } catch (error) {
+    console.error("[SMS phone] the phone could not be reached", error);
+    throw new Error(
+      "The SMS phone could not be reached. Check that it is on the same hotspot and its Local Server is online.",
+    );
+  }
+
+  const body = await response.text();
+  if (!response.ok) {
+    const detail = redactProviderDetail(body);
+    console.error("[SMS phone] the phone rejected the message", {
+      status: response.status,
+      detail: detail || undefined,
+    });
+    throw new Error(
+      response.status === 401
+        ? "The SMS phone rejected the username or password."
+        : `The SMS phone returned ${response.status}${detail ? `: ${detail}` : "."}`,
+    );
+  }
+  try {
+    const payload = JSON.parse(body) as { state?: string };
+    if (payload.state === "Failed") throw new Error("The SMS phone could not send the text.");
+  } catch (error) {
+    if (!(error instanceof SyntaxError)) throw error;
+  }
+}
+
+function sendSms(config: SmsConfig, recipient: string, message: string) {
+  return config.provider === "phone"
+    ? sendPhoneGatewaySms(config, recipient, message)
+    : sendTextBeeSms(config, recipient, message);
+}
+
+/**
+ * The offline copy texts only bookings made in it. Customers copied from the
+ * live site are real people, so their bookings are never texted from it.
+ */
+async function isCopiedBooking(config: SmsConfig, appointmentId: string) {
+  if (config.provider !== "phone") return false;
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data, error } = await supabaseAdmin
+    .from("appointments")
+    .select("created_at")
+    .eq("id", appointmentId)
+    .maybeSingle();
+  if (error || !data) throw new Error("The booking could not be checked before texting.");
+  return new Date(data.created_at) < config.bookingsFrom;
 }
 
 function authenticatedSupabaseClient() {
@@ -434,7 +545,7 @@ async function sendQueuedConfirmationSms(appointmentId: string): Promise<Confirm
     return { sent: false, skipped: false, error: null };
   }
 
-  const configured = textBeeConfig();
+  const configured = smsConfig();
   if ("error" in configured) {
     await supabaseAdmin
       .from("appointment_confirmation_sms")
@@ -448,6 +559,17 @@ async function sendQueuedConfirmationSms(appointmentId: string): Promise<Confirm
   }
 
   try {
+    if (await isCopiedBooking(configured.config, appointmentId)) {
+      await supabaseAdmin
+        .from("appointment_confirmation_sms")
+        .update({
+          status: "skipped",
+          last_error: COPIED_BOOKING_NOT_TEXTED,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("id", delivery.id);
+      return { sent: false, skipped: true, error: COPIED_BOOKING_NOT_TEXTED };
+    }
     const recipient = formatPhilippineMobileE164(delivery.recipient_phone);
     if (!recipient) throw new Error("The customer's mobile number is invalid.");
 
@@ -480,7 +602,7 @@ async function sendQueuedConfirmationSms(appointmentId: string): Promise<Confirm
     ]
       .filter(Boolean)
       .join(" ");
-    await sendTextBeeSms(configured.config, recipient, message);
+    await sendSms(configured.config, recipient, message);
 
     const { error: sentError } = await supabaseAdmin
       .from("appointment_confirmation_sms")
@@ -542,48 +664,59 @@ async function sendConfirmationNotifications(appointmentId: string) {
 }
 
 type CompletionDeliveryResult = { sent: true } | { sent: false; error: string | null };
-type CompletionChannel = "email" | "sms";
-type CompletionClaim =
+type DeliveryChannel = "email" | "sms";
+/** Queues with one row per appointment and channel. */
+type ChannelQueue = "appointment_completion_notifications" | "appointment_reminders";
+type ChannelClaim =
   | { kind: "claimed"; id: string; recipient: string }
   | { kind: "sent" }
   | { kind: "skipped" }
   | { kind: "in_progress" }
   | { kind: "error"; error: string };
 
-function completionChannelLabel(channel: CompletionChannel) {
-  return channel === "email" ? "email" : "SMS";
+/** "completion email", "reminder SMS" and so on, for messages and logs. */
+function channelDeliveryLabel(queue: ChannelQueue, channel: DeliveryChannel) {
+  const kind = queue === "appointment_reminders" ? "reminder" : "completion";
+  return `${kind} ${channel === "email" ? "email" : "SMS"}`;
 }
 
-async function claimCompletionNotification(
+function channelLogPrefix(queue: ChannelQueue, channel: DeliveryChannel) {
+  const label = channelDeliveryLabel(queue, channel);
+  return `[${label.charAt(0).toUpperCase()}${label.slice(1)}]`;
+}
+
+async function claimChannelDelivery(
+  queue: ChannelQueue,
   appointmentId: string,
-  channel: CompletionChannel,
-): Promise<CompletionClaim> {
+  channel: DeliveryChannel,
+): Promise<ChannelClaim> {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-  const label = completionChannelLabel(channel);
+  const label = channelDeliveryLabel(queue, channel);
+  const log = channelLogPrefix(queue, channel);
   const { data: queuedDelivery, error: pendingError } = await supabaseAdmin
-    .from("appointment_completion_notifications")
+    .from(queue)
     .select("id,attempt_count,recipient,status,updated_at")
     .eq("appointment_id", appointmentId)
     .eq("channel", channel)
     .maybeSingle();
   if (pendingError || !queuedDelivery) {
-    if (pendingError) console.error(`[Completion ${label}] queue lookup failed`, pendingError);
-    return { kind: "error", error: `The completion ${label} could not be queued.` };
+    if (pendingError) console.error(`${log} queue lookup failed`, pendingError);
+    return { kind: "error", error: `The ${label} could not be queued.` };
   }
   if (queuedDelivery.status === "sent") return { kind: "sent" };
   if (queuedDelivery.status === "skipped") return { kind: "skipped" };
   const retryingStaleClaim =
     queuedDelivery.status === "sending" && deliveryLeaseExpired(queuedDelivery.updated_at);
   if (queuedDelivery.status !== "pending" && !retryingStaleClaim) {
-    console.info(`[Completion ${label}] delivery is already in progress`, { appointmentId });
+    console.info(`${log} delivery is already in progress`, { appointmentId });
     return { kind: "in_progress" };
   }
   if (retryingStaleClaim) {
-    console.warn(`[Completion ${label}] retrying stale delivery lease`, { appointmentId });
+    console.warn(`${log} retrying stale delivery lease`, { appointmentId });
   }
 
   let claimQuery = supabaseAdmin
-    .from("appointment_completion_notifications")
+    .from(queue)
     .update({
       status: "sending",
       attempt_count: queuedDelivery.attempt_count + 1,
@@ -600,27 +733,28 @@ async function claimCompletionNotification(
     .select("id,recipient")
     .maybeSingle();
   if (claimError) {
-    console.error(`[Completion ${label}] queue claim failed`, claimError);
-    return { kind: "error", error: `The completion ${label} could not be queued.` };
+    console.error(`${log} queue claim failed`, claimError);
+    return { kind: "error", error: `The ${label} could not be queued.` };
   }
   if (!delivery) {
-    console.info(`[Completion ${label}] delivery claim lost to another request`, { appointmentId });
+    console.info(`${log} delivery claim lost to another request`, { appointmentId });
     return { kind: "in_progress" };
   }
   return { kind: "claimed", ...delivery };
 }
 
-async function resetCompletionNotification(
+async function resetChannelDelivery(
+  queue: ChannelQueue,
   deliveryId: string,
   error: unknown,
-  channel: CompletionChannel,
+  channel: DeliveryChannel,
 ) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const message =
     error instanceof Error ? error.message : "The notification provider could not be reached.";
-  console.error(`[Completion ${completionChannelLabel(channel)}] send failed`, error);
+  console.error(`${channelLogPrefix(queue, channel)} send failed`, error);
   await supabaseAdmin
-    .from("appointment_completion_notifications")
+    .from(queue)
     .update({
       status: "pending",
       last_error: message.slice(0, 500),
@@ -629,21 +763,36 @@ async function resetCompletionNotification(
     .eq("id", deliveryId);
 }
 
-async function markCompletionNotificationSent(deliveryId: string, channel: CompletionChannel) {
+async function markChannelDeliverySent(
+  queue: ChannelQueue,
+  deliveryId: string,
+  channel: DeliveryChannel,
+) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const { error } = await supabaseAdmin
-    .from("appointment_completion_notifications")
+    .from(queue)
     .update({
       status: "sent",
       sent_at: new Date().toISOString(),
       updated_at: new Date().toISOString(),
     })
     .eq("id", deliveryId);
+  if (error) console.error(`${channelLogPrefix(queue, channel)} sent-state update failed`, error);
+}
+
+async function markChannelDeliverySkipped(
+  queue: ChannelQueue,
+  deliveryId: string,
+  channel: DeliveryChannel,
+  reason: string,
+) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { error } = await supabaseAdmin
+    .from(queue)
+    .update({ status: "skipped", last_error: reason, updated_at: new Date().toISOString() })
+    .eq("id", deliveryId);
   if (error)
-    console.error(
-      `[Completion ${completionChannelLabel(channel)}] sent-state update failed`,
-      error,
-    );
+    console.error(`${channelLogPrefix(queue, channel)} skipped-state update failed`, error);
 }
 
 async function loadCompletedAppointment(appointmentId: string) {
@@ -713,7 +862,11 @@ async function sendQueuedCompletionEmail(appointmentId: string): Promise<Complet
       error: configured.error,
     };
   }
-  const claim = await claimCompletionNotification(appointmentId, "email");
+  const claim = await claimChannelDelivery(
+    "appointment_completion_notifications",
+    appointmentId,
+    "email",
+  );
   if (claim.kind === "sent") return { sent: true };
   if (claim.kind === "in_progress") return { sent: false, error: null };
   if (claim.kind === "skipped") {
@@ -748,10 +901,10 @@ async function sendQueuedCompletionEmail(appointmentId: string): Promise<Complet
       text,
       idempotencyKey: `appointment-completion-${claim.id}`,
     });
-    await markCompletionNotificationSent(claim.id, "email");
+    await markChannelDeliverySent("appointment_completion_notifications", claim.id, "email");
     return { sent: true };
   } catch (error) {
-    await resetCompletionNotification(claim.id, error, "email");
+    await resetChannelDelivery("appointment_completion_notifications", claim.id, error, "email");
     return {
       sent: false,
       error: "The service was completed, but the completion email could not be sent.",
@@ -760,7 +913,11 @@ async function sendQueuedCompletionEmail(appointmentId: string): Promise<Complet
 }
 
 async function sendQueuedCompletionSms(appointmentId: string): Promise<ConfirmationSmsResult> {
-  const claim = await claimCompletionNotification(appointmentId, "sms");
+  const claim = await claimChannelDelivery(
+    "appointment_completion_notifications",
+    appointmentId,
+    "sms",
+  );
   if (claim.kind === "sent") return { sent: true, skipped: false, error: null };
   if (claim.kind === "skipped") return { sent: false, skipped: true, error: null };
   if (claim.kind === "in_progress") return { sent: false, skipped: false, error: null };
@@ -769,13 +926,27 @@ async function sendQueuedCompletionSms(appointmentId: string): Promise<Confirmat
     return { sent: false, skipped: false, error: "The completion SMS could not be queued." };
   }
 
-  const configured = textBeeConfig();
+  const configured = smsConfig();
   if ("error" in configured) {
-    await resetCompletionNotification(claim.id, new Error(configured.error), "sms");
+    await resetChannelDelivery(
+      "appointment_completion_notifications",
+      claim.id,
+      new Error(configured.error),
+      "sms",
+    );
     return { sent: false, skipped: false, error: configured.error };
   }
 
   try {
+    if (await isCopiedBooking(configured.config, appointmentId)) {
+      await markChannelDeliverySkipped(
+        "appointment_completion_notifications",
+        claim.id,
+        "sms",
+        COPIED_BOOKING_NOT_TEXTED,
+      );
+      return { sent: false, skipped: true, error: COPIED_BOOKING_NOT_TEXTED };
+    }
     const recipient = formatPhilippineMobileE164(claim.recipient);
     if (!recipient) throw new Error("The customer's mobile number is invalid.");
     const appointment = await loadCompletedAppointment(appointmentId);
@@ -789,11 +960,11 @@ async function sendQueuedCompletionSms(appointmentId: string): Promise<Confirmat
     ]
       .filter(Boolean)
       .join(" ");
-    await sendTextBeeSms(configured.config, recipient, message);
-    await markCompletionNotificationSent(claim.id, "sms");
+    await sendSms(configured.config, recipient, message);
+    await markChannelDeliverySent("appointment_completion_notifications", claim.id, "sms");
     return { sent: true, skipped: false, error: null };
   } catch (error) {
-    await resetCompletionNotification(claim.id, error, "sms");
+    await resetChannelDelivery("appointment_completion_notifications", claim.id, error, "sms");
     return {
       sent: false,
       skipped: false,
@@ -885,19 +1056,23 @@ type NoticeDelivery = { sent: boolean; error: string | null };
 /** One text message to a customer. Failures are logged and reported to the admin, not retried. */
 async function deliverCustomerSms(
   label: string,
+  appointmentId: string,
   phone: string,
   message: string,
   failure: string,
 ): Promise<NoticeDelivery> {
   const recipient = formatPhilippineMobileE164(phone);
   if (!recipient) return { sent: false, error: `${failure} The mobile number is invalid.` };
-  const configured = textBeeConfig();
+  const configured = smsConfig();
   if ("error" in configured) {
     console.error(`[${label}] configuration unavailable`, { reason: configured.error });
     return { sent: false, error: `${failure} ${configured.error}` };
   }
   try {
-    await sendTextBeeSms(configured.config, recipient, message);
+    if (await isCopiedBooking(configured.config, appointmentId)) {
+      return { sent: false, error: COPIED_BOOKING_NOT_TEXTED };
+    }
+    await sendSms(configured.config, recipient, message);
     return { sent: true, error: null };
   } catch (error) {
     console.error(`[${label}] send failed`, error);
@@ -906,7 +1081,7 @@ async function deliverCustomerSms(
 }
 
 /** The appointment details a customer notice needs, or null if it cannot be loaded. */
-async function loadNoticeAppointment(appointmentId: string, status?: "rejected") {
+async function loadNoticeAppointment(appointmentId: string, status?: "rejected" | "confirmed") {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   let query = supabaseAdmin
     .from("appointments")
@@ -917,7 +1092,7 @@ async function loadNoticeAppointment(appointmentId: string, status?: "rejected")
   if (status) query = query.eq("status", status);
   const { data: appointment, error } = await query.maybeSingle();
   if (error || !appointment) {
-    console.error("[Customer notice] appointment lookup failed", error);
+    if (error) console.error("[Customer notice] appointment lookup failed", error);
     return null;
   }
   const summary: AppointmentSummary = {
@@ -943,6 +1118,7 @@ async function loadNoticeAppointment(appointmentId: string, status?: "rejected")
 async function deliverNotice({
   label,
   outcome,
+  appointmentId,
   appointment,
   email,
   sms,
@@ -950,6 +1126,7 @@ async function deliverNotice({
   label: string;
   /** What happened, e.g. "The booking was rejected". */
   outcome: string;
+  appointmentId: string;
   appointment: { email: string | null; phone: string };
   email: EmailContent;
   sms: string;
@@ -965,6 +1142,7 @@ async function deliverNotice({
       : Promise.resolve({ sent: false, error: null }),
     deliverCustomerSms(
       `${label} SMS`,
+      appointmentId,
       appointment.phone,
       sms,
       `${outcome}, but the text message to the customer could not be sent.`,
@@ -992,6 +1170,7 @@ async function notifyBookingNotAccepted(appointmentId: string) {
   return deliverNotice({
     label: "Booking not accepted",
     outcome: "The booking was rejected",
+    appointmentId,
     appointment,
     email: bookingNotAcceptedEmail({
       appointment: appointment.summary,
@@ -1037,6 +1216,7 @@ async function notifyRescheduleNotApproved(appointmentId: string) {
   return deliverNotice({
     label: "Reschedule not approved",
     outcome: "The reschedule request was rejected",
+    appointmentId,
     appointment,
     email: rescheduleNotApprovedEmail({
       appointment: appointment.summary,
@@ -1046,6 +1226,328 @@ async function notifyRescheduleNotApproved(appointmentId: string) {
     }),
     sms: rescheduleNotApprovedSms({ appointment: appointment.summary, ...requested, contact }),
   });
+}
+
+/** Tries per customer message, the first included, before the admin is asked to step in. */
+const MAX_DELIVERY_ATTEMPTS = 5;
+
+/** Most messages one scheduled run sends, so a backlog never outlasts the request. */
+const SCHEDULED_RUN_SEND_LIMIT = 20;
+
+/** Waits 5, 10, 20, then 40 minutes after each failed try. */
+function retryIsDue(attemptCount: number, updatedAt: string) {
+  const waitMinutes = 5 * 2 ** Math.max(0, attemptCount - 1);
+  return Date.parse(updatedAt) <= Date.now() - waitMinutes * 60_000;
+}
+
+/** When an appointment starts, from its Philippine date and time. */
+function appointmentStartMs(date: string, time: string) {
+  return Date.parse(`${date}T${time.slice(0, 5)}:00+08:00`);
+}
+
+/** Sends one queued reminder. A failure stays queued for the next scheduled run. */
+async function sendQueuedReminder(
+  appointmentId: string,
+  channel: DeliveryChannel,
+  siteOrigin: string | null,
+): Promise<NoticeDelivery> {
+  const queue = "appointment_reminders";
+  const claim = await claimChannelDelivery(queue, appointmentId, channel);
+  if (claim.kind !== "claimed") {
+    return { sent: claim.kind === "sent", error: claim.kind === "error" ? claim.error : null };
+  }
+
+  try {
+    const appointment = await loadNoticeAppointment(appointmentId, "confirmed");
+    if (
+      !appointment ||
+      appointmentStartMs(appointment.summary.appointmentDate, appointment.summary.startTime) <=
+        Date.now()
+    ) {
+      await markChannelDeliverySkipped(
+        queue,
+        claim.id,
+        channel,
+        "No reminder was sent: the appointment is no longer confirmed or has already started.",
+      );
+      return { sent: false, error: null };
+    }
+    const contact = await shopContact();
+
+    if (channel === "email") {
+      const { emailTransport, sendEmail } = await import("./email.server");
+      const configured = emailTransport();
+      if ("error" in configured) throw new Error(configured.error);
+      await sendEmail(configured.transport, {
+        to: claim.recipient,
+        ...appointmentReminderEmail({
+          appointment: appointment.summary,
+          contact,
+          appointmentUrl: siteOrigin ? `${siteOrigin}/my-appointment` : null,
+        }),
+        idempotencyKey: `appointment-reminder-${claim.id}`,
+      });
+    } else {
+      const configured = smsConfig();
+      if ("error" in configured) throw new Error(configured.error);
+      if (await isCopiedBooking(configured.config, appointmentId)) {
+        await markChannelDeliverySkipped(queue, claim.id, channel, COPIED_BOOKING_NOT_TEXTED);
+        return { sent: false, error: null };
+      }
+      const recipient = formatPhilippineMobileE164(claim.recipient);
+      if (!recipient) throw new Error("The customer's mobile number is invalid.");
+      await sendSms(
+        configured.config,
+        recipient,
+        appointmentReminderSms({ appointment: appointment.summary, contact }),
+      );
+    }
+    await markChannelDeliverySent(queue, claim.id, channel);
+    return { sent: true, error: null };
+  } catch (error) {
+    await resetChannelDelivery(queue, claim.id, error, channel);
+    return {
+      sent: false,
+      error: `The ${channelDeliveryLabel(queue, channel)} could not be sent.`,
+    };
+  }
+}
+
+/** A customer message waiting in one of the delivery queues. */
+type QueuedDelivery = {
+  kind: "confirmation" | "completion" | "reminder";
+  queue: "appointment_confirmation_emails" | "appointment_confirmation_sms" | ChannelQueue;
+  id: string;
+  appointmentId: string;
+  channel: DeliveryChannel;
+  attemptCount: number;
+  createdAt: string;
+  updatedAt: string;
+  lastError: string | null;
+};
+
+type DeliveryAppointment = {
+  id: string;
+  status: string;
+  appointment_date: string;
+  start_time: string;
+  reference_code: string;
+  customer_name: string;
+  phone: string;
+};
+
+async function loadQueuedDeliveries(): Promise<QueuedDelivery[]> {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const [emails, texts, completions, reminders] = await Promise.all([
+    supabaseAdmin
+      .from("appointment_confirmation_emails")
+      .select("id,appointment_id,attempt_count,created_at,updated_at,last_error")
+      .eq("status", "pending")
+      .order("created_at")
+      .limit(50),
+    supabaseAdmin
+      .from("appointment_confirmation_sms")
+      .select("id,appointment_id,attempt_count,created_at,updated_at,last_error")
+      .eq("status", "pending")
+      .order("created_at")
+      .limit(50),
+    supabaseAdmin
+      .from("appointment_completion_notifications")
+      .select("id,appointment_id,channel,attempt_count,created_at,updated_at,last_error")
+      .eq("status", "pending")
+      .order("created_at")
+      .limit(50),
+    supabaseAdmin
+      .from("appointment_reminders")
+      .select("id,appointment_id,channel,attempt_count,created_at,updated_at,last_error")
+      .eq("status", "pending")
+      .order("created_at")
+      .limit(50),
+  ]);
+  const error = emails.error ?? texts.error ?? completions.error ?? reminders.error;
+  if (error) throw new Error(`The delivery queues could not be read: ${error.message}`);
+
+  const toDelivery =
+    (kind: QueuedDelivery["kind"], queue: QueuedDelivery["queue"], channel?: DeliveryChannel) =>
+    (row: {
+      id: string;
+      appointment_id: string;
+      channel?: string;
+      attempt_count: number;
+      created_at: string;
+      updated_at: string;
+      last_error: string | null;
+    }): QueuedDelivery => ({
+      kind,
+      queue,
+      id: row.id,
+      appointmentId: row.appointment_id,
+      channel: channel ?? (row.channel === "email" ? "email" : "sms"),
+      attemptCount: row.attempt_count,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
+      lastError: row.last_error,
+    });
+  return [
+    ...(emails.data ?? []).map(
+      toDelivery("confirmation", "appointment_confirmation_emails", "email"),
+    ),
+    ...(texts.data ?? []).map(toDelivery("confirmation", "appointment_confirmation_sms", "sms")),
+    ...(completions.data ?? []).map(
+      toDelivery("completion", "appointment_completion_notifications"),
+    ),
+    ...(reminders.data ?? []).map(toDelivery("reminder", "appointment_reminders")),
+  ];
+}
+
+/** "confirmation SMS", "reminder email" and so on, for the admin. */
+function queuedDeliveryLabel(delivery: QueuedDelivery) {
+  return `${delivery.kind} ${delivery.channel === "email" ? "email" : "SMS"}`;
+}
+
+/** Why a queued message is no longer worth sending, or null while it still is. */
+function deliveryNoLongerNeeded(
+  delivery: QueuedDelivery,
+  appointment: DeliveryAppointment | undefined,
+) {
+  if (!appointment) return "Not sent: the appointment no longer exists.";
+  if (delivery.kind === "completion") {
+    if (appointment.status !== "completed") return "Not sent: the service is no longer completed.";
+    return Date.parse(delivery.createdAt) < Date.now() - 3 * 24 * 60 * 60_000
+      ? "Not sent: the service was completed more than 3 days ago."
+      : null;
+  }
+  if (appointment.status !== "confirmed") {
+    return `Not sent: the appointment is now ${appointment.status.replace("_", " ")}.`;
+  }
+  return appointmentStartMs(appointment.appointment_date, appointment.start_time) <= Date.now()
+    ? "Not sent: the appointment time has passed."
+    : null;
+}
+
+async function markQueuedDeliverySkipped(delivery: QueuedDelivery, reason: string) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { error } = await supabaseAdmin
+    .from(delivery.queue)
+    .update({
+      status: "skipped",
+      last_error: reason.slice(0, 500),
+      updated_at: new Date().toISOString(),
+    })
+    .eq("id", delivery.id)
+    .eq("status", "pending");
+  if (error) console.error("[Scheduled notifications] skipped-state update failed", error);
+}
+
+/** Stops retrying a message and asks the admin to contact the customer instead. */
+async function giveUpDelivery(delivery: QueuedDelivery, appointment: DeliveryAppointment) {
+  const label = queuedDeliveryLabel(delivery);
+  const reason = delivery.lastError
+    ? ` The last error was: ${delivery.lastError.slice(0, 200)}`
+    : "";
+  await markQueuedDeliverySkipped(
+    delivery,
+    `Gave up after ${delivery.attemptCount} tries.${reason}`,
+  );
+  const { alertAdmin } = await import("./admin-alerts.server");
+  const phone = normalizePhilippineMobile(appointment.phone) ?? appointment.phone;
+  await alertAdmin({
+    type: "customer_notice_failed",
+    appointmentId: delivery.appointmentId,
+    title: `${delivery.channel === "sms" ? "Couldn't text" : "Couldn't email"} ${appointment.customer_name}`,
+    message: `The ${label} for ${appointment.reference_code} could not be sent after ${delivery.attemptCount} tries.${reason} Please contact the customer at ${phone}.`,
+  });
+}
+
+/**
+ * The scheduled run: queues reminders that are due, sends them, retries
+ * customer messages that failed, and alerts the admin about any that still
+ * fail after MAX_DELIVERY_ATTEMPTS tries. siteOrigin is the site's https
+ * address, for links in reminder emails.
+ */
+export async function runScheduledNotifications(siteOrigin: string | null) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  await supabaseAdmin
+    .from("scheduled_notification_runs")
+    .upsert({ id: true, last_started_at: new Date().toISOString() });
+
+  try {
+    const queued = await supabaseAdmin.rpc("queue_due_appointment_reminders");
+    if (queued.error) throw new Error(`Reminders could not be queued: ${queued.error.message}`);
+
+    const deliveries = await loadQueuedDeliveries();
+    const appointmentIds = [...new Set(deliveries.map((delivery) => delivery.appointmentId))];
+    const appointments = new Map<string, DeliveryAppointment>();
+    if (appointmentIds.length) {
+      const { data, error } = await supabaseAdmin
+        .from("appointments")
+        .select("id,status,appointment_date,start_time,reference_code,customer_name,phone")
+        .in("id", appointmentIds);
+      if (error) throw new Error(`Appointments could not be read: ${error.message}`);
+      for (const appointment of data) appointments.set(appointment.id, appointment);
+    }
+
+    let skipped = 0;
+    let gaveUp = 0;
+    // Confirmations and completions send both channels together, so one send per appointment.
+    const sends = new Map<string, () => Promise<unknown>>();
+    for (const delivery of deliveries) {
+      const appointment = appointments.get(delivery.appointmentId);
+      const notNeeded = deliveryNoLongerNeeded(delivery, appointment);
+      if (notNeeded || !appointment) {
+        await markQueuedDeliverySkipped(delivery, notNeeded ?? "Not sent.");
+        skipped += 1;
+        continue;
+      }
+      if (delivery.attemptCount >= MAX_DELIVERY_ATTEMPTS) {
+        await giveUpDelivery(delivery, appointment);
+        gaveUp += 1;
+        continue;
+      }
+      // A new reminder goes out at once. Anything else waits, so a first send
+      // still being made by an admin's own request is not repeated.
+      const due =
+        (delivery.kind === "reminder" && delivery.attemptCount === 0) ||
+        retryIsDue(delivery.attemptCount, delivery.updatedAt);
+      if (!due) continue;
+      if (delivery.kind === "reminder") {
+        sends.set(`reminder:${delivery.id}`, () =>
+          sendQueuedReminder(delivery.appointmentId, delivery.channel, siteOrigin),
+        );
+      } else if (delivery.kind === "confirmation") {
+        sends.set(`confirmation:${delivery.appointmentId}`, () =>
+          sendConfirmationNotifications(delivery.appointmentId),
+        );
+      } else {
+        sends.set(`completion:${delivery.appointmentId}`, () =>
+          sendCompletionNotifications(delivery.appointmentId),
+        );
+      }
+    }
+
+    const batch = [...sends.values()].slice(0, SCHEDULED_RUN_SEND_LIMIT);
+    for (const send of batch) {
+      try {
+        await send();
+      } catch (error) {
+        console.error("[Scheduled notifications] send failed", error);
+      }
+    }
+
+    await supabaseAdmin
+      .from("scheduled_notification_runs")
+      .update({ last_finished_at: new Date().toISOString(), last_error: null })
+      .eq("id", true);
+    return { remindersQueued: queued.data ?? 0, sent: batch.length, skipped, gaveUp };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "The scheduled run failed.";
+    console.error("[Scheduled notifications] run failed", error);
+    await supabaseAdmin
+      .from("scheduled_notification_runs")
+      .update({ last_error: message.slice(0, 500) })
+      .eq("id", true);
+    throw error;
+  }
 }
 
 async function requireActiveAdminSession() {

@@ -171,6 +171,51 @@ export function rescheduleNotApprovedEmail({
   };
 }
 
+/** Sent before a confirmed appointment, as set in Settings. */
+export function appointmentReminderEmail({
+  appointment,
+  contact,
+  appointmentUrl,
+}: {
+  appointment: AppointmentSummary;
+  contact: ShopContact;
+  /** The public My Appointment page, when the site address is known. */
+  appointmentUrl?: string | null;
+}): EmailContent {
+  const when = schedule(appointment.appointmentDate, appointment.startTime);
+  const services = appointment.services.join(", ") || "Not listed";
+  const text = [
+    `Hello ${appointment.customerName},`,
+    "",
+    `This is a reminder of your appointment at ${contact.name}.`,
+    "",
+    `Reference code: ${appointment.referenceCode}`,
+    `Schedule: ${when}`,
+    `Services: ${services}`,
+    `Motorcycle: ${appointment.motorcycle} (plate ${appointment.plateNumber})`,
+    "",
+    "Please arrive 10-15 minutes early for check-in.",
+    "If you need to cancel or reschedule, you can do it" +
+      (appointmentUrl ? ` on the My Appointment page: ${appointmentUrl}` : " on our website.") +
+      ` You can also contact us at ${contactText(contact)}.`,
+  ].join("\n");
+  const html = [
+    `<p>Hello ${escapeHtml(appointment.customerName)},</p>`,
+    `<p>This is a reminder of your appointment at ${escapeHtml(contact.name)}.</p>`,
+    `<p><strong>Reference code:</strong> ${escapeHtml(appointment.referenceCode)}<br />`,
+    `<strong>Schedule:</strong> ${escapeHtml(when)}<br />`,
+    `<strong>Services:</strong> ${escapeHtml(services)}<br />`,
+    `<strong>Motorcycle:</strong> ${escapeHtml(appointment.motorcycle)} (plate ${escapeHtml(appointment.plateNumber)})</p>`,
+    "<p>Please arrive 10-15 minutes early for check-in.</p>",
+    `<p>If you need to cancel or reschedule, you can do it ${appointmentUrl ? `on the ${link(appointmentUrl, "My Appointment page")}` : "on our website"}. You can also contact us at ${contactHtml(contact)}.</p>`,
+  ].join("");
+  return {
+    subject: `Appointment reminder - ${appointment.referenceCode}`,
+    text,
+    html,
+  };
+}
+
 function smsSchedule(date: string, time: string) {
   return `${formatSmsDate(date)} at ${formatAppointmentTime(time)}`;
 }
@@ -184,6 +229,17 @@ export function bookingNotAcceptedSms({
   contact: ShopContact;
 }) {
   return `Fake Rider: Sorry, we could not accept your booking request (Ref: ${appointment.referenceCode}) for ${smsSchedule(appointment.appointmentDate, appointment.startTime)}. Please book another time or call ${contact.phone}.`;
+}
+
+/** Text message sent before a confirmed appointment. */
+export function appointmentReminderSms({
+  appointment,
+  contact,
+}: {
+  appointment: AppointmentSummary;
+  contact: ShopContact;
+}) {
+  return `Fake Rider: Reminder of your appointment on ${smsSchedule(appointment.appointmentDate, appointment.startTime)} (Ref: ${appointment.referenceCode}). Please arrive 10-15 min early. To cancel or reschedule, call ${contact.phone}.`;
 }
 
 /** Text message for a reschedule request the shop rejected (fits one SMS). */

@@ -37,7 +37,6 @@ import {
   manilaMonthDateRange,
   manilaYearDateRange,
 } from "@/lib/admin-date-range";
-import { formatBusinessTimestamp } from "@/lib/export-branding";
 import { recordAdminActivityEvent } from "@/lib/admin-activity";
 import { usePrintWhenReady } from "@/lib/print-document";
 import { addDays, manilaNow } from "@/lib/shop";
@@ -100,7 +99,6 @@ type ActivityLog = {
 
 type ActivityPrint = {
   records: ActivityLog[];
-  generatedAt: string;
   coverage: string;
   scope: string;
 };
@@ -266,7 +264,6 @@ function ActivityLogPage() {
       const records = await fetchAllFilteredRows();
       setPrintJob({
         records,
-        generatedAt: formatBusinessTimestamp(),
         coverage: printCoverage(),
         scope: printScope(records.length),
       });
@@ -734,7 +731,6 @@ function PrintActivityLog({ job }: { job: ActivityPrint | null }) {
       info={{
         title: "Admin Activity Log",
         subtitle: "Activity record",
-        generatedAt: job.generatedAt,
         coverage: job.coverage,
         scope: job.scope,
       }}

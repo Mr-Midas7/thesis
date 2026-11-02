@@ -1761,13 +1761,14 @@ const appointmentActionVerifySchema = appointmentActionCodeSchema.extend({
     .regex(/^\d{6}$/, "Enter the 6-digit verification code."),
 });
 
+const MANAGED_APPOINTMENT_FIELDS =
+  "id,reference_code,customer_name,first_name,middle_name,last_name,phone,email,moto_brand,moto_model,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,wants_products,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reason,pending_reschedule_reference_code,appointment_services(service_id,service_name,price)";
+
 async function findAppointmentByReference(reference: string) {
   const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
   const primaryLookup = await supabaseAdmin
     .from("appointments")
-    .select(
-      "id,reference_code,customer_name,first_name,middle_name,last_name,phone,email,moto_brand,moto_model,moto_variant,moto_year,plate_number,appointment_date,start_time,status,notes,total_estimate,wants_products,created_at,rescheduled_from_appointment_id,rescheduled_to_appointment_id,reschedule_count,last_reschedule_rejected_at,last_reschedule_rejection_message,pending_reschedule_request_id,pending_reschedule_date,pending_reschedule_start_time,pending_reschedule_reason,pending_reschedule_reference_code,appointment_services(service_id,service_name,price)",
-    )
+    .select(MANAGED_APPOINTMENT_FIELDS)
     // Legacy records may have been written with lower-case reference codes.
     // Input is validated before this query, so it cannot introduce LIKE wildcards.
     .ilike("reference_code", normalizeReferenceCode(reference))
@@ -1802,6 +1803,27 @@ async function findAppointmentByReference(reference: string) {
   };
 }
 
+/**
+ * A reschedule request reserves its new reference on the original booking; the
+ * new booking only exists once the shop approves it. Until the shop reviews
+ * the request, that reference finds the original booking.
+ */
+async function findAppointmentByPendingRescheduleReference(reference: string) {
+  const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
+  const { data: appointment, error } = await supabaseAdmin
+    .from("appointments")
+    .select(MANAGED_APPOINTMENT_FIELDS)
+    .ilike("pending_reschedule_reference_code", normalizeReferenceCode(reference))
+    .not("pending_reschedule_request_id", "is", null)
+    .maybeSingle();
+  if (error) console.error("[Appointment lookup] reschedule request lookup failed", error);
+  if (!appointment) return null;
+  return {
+    ...appointment,
+    phone: normalizePhilippineMobile(appointment.phone) ?? appointment.phone,
+  };
+}
+
 async function findAppointment(reference: string, phone: string) {
   const appointment = await findAppointmentByReference(reference);
   if (!appointment || normalizePhilippineMobile(appointment.phone) !== phone) return null;
@@ -1811,6 +1833,12 @@ async function findAppointment(reference: string, phone: string) {
 type ManagedAppointment = NonNullable<Awaited<ReturnType<typeof findAppointmentByReference>>>;
 
 /** Enough of an address for customers to recognise it, e.g. "ju•••@gmail.com". */
+/** The network prefix and last 2 digits, e.g. "0917 ••• ••67". */
+function maskPhone(phone: string) {
+  const local = normalizePhilippineMobile(phone);
+  return local ? `${local.slice(0, 4)} ••• ••${local.slice(-2)}` : "On file";
+}
+
 function maskEmail(email: string) {
   const at = email.lastIndexOf("@");
   if (at < 1) return "your booking email";
@@ -2054,7 +2082,8 @@ export const lookupAppointment = createServerFn({ method: "POST" })
     }
 
     const { supabaseAdmin } = await import("@/integrations/supabase/client.server");
-    const appt = await findAppointmentByReference(data.reference);
+    const booking = await findAppointmentByReference(data.reference);
+    const appt = booking ?? (await findAppointmentByPendingRescheduleReference(data.reference));
     if (!appt)
       return {
         ok: false as const,
@@ -2082,7 +2111,9 @@ export const lookupAppointment = createServerFn({ method: "POST" })
         firstName: appt.first_name ?? "",
         middleName: appt.middle_name ?? "",
         lastName: appt.last_name ?? "",
-        phone: appt.phone,
+        // Anyone with the reference code can look a booking up, so contact details
+        // are masked. Rescheduling gets the full number after email verification.
+        phoneHint: maskPhone(appt.phone),
         // Where cancel/reschedule verification codes go; null means no email on file.
         emailHint: appt.email ? maskEmail(appt.email) : null,
         motorcycle: [appt.moto_brand, appt.moto_model, appt.moto_variant, appt.moto_year]
@@ -2104,6 +2135,9 @@ export const lookupAppointment = createServerFn({ method: "POST" })
           ? String(appt.pending_reschedule_start_time).slice(0, 5)
           : null,
         requestedRescheduleReference: appt.pending_reschedule_reference_code,
+        // The customer entered the reference reserved by a reschedule request
+        // the shop has not reviewed yet; the details are the original booking's.
+        foundByRescheduleRequest: !booking,
         requestedRescheduleReason: appt.pending_reschedule_reason,
         rescheduledFromReference: appt.rescheduled_from_appointment_id
           ? (linkedReferences.get(appt.rescheduled_from_appointment_id) ?? null)
@@ -2301,7 +2335,15 @@ export const verifyAppointmentActionCode = createServerFn({ method: "POST" })
     const result = await verifyActionCode(appt.id, data.action, data.code);
     switch (result.outcome) {
       case "verified":
-        return { ok: true as const, token: result.token, expiresAt: result.expiresAt };
+        return {
+          ok: true as const,
+          token: result.token,
+          expiresAt: result.expiresAt,
+          // Rescheduling needs the full mobile number, which the lookup masks.
+          ...(data.action === "reschedule"
+            ? { phone: normalizePhilippineMobile(appt.phone) ?? appt.phone }
+            : {}),
+        };
       case "invalid":
         return {
           ok: false as const,

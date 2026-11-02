@@ -6,12 +6,17 @@
  * passwords, which requires 2-Step Verification); Gmail rejects the normal
  * account password for SMTP. Without Gmail settings, Resend is used through
  * RESEND_API_KEY and RESEND_FROM_EMAIL.
+ *
+ * SMTP_HOST (with SMTP_PORT and SMTP_FROM) takes priority over both: a plain,
+ * unauthenticated mail server. The offline copy uses it to deliver to the local
+ * Mailpit mailbox; the live site does not set it.
  */
 
 const EMAIL_ADDRESS_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const SENDER_NAME = "Fake Rider Motorparts";
 
 export type EmailTransport =
+  | { provider: "smtp"; host: string; port: number; from: string }
   | { provider: "gmail"; user: string; appPassword: string; from: string }
   | { provider: "resend"; apiKey: string; from: string };
 
@@ -42,6 +47,24 @@ function redactProviderDetail(value: string) {
 }
 
 export function emailTransport(): { transport: EmailTransport } | { error: string } {
+  const smtpHost = process.env["SMTP_HOST"]?.trim();
+  if (smtpHost) {
+    const port = Number(process.env["SMTP_PORT"] ?? 25);
+    const from = process.env["SMTP_FROM"]?.trim() ?? "";
+    if (!Number.isInteger(port) || port <= 0 || !senderAddress(from)) {
+      return {
+        error: "Local email is not configured. Set SMTP_PORT and a valid SMTP_FROM address.",
+      };
+    }
+    return {
+      transport: {
+        provider: "smtp",
+        host: smtpHost,
+        port,
+        from: `"${SENDER_NAME}" <${senderAddress(from)}>`,
+      },
+    };
+  }
   const gmailUser = process.env["GMAIL_USER"]?.trim();
   // Google shows App Passwords in groups of four characters; spaces are not part of it.
   const gmailAppPassword = process.env["GMAIL_APP_PASSWORD"]?.replace(/\s+/g, "");
@@ -80,6 +103,28 @@ export function emailTransport(): { transport: EmailTransport } | { error: strin
     };
   }
   return { transport: { provider: "resend", apiKey, from } };
+}
+
+async function sendWithSmtp(
+  transport: Extract<EmailTransport, { provider: "smtp" }>,
+  email: OutgoingEmail,
+) {
+  const { createTransport } = await import("nodemailer");
+  const mailer = createTransport({ host: transport.host, port: transport.port, secure: false });
+  try {
+    await mailer.sendMail({
+      from: transport.from,
+      to: email.to,
+      subject: email.subject,
+      text: email.text,
+      ...(email.html ? { html: email.html } : {}),
+    });
+  } catch (error) {
+    const detail = redactProviderDetail(error instanceof Error ? error.message : String(error));
+    throw new Error(`The local mail server rejected the email: ${detail}.`);
+  } finally {
+    mailer.close();
+  }
 }
 
 async function sendWithGmail(
@@ -148,6 +193,7 @@ async function sendWithResend(
 
 /** Send one email; throws with a redacted provider reason when delivery is refused. */
 export async function sendEmail(transport: EmailTransport, email: OutgoingEmail) {
-  if (transport.provider === "gmail") await sendWithGmail(transport, email);
+  if (transport.provider === "smtp") await sendWithSmtp(transport, email);
+  else if (transport.provider === "gmail") await sendWithGmail(transport, email);
   else await sendWithResend(transport, email);
 }

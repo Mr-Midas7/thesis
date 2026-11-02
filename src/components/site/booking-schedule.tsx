@@ -74,7 +74,11 @@ const SLOT_GROUPS = [
   { label: "Evening", from: 17 * 60, to: 24 * 60 },
 ] as const;
 
-/** Available start times for one date, grouped by part of the day. */
+/**
+ * Start times for one date, grouped by part of the day. Times that are taken
+ * or blocked are shown greyed out; times the shop never offers for this
+ * service (lunch, too late to finish) are left out.
+ */
 export function TimeSlotPicker({
   slots,
   value,
@@ -90,9 +94,10 @@ export function TimeSlotPicker({
   className?: string;
   gridClassName?: string;
 }) {
-  const available = slots.filter((slot) => !slot.disabled);
+  const shown = slots.filter((slot) => slot.offered);
+  const hasUnavailable = shown.some((slot) => slot.disabled);
 
-  if (available.length === 0) {
+  if (!shown.some((slot) => !slot.disabled)) {
     return (
       <p className="rounded-lg border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
         No times remain available for this date. Please choose another date.
@@ -102,7 +107,7 @@ export function TimeSlotPicker({
 
   const groups = SLOT_GROUPS.map((group) => ({
     label: group.label,
-    slots: available.filter((slot) => {
+    slots: shown.filter((slot) => {
       const minutes = timeToMinutes(slot.startTime);
       return minutes >= group.from && minutes < group.to;
     }),
@@ -119,18 +124,24 @@ export function TimeSlotPicker({
           </p>
           <div className={cn("grid grid-cols-2 gap-2 sm:grid-cols-3", gridClassName)}>
             {group.slots.map((slot) => {
-              const selected = value === slot.startTime;
+              const selected = value === slot.startTime && !slot.disabled;
               return (
                 <button
                   type="button"
                   key={slot.id}
+                  disabled={slot.disabled}
                   aria-pressed={selected}
+                  aria-label={
+                    slot.disabled ? `${formatTime(slot.startTime)}, unavailable` : undefined
+                  }
                   onClick={() => onChange(slot.startTime)}
                   className={cn(
                     "h-11 rounded-lg border px-3 font-display text-base tracking-wide transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none",
-                    selected
-                      ? "border-primary bg-primary text-primary-foreground shadow-sm"
-                      : "border-border bg-background/60 hover:border-primary/60 hover:bg-primary/5",
+                    slot.disabled
+                      ? "cursor-not-allowed border-dashed border-border bg-muted/40 text-muted-foreground/70 line-through"
+                      : selected
+                        ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                        : "border-border bg-background/60 hover:border-primary/60 hover:bg-primary/5",
                   )}
                 >
                   {formatTime(slot.startTime)}
@@ -140,6 +151,15 @@ export function TimeSlotPicker({
           </div>
         </div>
       ))}
+      {hasUnavailable && (
+        <p className="flex items-center gap-2 text-xs text-muted-foreground">
+          <span
+            aria-hidden="true"
+            className="h-3 w-3 rounded-sm border border-dashed border-border bg-muted/40"
+          />
+          Crossed-out times are already booked or unavailable.
+        </p>
+      )}
     </div>
   );
 }

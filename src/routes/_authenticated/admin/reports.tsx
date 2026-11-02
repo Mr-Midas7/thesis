@@ -65,9 +65,8 @@ import {
   manilaYearDateRange,
 } from "@/lib/admin-date-range";
 import { recordAdminActivityEvent } from "@/lib/admin-activity";
-import { formatBusinessTimestamp } from "@/lib/export-branding";
 import { usePrintWhenReady } from "@/lib/print-document";
-import { formatDateLong, formatPHP, manilaNow } from "@/lib/shop";
+import { formatPHP, formatTime, manilaNow } from "@/lib/shop";
 import { cn } from "@/lib/utils";
 
 export const Route = createFileRoute("/_authenticated/admin/reports")({
@@ -97,6 +96,8 @@ type FinancialTransactionRow = {
   id: string;
   reference_code: string;
   transaction_date: string;
+  /** HH:MM, Manila time; missing until the 20261028100000 migration is applied. */
+  transaction_time?: string | null;
   services: string;
   products: string;
   service_amount: number | string;
@@ -152,7 +153,6 @@ type ReportData = {
 };
 type PrintPayload = {
   data: ReportData;
-  generatedAt: string;
   period: string;
   scope: string;
   title: string;
@@ -289,7 +289,6 @@ function ReportsPage() {
       });
       setPrintPayload({
         data: completeReportData,
-        generatedAt: formatBusinessTimestamp(),
         period: formatDateRange(from, to),
         scope: reportScope,
         title: reportTitle,
@@ -1098,7 +1097,7 @@ function makeReportData(
     ],
     rows: rows.map((row) => [
       row.reference_code,
-      formatDateLong(row.transaction_date),
+      formatTransactionDateTime(row),
       row.services || "-",
       row.products || "-",
       formatPHP(row.service_amount),
@@ -1106,14 +1105,6 @@ function makeReportData(
       formatPHP(row.total_amount),
     ]),
     cards: [
-      {
-        label: "Total revenue",
-        value: formatPHP(
-          options.hasCompleteRows ? totalAmount : (metrics?.total_revenue ?? totalAmount),
-        ),
-        detail: "Completed transactions only",
-        tone: "success",
-      },
       {
         label: "Service revenue",
         value: formatPHP(
@@ -1129,6 +1120,15 @@ function makeReportData(
         ),
         detail: "Products sold during service",
         tone: "accent",
+      },
+      // The sum of the two above, so it comes after them.
+      {
+        label: "Total revenue",
+        value: formatPHP(
+          options.hasCompleteRows ? totalAmount : (metrics?.total_revenue ?? totalAmount),
+        ),
+        detail: "Completed transactions only",
+        tone: "success",
       },
       {
         label: "Completed transactions",
@@ -1150,6 +1150,14 @@ function moneyValue(value: number | string | null | undefined) {
 
 function sumMoney(values: Array<number | string | null | undefined>) {
   return values.reduce<number>((total, value) => total + moneyValue(value), 0);
+}
+
+/** When a transaction was completed, e.g. "October 21, 2026, 6:19 PM". */
+function formatTransactionDateTime(row: FinancialTransactionRow) {
+  const date = format(isoDateToCalendarDate(row.transaction_date), "MMMM d, yyyy");
+  if (!row.transaction_time) return date;
+  // A non-breaking space keeps "6:19 PM" together when a narrow column wraps.
+  return `${date}, ${formatTime(row.transaction_time).replace(" ", " ")}`;
 }
 
 function formatRevenuePeriod(period: string, kind: "daily" | "monthly") {
@@ -1207,7 +1215,6 @@ function PrintReport({ payload }: { payload: PrintPayload | null }) {
     <PrintDocument
       info={{
         title: payload.title,
-        generatedAt: payload.generatedAt,
         coverage: payload.period,
         scope: payload.scope,
       }}

@@ -21,7 +21,12 @@ import { requestAppointmentActionCode, verifyAppointmentActionCode } from "@/lib
 
 export type AppointmentAction = "cancel" | "reschedule";
 
-export type AppointmentVerification = { token: string; expiresAt: string };
+export type AppointmentVerification = {
+  token: string;
+  expiresAt: string;
+  /** The booking's full mobile number, returned for reschedules only. */
+  phone?: string;
+};
 
 /**
  * Confirms the customer can read the booking's email before an online
@@ -92,7 +97,11 @@ export function AppointmentVerificationDialog({
         setError(result.error);
         return;
       }
-      onVerified({ token: result.token, expiresAt: result.expiresAt });
+      onVerified({
+        token: result.token,
+        expiresAt: result.expiresAt,
+        ...("phone" in result && result.phone ? { phone: result.phone } : {}),
+      });
     },
     onError: () => setError("We could not check the code right now. Please try again shortly."),
   });
