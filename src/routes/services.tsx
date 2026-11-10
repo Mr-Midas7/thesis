@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
+import { LoadError } from "@/components/site/load-error";
 import { ServiceBookingRow } from "@/components/site/service-booking-row";
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
@@ -66,32 +67,61 @@ function ServicesPage() {
         </p>
 
         <div className="mt-8">
-          <div className="mb-4">
-            <ToggleGroup
-              type="single"
-              variant="outline"
-              value={activeCategory}
-              onValueChange={setActiveCategory}
-              className="flex w-full flex-wrap justify-start gap-1.5"
+          {services.data ? (
+            services.data.length === 0 && (
+              <p className="py-16 text-center text-muted-foreground">
+                No services are listed right now. Please check back soon or contact the shop.
+              </p>
+            )
+          ) : services.isError ? (
+            <LoadError
+              message="We couldn't load the services right now."
+              onRetry={() => void services.refetch()}
+              className="justify-center py-16"
+            />
+          ) : (
+            <div
+              className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3"
+              role="status"
+              aria-label="Loading services"
             >
-              {categories.map((cat) => {
-                const count = services.data?.filter(
-                  (s) => cat === "all" || s.category === cat,
-                ).length;
-                return (
-                  <ToggleGroupItem key={cat} value={cat} className="capitalize">
-                    {cat === "all" ? "All" : cat}
-                    <Badge
-                      variant={activeCategory === cat ? "default" : "secondary"}
-                      className="ml-1.5 h-5 px-1.5 text-xs font-medium"
-                    >
-                      {count}
-                    </Badge>
-                  </ToggleGroupItem>
-                );
-              })}
-            </ToggleGroup>
-          </div>
+              {Array.from({ length: 6 }, (_, i) => (
+                <div
+                  key={i}
+                  className="h-40 animate-pulse rounded-xl border border-border/70 bg-card/60"
+                />
+              ))}
+            </div>
+          )}
+
+          {!!services.data?.length && (
+            <div className="mb-4">
+              <ToggleGroup
+                type="single"
+                variant="outline"
+                value={activeCategory}
+                onValueChange={setActiveCategory}
+                className="flex w-full flex-wrap justify-start gap-1.5"
+              >
+                {categories.map((cat) => {
+                  const count = services.data.filter(
+                    (s) => cat === "all" || s.category === cat,
+                  ).length;
+                  return (
+                    <ToggleGroupItem key={cat} value={cat} className="capitalize">
+                      {cat === "all" ? "All" : cat}
+                      <Badge
+                        variant={activeCategory === cat ? "default" : "secondary"}
+                        className="ml-1.5 h-5 px-1.5 text-xs font-medium"
+                      >
+                        {count}
+                      </Badge>
+                    </ToggleGroupItem>
+                  );
+                })}
+              </ToggleGroup>
+            </div>
+          )}
 
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {filtered?.map((s) => (

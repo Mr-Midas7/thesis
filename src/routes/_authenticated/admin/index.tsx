@@ -31,6 +31,7 @@ import {
   type ChartConfig,
 } from "@/components/ui/chart";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/integrations/supabase/client";
 import {
   calendarDateToIso,
@@ -308,37 +309,41 @@ function Dashboard() {
           iconClassName="bg-chart-4/15 text-chart-4"
           label={dashboardPeriod === "today" ? "Today's appointments" : "Appointments"}
           value={current ? String(current.appointments) : "—"}
-          trend={makeTrend(
-            current?.appointments ?? 0,
-            previous?.appointments ?? 0,
-            "vs. previous period",
-          )}
+          loading={summary.isPending}
+          trend={
+            current &&
+            makeTrend(current.appointments, previous?.appointments ?? 0, "vs. previous period")
+          }
         />
         <NeedsActionStat
           newBookings={summary.data?.needs_action.new_bookings}
           rescheduleRequests={summary.data?.needs_action.reschedule_requests}
+          loading={summary.isPending}
         />
         <DashboardStat
           icon={Users}
           iconClassName="bg-primary/15 text-primary"
           label="Unique customers"
           value={current ? String(current.customers) : "—"}
-          trend={makeTrend(
-            current?.customers ?? 0,
-            previous?.customers ?? 0,
-            "vs. previous period",
-          )}
+          loading={summary.isPending}
+          trend={
+            current && makeTrend(current.customers, previous?.customers ?? 0, "vs. previous period")
+          }
         />
         <DashboardStat
           icon={PhilippinePeso}
           iconClassName="bg-accent/15 text-accent"
           label="Completed revenue"
           value={current ? formatPHP(Number(current.revenue)) : "—"}
-          trend={makeTrend(
-            Number(current?.revenue ?? 0),
-            Number(previous?.revenue ?? 0),
-            "vs. previous period",
-          )}
+          loading={summary.isPending}
+          trend={
+            current &&
+            makeTrend(
+              Number(current.revenue),
+              Number(previous?.revenue ?? 0),
+              "vs. previous period",
+            )
+          }
         />
       </div>
 
@@ -360,51 +365,61 @@ function Dashboard() {
                 className="h-8 text-xs"
               />
             </div>
-            <ChartContainer config={appointmentChartConfig} className="h-64 w-full aspect-auto">
-              <BarChart data={appointmentOverview} margin={{ top: 8, right: 4, left: 0 }}>
-                <CartesianGrid vertical={false} />
-                <XAxis
-                  dataKey="day"
-                  tickLine={false}
-                  axisLine={false}
-                  tickMargin={8}
-                  minTickGap={chartPeriod === "today" || chartPeriod === "7d" ? 0 : 16}
-                />
-                <YAxis
-                  allowDecimals={false}
-                  tickLine={false}
-                  axisLine={false}
-                  width={32}
-                  tickCount={6}
-                  tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
-                />
-                <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
-                <Bar
-                  dataKey="completed"
-                  fill="var(--color-completed)"
-                  radius={[3, 3, 0, 0]}
-                  minPointSize={2}
-                />
-                <Bar
-                  dataKey="confirmed"
-                  fill="var(--color-confirmed)"
-                  radius={[3, 3, 0, 0]}
-                  minPointSize={2}
-                />
-                <Bar
-                  dataKey="cancelled"
-                  fill="var(--color-cancelled)"
-                  radius={[3, 3, 0, 0]}
-                  minPointSize={2}
-                />
-                <Bar
-                  dataKey="in_progress"
-                  fill="var(--color-in_progress)"
-                  radius={[3, 3, 0, 0]}
-                  minPointSize={2}
-                />
-              </BarChart>
-            </ChartContainer>
+            {!chart.data ? (
+              chart.isPending ? (
+                <Skeleton className="h-64 w-full" role="status" aria-label="Loading the chart" />
+              ) : (
+                <p className="grid h-64 place-items-center text-sm text-muted-foreground">
+                  Could not load the chart.
+                </p>
+              )
+            ) : (
+              <ChartContainer config={appointmentChartConfig} className="h-64 w-full aspect-auto">
+                <BarChart data={appointmentOverview} margin={{ top: 8, right: 4, left: 0 }}>
+                  <CartesianGrid vertical={false} />
+                  <XAxis
+                    dataKey="day"
+                    tickLine={false}
+                    axisLine={false}
+                    tickMargin={8}
+                    minTickGap={chartPeriod === "today" || chartPeriod === "7d" ? 0 : 16}
+                  />
+                  <YAxis
+                    allowDecimals={false}
+                    tickLine={false}
+                    axisLine={false}
+                    width={32}
+                    tickCount={6}
+                    tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 11 }}
+                  />
+                  <ChartTooltip cursor={false} content={<ChartTooltipContent />} />
+                  <Bar
+                    dataKey="completed"
+                    fill="var(--color-completed)"
+                    radius={[3, 3, 0, 0]}
+                    minPointSize={2}
+                  />
+                  <Bar
+                    dataKey="confirmed"
+                    fill="var(--color-confirmed)"
+                    radius={[3, 3, 0, 0]}
+                    minPointSize={2}
+                  />
+                  <Bar
+                    dataKey="cancelled"
+                    fill="var(--color-cancelled)"
+                    radius={[3, 3, 0, 0]}
+                    minPointSize={2}
+                  />
+                  <Bar
+                    dataKey="in_progress"
+                    fill="var(--color-in_progress)"
+                    radius={[3, 3, 0, 0]}
+                    minPointSize={2}
+                  />
+                </BarChart>
+              </ChartContainer>
+            )}
             <ChartKey items={appointmentChartConfig} />
           </CardContent>
         </Card>
@@ -417,6 +432,7 @@ function Dashboard() {
             </div>
             <div className="mt-4 grid items-center gap-5 sm:grid-cols-[minmax(10rem,.9fr)_minmax(0,1fr)] xl:grid-cols-[minmax(10rem,.9fr)_minmax(0,1fr)]">
               <div className="relative mx-auto aspect-square w-full max-w-52">
+                {summary.isPending && <Skeleton className="absolute inset-[8%] rounded-full" />}
                 <ChartContainer
                   config={statusChartConfig}
                   className="absolute inset-0 h-full w-full aspect-auto"
@@ -440,7 +456,9 @@ function Dashboard() {
                 </ChartContainer>
                 <div className="pointer-events-none absolute inset-0 grid place-items-center text-center">
                   <div>
-                    <p className="font-display text-3xl text-foreground">{bookingStatusTotal}</p>
+                    <p className="font-display text-3xl text-foreground">
+                      {statusCounts ? bookingStatusTotal : "—"}
+                    </p>
                     <p className="text-xs text-muted-foreground uppercase">Total</p>
                   </div>
                 </div>
@@ -453,11 +471,15 @@ function Dashboard() {
                       <span className="truncate">{status.label}</span>
                     </span>
                     <span className="flex shrink-0 items-center gap-2 text-muted-foreground">
-                      <strong className="font-medium text-foreground">{status.value}</strong>
+                      <strong className="font-medium text-foreground">
+                        {statusCounts ? status.value : "—"}
+                      </strong>
                       <span className="w-10 text-right text-xs">
-                        {bookingStatusTotal
-                          ? `${((status.value / bookingStatusTotal) * 100).toFixed(1)}%`
-                          : "0.0%"}
+                        {!statusCounts
+                          ? ""
+                          : bookingStatusTotal
+                            ? `${((status.value / bookingStatusTotal) * 100).toFixed(1)}%`
+                            : "0.0%"}
                       </span>
                     </span>
                   </li>
@@ -472,13 +494,15 @@ function Dashboard() {
         <SchedulePanel
           title={dashboardPeriod === "today" ? "Today's schedule" : "Appointments"}
           empty="No appointments found for this period."
-          rows={schedule.data ?? []}
+          rows={schedule.data}
+          loading={schedule.isPending}
           showDate={dashboardPeriod !== "today"}
         />
         <SchedulePanel
           title="Upcoming appointments"
           empty="No upcoming appointments yet."
-          rows={upcoming.data ?? []}
+          rows={upcoming.data}
+          loading={upcoming.isPending}
           upcoming
         />
       </div>
@@ -491,13 +515,16 @@ function DashboardStat({
   iconClassName,
   label,
   value,
+  loading,
   trend,
 }: {
   icon: LucideIcon;
   iconClassName: string;
   label: string;
   value: string;
-  trend: Trend;
+  loading: boolean;
+  /** Null until the numbers load, or when they fail to load. */
+  trend: Trend | null | undefined;
 }) {
   return (
     <Card className="h-full border-border/70 bg-card/60">
@@ -510,27 +537,41 @@ function DashboardStat({
           </span>
           <p className="text-xs tracking-wider text-muted-foreground uppercase">{label}</p>
         </div>
-        <div className="mt-3 flex items-end justify-between gap-3">
-          <div>
-            <p className="font-display text-2xl text-foreground">{value}</p>
-            <p
-              className={cn(
-                "mt-2 flex items-center gap-1 text-xs font-medium",
-                trend.direction === "up" && "text-emerald-500",
-                trend.direction === "down" && "text-destructive",
-                trend.direction === "flat" && "text-muted-foreground",
-              )}
-            >
-              {trend.direction === "up" && <TrendingUp className="size-3.5" aria-hidden="true" />}
-              {trend.direction === "down" && (
-                <TrendingDown className="size-3.5" aria-hidden="true" />
-              )}
-              {trend.label}
-            </p>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">{trend.description}</p>
+        {loading ? (
+          <div className="mt-3 space-y-2" role="status" aria-label={`Loading ${label}`}>
+            <Skeleton className="h-8 w-20" />
+            <Skeleton className="h-3 w-12" />
+            <Skeleton className="h-3 w-28" />
           </div>
-          <TrendLine direction={trend.direction} />
-        </div>
+        ) : (
+          <div className="mt-3 flex items-end justify-between gap-3">
+            <div>
+              <p className="font-display text-2xl text-foreground">{value}</p>
+              {trend && (
+                <>
+                  <p
+                    className={cn(
+                      "mt-2 flex items-center gap-1 text-xs font-medium",
+                      trend.direction === "up" && "text-emerald-500",
+                      trend.direction === "down" && "text-destructive",
+                      trend.direction === "flat" && "text-muted-foreground",
+                    )}
+                  >
+                    {trend.direction === "up" && (
+                      <TrendingUp className="size-3.5" aria-hidden="true" />
+                    )}
+                    {trend.direction === "down" && (
+                      <TrendingDown className="size-3.5" aria-hidden="true" />
+                    )}
+                    {trend.label}
+                  </p>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">{trend.description}</p>
+                </>
+              )}
+            </div>
+            {trend && <TrendLine direction={trend.direction} />}
+          </div>
+        )}
       </CardContent>
     </Card>
   );
@@ -540,9 +581,11 @@ function DashboardStat({
 function NeedsActionStat({
   newBookings,
   rescheduleRequests,
+  loading,
 }: {
   newBookings: number | undefined;
   rescheduleRequests: number | undefined;
+  loading: boolean;
 }) {
   const loaded = newBookings !== undefined && rescheduleRequests !== undefined;
   const total = (newBookings ?? 0) + (rescheduleRequests ?? 0);
@@ -550,7 +593,9 @@ function NeedsActionStat({
     <Link
       to="/admin/appointments"
       search={{ status: "needs_action" }}
-      aria-label={`Needs action: ${total} waiting. Open the list.`}
+      aria-label={
+        loaded ? `Needs action: ${total} waiting. Open the list.` : "Needs action. Open the list."
+      }
       className="group rounded-xl focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
     >
       <Card className="h-full border-border/70 bg-card/60 transition-colors group-hover:border-primary/50">
@@ -562,23 +607,33 @@ function NeedsActionStat({
             <p className="text-xs tracking-wider text-muted-foreground uppercase">Needs action</p>
           </div>
           <div className="mt-3 flex items-end justify-between gap-3">
-            <div>
-              <p
-                className={cn(
-                  "font-display text-2xl",
-                  total > 0 ? "text-primary" : "text-foreground",
-                )}
-              >
-                {loaded ? total : "—"}
-              </p>
-              <p className="mt-2 text-xs font-medium text-muted-foreground">
-                {newBookings ?? 0} new {newBookings === 1 ? "booking" : "bookings"}
-              </p>
-              <p className="mt-0.5 text-[11px] text-muted-foreground">
-                {rescheduleRequests ?? 0} reschedule{" "}
-                {rescheduleRequests === 1 ? "request" : "requests"}
-              </p>
-            </div>
+            {loaded ? (
+              <div>
+                <p
+                  className={cn(
+                    "font-display text-2xl",
+                    total > 0 ? "text-primary" : "text-foreground",
+                  )}
+                >
+                  {total}
+                </p>
+                <p className="mt-2 text-xs font-medium text-muted-foreground">
+                  {newBookings} new {newBookings === 1 ? "booking" : "bookings"}
+                </p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {rescheduleRequests} reschedule{" "}
+                  {rescheduleRequests === 1 ? "request" : "requests"}
+                </p>
+              </div>
+            ) : loading ? (
+              <div className="space-y-2" role="status" aria-label="Loading Needs action">
+                <Skeleton className="h-8 w-12" />
+                <Skeleton className="h-3 w-24" />
+                <Skeleton className="h-3 w-28" />
+              </div>
+            ) : (
+              <p className="font-display text-2xl text-foreground">—</p>
+            )}
             <ChevronRight
               className="size-4 shrink-0 text-muted-foreground transition-colors group-hover:text-primary"
               aria-hidden="true"
@@ -764,12 +819,15 @@ function DateRangeValue({ label, value }: { label: string; value: Date | undefin
 function SchedulePanel({
   title,
   rows,
+  loading,
   empty,
   upcoming = false,
   showDate = false,
 }: {
   title: string;
-  rows: DashboardAppointment[];
+  /** Undefined until the list loads, or when it fails to load. */
+  rows: DashboardAppointment[] | undefined;
+  loading: boolean;
   empty: string;
   upcoming?: boolean;
   showDate?: boolean;
@@ -789,7 +847,24 @@ function SchedulePanel({
             View all
           </Link>
         </div>
-        {rows.length === 0 ? (
+        {!rows ? (
+          loading ? (
+            <div className="space-y-4" role="status" aria-label={`Loading ${title}`}>
+              {Array.from({ length: 3 }, (_, index) => (
+                <div key={index} className="flex items-center gap-3">
+                  <Skeleton className="h-8 w-1 shrink-0" />
+                  <Skeleton className="h-4 w-20" />
+                  <Skeleton className="h-4 flex-1" />
+                  <Skeleton className="h-5 w-16" />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="py-7 text-center text-sm text-muted-foreground">
+              Could not load these appointments.
+            </p>
+          )
+        ) : rows.length === 0 ? (
           <p className="py-7 text-center text-sm text-muted-foreground">{empty}</p>
         ) : (
           <ul className="divide-y divide-border/60">

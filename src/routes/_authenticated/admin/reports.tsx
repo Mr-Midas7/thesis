@@ -82,16 +82,39 @@ const periodOptions = [
 ] as const;
 
 type PeriodPreset = (typeof periodOptions)[number]["value"];
+
+/** The parts of the report, in page and printout order. */
+const reportSections = [
+  { value: "all", label: "All sections" },
+  { value: "summary", label: "Financial summary" },
+  { value: "services", label: "Service revenue breakdown" },
+  { value: "products", label: "Product sales breakdown" },
+  { value: "daily", label: "Daily revenue" },
+  { value: "transactions", label: "Completed transactions" },
+] as const;
+
+type ReportSection = (typeof reportSections)[number]["value"];
+
+function sectionLabel(section: ReportSection) {
+  return reportSections.find((option) => option.value === section)?.label ?? "All sections";
+}
+
+// A service filter limits every amount to the selected services.
+const SERVICES_ONLY_NOTE =
+  "Filtered by service: each transaction shows only the selected services and their charges. Other services on the same booking, and products sold, are left out because products are not tied to a specific service.";
+const SERVICES_ONLY_SCOPE = "Selected services only; products not included";
+const PRODUCTS_LEFT_OUT_MESSAGE =
+  "Products are not counted when the report is filtered by service.";
 type ReportFilters = {
   periodPreset: PeriodPreset;
   from: string;
   to: string;
-  category: string;
+  section: ReportSection;
   /** Empty means all services. */
   serviceNames: string[];
 };
 
-type CatalogService = { id: string; name: string; category: string };
+type CatalogService = { id: string; name: string };
 type FinancialTransactionRow = {
   id: string;
   reference_code: string;
@@ -133,6 +156,12 @@ type RevenuePeriodRow = {
 type FinancialReportPage = {
   rows: FinancialTransactionRow[];
   total: number;
+  /**
+   * True when a service or category filter limits every amount to the matching
+   * services, with products left out; missing until the 20261107100000
+   * migration is applied.
+   */
+  filtered_services_only?: boolean;
   metrics: FinancialMetrics;
   service_performance: ServicePerformanceRow[];
   product_sales: ProductSalesRow[];
@@ -156,6 +185,8 @@ type PrintPayload = {
   period: string;
   scope: string;
   title: string;
+  servicesOnly: boolean;
+  section: ReportSection;
   financial: {
     servicePerformance: ServicePerformanceRow[];
     productSales: ProductSalesRow[];
@@ -177,7 +208,8 @@ function ReportsPage() {
     referenceCode: string;
     services: string[];
   } | null>(null);
-  const { from, to, category, serviceNames } = filters;
+  const { from, to, section, serviceNames } = filters;
+  const shows = (part: Exclude<ReportSection, "all">) => section === "all" || section === part;
   const customDateError =
     draftFilters.periodPreset === "custom" && (!draftFilters.from || !draftFilters.to)
       ? "Select both a start and end date."
@@ -188,46 +220,32 @@ function ReportsPage() {
   const catalog = useQuery({
     queryKey: ["report-service-catalog"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("services")
-        .select("id,name,category")
-        .order("category")
-        .order("name");
+      const { data, error } = await supabase.from("services").select("id,name").order("name");
       if (error) throw error;
       return (data ?? []) as CatalogService[];
     },
   });
 
   const data = useQuery({
-    queryKey: ["reports", { from, to, category, serviceNames, page }],
+    queryKey: ["reports", { from, to, serviceNames, page }],
     queryFn: () =>
       getReportPage({
         from,
         to,
-        category,
         serviceNames,
         limit: pageSize,
         offset: page * pageSize,
       }),
   });
 
-  const categories = useMemo(
-    () =>
-      Array.from(new Set((catalog.data ?? []).map((item) => item.category).filter(Boolean))).sort(),
-    [catalog.data],
-  );
   const serviceOptions = useMemo(
-    () =>
-      (catalog.data ?? [])
-        .filter(
-          (item) => draftFilters.category === "all" || item.category === draftFilters.category,
-        )
-        .sort((first, second) => first.name.localeCompare(second.name)),
-    [catalog.data, draftFilters.category],
+    () => [...(catalog.data ?? [])].sort((first, second) => first.name.localeCompare(second.name)),
+    [catalog.data],
   );
   const financialReport = data.data;
   const metrics = financialReport?.metrics;
-  const reportData = makeReportData(financialReport?.rows ?? [], metrics);
+  const servicesOnly = financialReport?.filtered_services_only === true;
+  const reportData = makeReportData(financialReport?.rows ?? [], metrics, { servicesOnly });
   const reportTitle = "Financial Report";
   const revenueRows =
     revenuePeriod === "daily"
@@ -235,7 +253,7 @@ function ReportsPage() {
       : (financialReport?.monthly_revenue ?? []);
   const appliedFilters = [
     { label: "Completed on", value: formatDateRange(from, to) },
-    { label: "Service category", value: category === "all" ? "All categories" : category },
+    { label: "Section", value: sectionLabel(section) },
     {
       label: serviceNames.length > 1 ? "Services" : "Specific service",
       value: serviceNames.length ? serviceNames.join(", ") : "All services",
@@ -281,17 +299,20 @@ function ReportsPage() {
     setIsPrinting(true);
     try {
       setPrintError(null);
-      const allRows = await getAllReportRows({ from, to, category, serviceNames });
+      const allRows = await getAllReportRows({ from, to, serviceNames });
       // Print totals and completed metrics are derived from the complete
       // filtered result set, not the currently visible paginated page.
       const completeReportData = makeReportData(allRows.rows, allRows.metrics, {
         hasCompleteRows: true,
+        servicesOnly: allRows.servicesOnly,
       });
       setPrintPayload({
         data: completeReportData,
         period: formatDateRange(from, to),
-        scope: reportScope,
-        title: reportTitle,
+        scope: allRows.servicesOnly ? `${reportScope} · ${SERVICES_ONLY_SCOPE}` : reportScope,
+        title: section === "all" ? reportTitle : `${reportTitle} - ${sectionLabel(section)}`,
+        servicesOnly: allRows.servicesOnly,
+        section,
         financial: {
           servicePerformance: allRows.servicePerformance,
           productSales: allRows.productSales,
@@ -346,19 +367,18 @@ function ReportsPage() {
       <ListToolbar>
         <ToolbarFilters>
           <Select
-            value={draftFilters.category}
+            value={draftFilters.section}
             onValueChange={(value) =>
-              setDraftFilters((current) => ({ ...current, category: value, serviceNames: [] }))
+              setDraftFilters((current) => ({ ...current, section: value as ReportSection }))
             }
           >
-            <SelectTrigger aria-label="Filter by service category" className="w-full sm:w-44">
+            <SelectTrigger aria-label="Report section" className="w-full sm:w-56">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">All categories</SelectItem>
-              {categories.map((value) => (
-                <SelectItem key={value} value={value} className="capitalize">
-                  {value}
+              {reportSections.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -399,6 +419,15 @@ function ReportsPage() {
         Only completed appointments count toward revenue. Pending, rejected, cancelled, and
         rescheduled appointments are left out of every total.
       </p>
+      {servicesOnly && (
+        <p
+          role="status"
+          className="-mt-3 mb-6 flex items-start gap-2 rounded-md border border-primary/30 bg-primary/5 p-3 text-sm"
+        >
+          <ListFilter className="mt-0.5 size-4 shrink-0 text-primary" aria-hidden="true" />
+          {SERVICES_ONLY_NOTE}
+        </p>
+      )}
 
       <section aria-labelledby="report-summary-heading" className="mb-6">
         <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
@@ -409,7 +438,7 @@ function ReportsPage() {
                 id="report-summary-heading"
                 className="font-display text-base tracking-wide uppercase"
               >
-                Report summary
+                {section === "all" ? "Report summary" : sectionLabel(section)}
               </h2>
             </div>
             <p className="mt-1 text-xs text-muted-foreground" aria-live="polite">
@@ -425,209 +454,240 @@ function ReportsPage() {
             </p>
           </div>
         </div>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
-          <Stat
-            label="Total Revenue"
-            value={formatPHP(metrics?.total_revenue ?? 0)}
-            detail="Completed service and product revenue"
-            icon={CircleDollarSign}
-            iconClassName="bg-emerald-500/15 text-emerald-400"
-          />
-          <Stat
-            label="Service Revenue"
-            value={formatPHP(metrics?.service_revenue ?? 0)}
-            detail="From completed services"
-            icon={CircleDollarSign}
-            iconClassName="bg-primary/15 text-primary"
-          />
-          <Stat
-            label="Product Revenue"
-            value={formatPHP(metrics?.product_revenue ?? 0)}
-            detail="From products sold during service"
-            icon={CircleDollarSign}
-            iconClassName="bg-accent/15 text-accent"
-          />
-          <Stat
-            label="Completed Transactions"
-            value={String(metrics?.completed_transactions ?? 0)}
-            detail="Revenue-recognized appointments"
-            icon={CheckCircle2}
-            iconClassName="bg-chart-4/15 text-chart-4"
-          />
-          <Stat
-            label="Total Completed Services"
-            value={String(metrics?.total_completed_services ?? 0)}
-            detail="Service entries performed"
-            icon={CalendarDays}
-            iconClassName="bg-primary/15 text-primary"
-          />
-          <Stat
-            label="Total Products Sold"
-            value={String(metrics?.total_products_sold ?? 0)}
-            detail="Units recorded during completed service"
-            icon={CircleDollarSign}
-            iconClassName="bg-accent/15 text-accent"
-          />
-        </div>
+        {shows("summary") && (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-6">
+            <Stat
+              label="Total Revenue"
+              value={formatPHP(metrics?.total_revenue ?? 0)}
+              detail={
+                servicesOnly ? "Selected services only" : "Completed service and product revenue"
+              }
+              icon={CircleDollarSign}
+              iconClassName="bg-emerald-500/15 text-emerald-400"
+            />
+            <Stat
+              label="Service Revenue"
+              value={formatPHP(metrics?.service_revenue ?? 0)}
+              detail="From completed services"
+              icon={CircleDollarSign}
+              iconClassName="bg-primary/15 text-primary"
+            />
+            <Stat
+              label="Product Revenue"
+              value={servicesOnly ? "Not included" : formatPHP(metrics?.product_revenue ?? 0)}
+              detail={
+                servicesOnly
+                  ? "Left out when filtering by service"
+                  : "From products sold during service"
+              }
+              icon={CircleDollarSign}
+              iconClassName="bg-accent/15 text-accent"
+            />
+            <Stat
+              label="Completed Transactions"
+              value={String(metrics?.completed_transactions ?? 0)}
+              detail="Revenue-recognized appointments"
+              icon={CheckCircle2}
+              iconClassName="bg-chart-4/15 text-chart-4"
+            />
+            <Stat
+              label="Total Completed Services"
+              value={String(metrics?.total_completed_services ?? 0)}
+              detail="Service entries performed"
+              icon={CalendarDays}
+              iconClassName="bg-primary/15 text-primary"
+            />
+            <Stat
+              label="Total Products Sold"
+              value={servicesOnly ? "Not included" : String(metrics?.total_products_sold ?? 0)}
+              detail={
+                servicesOnly
+                  ? "Left out when filtering by service"
+                  : "Units recorded during completed service"
+              }
+              icon={CircleDollarSign}
+              iconClassName="bg-accent/15 text-accent"
+            />
+          </div>
+        )}
       </section>
 
-      <div className="mb-6 grid gap-4 xl:grid-cols-2">
-        <FinancialTableCard
-          title="Service Performance"
-          description="Completed services and revenue recognized from their saved service prices."
-          headers={["Service", "Completed", "Revenue"]}
-          rows={(financialReport?.service_performance ?? []).map((row) => [
-            row.service_name,
-            String(row.completed_count),
-            formatPHP(row.revenue),
-          ])}
-          loading={data.isLoading}
-          emptyMessage="No completed services match this report selection."
-          totalLabel="Total service revenue"
-          totalValue={formatPHP(metrics?.service_revenue ?? 0)}
-        />
-        <FinancialTableCard
-          title="Product Sales"
-          description="Products recorded during completed appointments, grouped by their saved selling price."
-          headers={["Product", "Qty Sold", "Unit Price", "Total Sales"]}
-          rows={(financialReport?.product_sales ?? []).map((row) => [
-            row.product_name,
-            String(row.quantity_sold),
-            formatPHP(row.unit_price),
-            formatPHP(row.total_sales),
-          ])}
-          loading={data.isLoading}
-          emptyMessage="No products were sold in completed transactions for this period."
-          totalLabel="Total product revenue"
-          totalValue={formatPHP(metrics?.product_revenue ?? 0)}
-        />
-      </div>
-
-      <ListCard
-        className="mb-6"
-        header={
-          <ListCardTitle
-            title="Revenue over time"
-            description={`Completed transaction revenue by ${revenuePeriod === "daily" ? "day" : "month"}.`}
-            action={
-              <div className="flex gap-2" role="group" aria-label="Revenue period">
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={revenuePeriod === "daily" ? "default" : "outline"}
-                  aria-pressed={revenuePeriod === "daily"}
-                  onClick={() => setRevenuePeriod("daily")}
-                >
-                  Daily
-                </Button>
-                <Button
-                  type="button"
-                  size="sm"
-                  variant={revenuePeriod === "monthly" ? "default" : "outline"}
-                  aria-pressed={revenuePeriod === "monthly"}
-                  onClick={() => setRevenuePeriod("monthly")}
-                >
-                  Monthly
-                </Button>
-              </div>
-            }
-          />
-        }
-      >
-        <DataList
-          label="Revenue over time"
-          rows={revenueRows}
-          rowKey={(row) => row.period}
-          loading={data.isLoading}
-          loadingRows={3}
-          error={
-            data.isError
-              ? { message: "Could not load revenue.", onRetry: () => void data.refetch() }
-              : null
-          }
-          empty={
-            <ListEmpty
-              icon={BarChart3}
-              title="No completed revenue for this period."
-              description="Revenue appears once appointments in this period are completed."
-            />
-          }
-          columns={[
-            {
-              key: "period",
-              header: revenuePeriod === "daily" ? "Date" : "Month",
-              card: "title",
-              cell: (row) => (
-                <span className="font-medium">
-                  {formatRevenuePeriod(row.period, revenuePeriod)}
-                </span>
-              ),
-            },
-            {
-              key: "transactions",
-              header: "Transactions",
-              className: "w-32 text-right",
-              cell: (row) => <span className="text-sm">{row.completed_transactions}</span>,
-            },
-            {
-              key: "service",
-              header: "Service revenue",
-              className: "w-36 text-right",
-              cell: (row) => <span className="text-sm">{formatPHP(row.service_revenue)}</span>,
-            },
-            {
-              key: "product",
-              header: "Product revenue",
-              className: "w-36 text-right",
-              cell: (row) => <span className="text-sm">{formatPHP(row.product_revenue)}</span>,
-            },
-            {
-              key: "total",
-              header: "Total revenue",
-              className: "w-36 text-right",
-              cell: (row) => (
-                <span className="text-sm font-medium text-primary">
-                  {formatPHP(row.total_revenue)}
-                </span>
-              ),
-            },
-          ]}
-        />
-      </ListCard>
-
-      <ListCard
-        header={<ListCardTitle title="Completed Transactions" description={reportScope} />}
-        footer={
-          <PaginationControls
-            page={page}
-            pageSize={pageSize}
-            total={data.data?.total ?? 0}
-            onPageChange={setPage}
-          />
-        }
-      >
-        <DataList
-          label="Completed transactions"
-          rows={transactionRows}
-          rowKey={(row) => row.key}
-          loading={data.isLoading}
-          error={
-            data.isError
-              ? { message: "Could not load this report.", onRetry: () => void data.refetch() }
-              : null
-          }
-          empty={
-            <ListEmpty
-              icon={ListFilter}
-              title={`No ${rowLabel} match this report selection.`}
-              description="Try a different period, category, or service."
-            />
-          }
-          columns={transactionColumns(reportData.headers, (services, referenceCode) =>
-            setServiceListDialog({ referenceCode, services }),
+      {(shows("services") || shows("products")) && (
+        <div
+          className={cn(
+            "mb-6 grid gap-4",
+            shows("services") && shows("products") && "xl:grid-cols-2",
           )}
-        />
-      </ListCard>
+        >
+          {shows("services") && (
+            <FinancialTableCard
+              title="Service Revenue Breakdown"
+              description="Completed services and revenue recognized from their saved service prices."
+              headers={["Service", "Completed", "Revenue"]}
+              rows={(financialReport?.service_performance ?? []).map((row) => [
+                row.service_name,
+                String(row.completed_count),
+                formatPHP(row.revenue),
+              ])}
+              loading={data.isLoading}
+              emptyMessage="No completed services match this report selection."
+              totalLabel="Total service revenue"
+              totalValue={formatPHP(metrics?.service_revenue ?? 0)}
+            />
+          )}
+          {shows("products") && (
+            <FinancialTableCard
+              title="Product Sales Breakdown"
+              description="Products recorded during completed appointments, grouped by their saved selling price."
+              headers={["Product", "Qty Sold", "Unit Price", "Total Sales"]}
+              rows={(financialReport?.product_sales ?? []).map((row) => [
+                row.product_name,
+                String(row.quantity_sold),
+                formatPHP(row.unit_price),
+                formatPHP(row.total_sales),
+              ])}
+              loading={data.isLoading}
+              emptyMessage={
+                servicesOnly
+                  ? PRODUCTS_LEFT_OUT_MESSAGE
+                  : "No products were sold in completed transactions for this period."
+              }
+              totalLabel="Total product revenue"
+              totalValue={servicesOnly ? "Not included" : formatPHP(metrics?.product_revenue ?? 0)}
+            />
+          )}
+        </div>
+      )}
+
+      {shows("daily") && (
+        <ListCard
+          className="mb-6"
+          header={
+            <ListCardTitle
+              title="Revenue over time"
+              description={`Completed transaction revenue by ${revenuePeriod === "daily" ? "day" : "month"}.`}
+              action={
+                <div className="flex gap-2" role="group" aria-label="Revenue period">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={revenuePeriod === "daily" ? "default" : "outline"}
+                    aria-pressed={revenuePeriod === "daily"}
+                    onClick={() => setRevenuePeriod("daily")}
+                  >
+                    Daily
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={revenuePeriod === "monthly" ? "default" : "outline"}
+                    aria-pressed={revenuePeriod === "monthly"}
+                    onClick={() => setRevenuePeriod("monthly")}
+                  >
+                    Monthly
+                  </Button>
+                </div>
+              }
+            />
+          }
+        >
+          <DataList
+            label="Revenue over time"
+            rows={revenueRows}
+            rowKey={(row) => row.period}
+            loading={data.isLoading}
+            loadingRows={3}
+            error={
+              data.isError
+                ? { message: "Could not load revenue.", onRetry: () => void data.refetch() }
+                : null
+            }
+            empty={
+              <ListEmpty
+                icon={BarChart3}
+                title="No completed revenue for this period."
+                description="Revenue appears once appointments in this period are completed."
+              />
+            }
+            columns={[
+              {
+                key: "period",
+                header: revenuePeriod === "daily" ? "Date" : "Month",
+                card: "title",
+                cell: (row) => (
+                  <span className="font-medium">
+                    {formatRevenuePeriod(row.period, revenuePeriod)}
+                  </span>
+                ),
+              },
+              {
+                key: "transactions",
+                header: "Transactions",
+                className: "w-32 text-right",
+                cell: (row) => <span className="text-sm">{row.completed_transactions}</span>,
+              },
+              {
+                key: "service",
+                header: "Service revenue",
+                className: "w-36 text-right",
+                cell: (row) => <span className="text-sm">{formatPHP(row.service_revenue)}</span>,
+              },
+              {
+                key: "product",
+                header: "Product revenue",
+                className: "w-36 text-right",
+                cell: (row) => <span className="text-sm">{formatPHP(row.product_revenue)}</span>,
+              },
+              {
+                key: "total",
+                header: "Total revenue",
+                className: "w-36 text-right",
+                cell: (row) => (
+                  <span className="text-sm font-medium text-primary">
+                    {formatPHP(row.total_revenue)}
+                  </span>
+                ),
+              },
+            ]}
+          />
+        </ListCard>
+      )}
+
+      {shows("transactions") && (
+        <ListCard
+          header={<ListCardTitle title="Completed Transactions" description={reportScope} />}
+          footer={
+            <PaginationControls
+              page={page}
+              pageSize={pageSize}
+              total={data.data?.total ?? 0}
+              onPageChange={setPage}
+            />
+          }
+        >
+          <DataList
+            label="Completed transactions"
+            rows={transactionRows}
+            rowKey={(row) => row.key}
+            loading={data.isLoading}
+            error={
+              data.isError
+                ? { message: "Could not load this report.", onRetry: () => void data.refetch() }
+                : null
+            }
+            empty={
+              <ListEmpty
+                icon={ListFilter}
+                title={`No ${rowLabel} match this report selection.`}
+                description="Try a different period or service."
+              />
+            }
+            columns={transactionColumns(reportData.headers, (services, referenceCode) =>
+              setServiceListDialog({ referenceCode, services }),
+            )}
+          />
+        </ListCard>
+      )}
 
       <Dialog
         open={serviceListDialog !== null}
@@ -637,7 +697,9 @@ function ReportsPage() {
           <DialogHeader>
             <DialogTitle className="font-display uppercase">Services</DialogTitle>
             <DialogDescription>
-              Complete service list for booking {serviceListDialog?.referenceCode}.
+              {servicesOnly
+                ? `Selected services in booking ${serviceListDialog?.referenceCode}.`
+                : `Complete service list for booking ${serviceListDialog?.referenceCode}.`}
             </DialogDescription>
           </DialogHeader>
           <ul className="max-h-[50vh] space-y-2 overflow-y-auto pr-1">
@@ -1030,7 +1092,6 @@ function PeriodPicker({
 async function getReportPage(input: {
   from: string;
   to: string;
-  category: string;
   serviceNames: string[];
   limit: number;
   offset: number;
@@ -1038,7 +1099,8 @@ async function getReportPage(input: {
   const { data, error } = await supabase.rpc("get_completed_financial_report_page", {
     p_from: input.from,
     p_to: input.to,
-    p_category: input.category === "all" ? null : input.category,
+    // The page filters by service only; the database still accepts a category.
+    p_category: null,
     p_service_names: input.serviceNames.length ? input.serviceNames : null,
     p_limit: input.limit,
     p_offset: input.offset,
@@ -1070,6 +1132,7 @@ async function getAllReportRows(
   return {
     rows,
     total: first?.total ?? 0,
+    servicesOnly: first?.filtered_services_only === true,
     metrics: first?.metrics,
     servicePerformance: first?.service_performance ?? [],
     productSales: first?.product_sales ?? [],
@@ -1080,7 +1143,7 @@ async function getAllReportRows(
 function makeReportData(
   rows: FinancialTransactionRow[],
   metrics?: FinancialMetrics,
-  options: { hasCompleteRows?: boolean } = {},
+  options: { hasCompleteRows?: boolean; servicesOnly?: boolean } = {},
 ): ReportData {
   const serviceAmount = sumMoney(rows.map((row) => row.service_amount));
   const productAmount = sumMoney(rows.map((row) => row.product_amount));
@@ -1115,10 +1178,14 @@ function makeReportData(
       },
       {
         label: "Product revenue",
-        value: formatPHP(
-          options.hasCompleteRows ? productAmount : (metrics?.product_revenue ?? productAmount),
-        ),
-        detail: "Products sold during service",
+        value: options.servicesOnly
+          ? "Not included"
+          : formatPHP(
+              options.hasCompleteRows ? productAmount : (metrics?.product_revenue ?? productAmount),
+            ),
+        detail: options.servicesOnly
+          ? "Left out when filtering by service"
+          : "Products sold during service",
         tone: "accent",
       },
       // The sum of the two above, so it comes after them.
@@ -1170,7 +1237,7 @@ function getInitialFilters(today: string): ReportFilters {
   return {
     periodPreset: "this_month",
     ...range,
-    category: "all",
+    section: "all",
     serviceNames: [],
   };
 }
@@ -1210,6 +1277,17 @@ function PrintReport({ payload }: { payload: PrintPayload | null }) {
   const productRevenue = sumMoney(financial.productSales.map((row) => row.total_sales));
   const dailyRevenue = financial.dailyRevenue;
   const dailyRevenueTotals = revenueTotals(dailyRevenue);
+  // Sections are lettered A, B, C... only when more than one is printed.
+  const parts = reportSections.flatMap((option) =>
+    option.value !== "all" && (payload.section === "all" || payload.section === option.value)
+      ? [option.value]
+      : [],
+  );
+  const prints = (part: Exclude<ReportSection, "all">) => parts.includes(part);
+  const heading = (part: Exclude<ReportSection, "all">) =>
+    parts.length > 1
+      ? `${String.fromCharCode(65 + parts.indexOf(part))}. ${sectionLabel(part)}`
+      : sectionLabel(part);
 
   return (
     <PrintDocument
@@ -1219,102 +1297,121 @@ function PrintReport({ payload }: { payload: PrintPayload | null }) {
         scope: payload.scope,
       }}
     >
-      <section className="report-print-section report-print-summary">
-        <h2>A. Financial summary</h2>
-        <table className="report-print-summary-table">
-          <thead>
-            <tr>
-              <th>Description</th>
-              <th>Amount</th>
-            </tr>
-          </thead>
-          <tbody>
-            {payload.data.cards.map((card) => (
-              <tr key={card.label}>
-                <td>{card.label}</td>
-                <td>{card.value}</td>
+      {prints("summary") && (
+        <section className="report-print-section report-print-summary">
+          <h2>{heading("summary")}</h2>
+          <table className="report-print-summary-table">
+            <thead>
+              <tr>
+                <th>Description</th>
+                <th>Amount</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
-      <PrintTable
-        title="B. Service revenue breakdown"
-        headers={["Service", "Completed", "Revenue"]}
-        columnWidths={["58%", "18%", "24%"]}
-        rows={financial.servicePerformance.map((row) => [
-          row.service_name,
-          String(row.completed_count),
-          formatPHP(row.revenue),
-        ])}
-        footerRow={["Total service revenue", String(serviceCompleted), formatPHP(serviceRevenue)]}
-        emptyMessage="No completed services match this report selection."
-      />
-      <PrintTable
-        title="C. Product sales breakdown"
-        headers={["Product", "Qty Sold", "Unit Price", "Total Sales"]}
-        columnWidths={["42%", "18%", "20%", "20%"]}
-        rows={financial.productSales.map((row) => [
-          row.product_name,
-          String(row.quantity_sold),
-          formatPHP(row.unit_price),
-          formatPHP(row.total_sales),
-        ])}
-        footerRow={["Total product revenue", String(productsSold), "", formatPHP(productRevenue)]}
-        emptyMessage="No products were sold in completed transactions for this period."
-      />
-      <PrintTable
-        title="D. Daily revenue"
-        headers={["Date", "Transactions", "Service Revenue", "Product Revenue", "Total Revenue"]}
-        columnWidths={["26%", "14%", "20%", "20%", "20%"]}
-        rows={dailyRevenue.map((row) => [
-          formatRevenuePeriod(row.period, "daily"),
-          String(row.completed_transactions),
-          formatPHP(row.service_revenue),
-          formatPHP(row.product_revenue),
-          formatPHP(row.total_revenue),
-        ])}
-        footerRow={[
-          "Total daily revenue",
-          String(dailyRevenueTotals.transactions),
-          formatPHP(dailyRevenueTotals.serviceRevenue),
-          formatPHP(dailyRevenueTotals.productRevenue),
-          formatPHP(dailyRevenueTotals.totalRevenue),
-        ]}
-        emptyMessage="No completed revenue is available for this period."
-      />
-      <section className="report-print-section">
-        <h2>E. Completed transactions</h2>
-        <table className="report-print-table">
-          <colgroup>
-            {["10%", "13%", "23%", "16%", "12%", "13%", "13%"].map((width, index) => (
-              <col key={`${width}-${index}`} style={{ width }} />
-            ))}
-          </colgroup>
-          <thead>
-            <tr>
-              {payload.data.headers.map((header) => (
-                <th key={header}>{header}</th>
+            </thead>
+            <tbody>
+              {payload.data.cards.map((card) => (
+                <tr key={card.label}>
+                  <td>{card.label}</td>
+                  <td>{card.value}</td>
+                </tr>
               ))}
-            </tr>
-          </thead>
-          <tbody>
-            {payload.data.rows.map((row, index) => (
-              <tr key={`${row.join("-")}-${index}`}>
-                {row.map((cell, cellIndex) => (
-                  <td key={`${cell}-${cellIndex}`}>{cell}</td>
+            </tbody>
+          </table>
+        </section>
+      )}
+      {prints("services") && (
+        <PrintTable
+          title={heading("services")}
+          headers={["Service", "Completed", "Revenue"]}
+          columnWidths={["58%", "18%", "24%"]}
+          rows={financial.servicePerformance.map((row) => [
+            row.service_name,
+            String(row.completed_count),
+            formatPHP(row.revenue),
+          ])}
+          footerRow={["Total service revenue", String(serviceCompleted), formatPHP(serviceRevenue)]}
+          emptyMessage="No completed services match this report selection."
+        />
+      )}
+      {prints("products") && (
+        <PrintTable
+          title={heading("products")}
+          headers={["Product", "Qty Sold", "Unit Price", "Total Sales"]}
+          columnWidths={["42%", "18%", "20%", "20%"]}
+          rows={financial.productSales.map((row) => [
+            row.product_name,
+            String(row.quantity_sold),
+            formatPHP(row.unit_price),
+            formatPHP(row.total_sales),
+          ])}
+          footerRow={[
+            "Total product revenue",
+            payload.servicesOnly ? "-" : String(productsSold),
+            "",
+            payload.servicesOnly ? "Not included" : formatPHP(productRevenue),
+          ]}
+          emptyMessage={
+            payload.servicesOnly
+              ? PRODUCTS_LEFT_OUT_MESSAGE
+              : "No products were sold in completed transactions for this period."
+          }
+        />
+      )}
+      {prints("daily") && (
+        <PrintTable
+          title={heading("daily")}
+          headers={["Date", "Transactions", "Service Revenue", "Product Revenue", "Total Revenue"]}
+          columnWidths={["26%", "14%", "20%", "20%", "20%"]}
+          rows={dailyRevenue.map((row) => [
+            formatRevenuePeriod(row.period, "daily"),
+            String(row.completed_transactions),
+            formatPHP(row.service_revenue),
+            formatPHP(row.product_revenue),
+            formatPHP(row.total_revenue),
+          ])}
+          footerRow={[
+            "Total daily revenue",
+            String(dailyRevenueTotals.transactions),
+            formatPHP(dailyRevenueTotals.serviceRevenue),
+            formatPHP(dailyRevenueTotals.productRevenue),
+            formatPHP(dailyRevenueTotals.totalRevenue),
+          ]}
+          emptyMessage="No completed revenue is available for this period."
+        />
+      )}
+      {prints("transactions") && (
+        <section className="report-print-section">
+          <h2>{heading("transactions")}</h2>
+          <table className="report-print-table">
+            <colgroup>
+              {["10%", "13%", "23%", "16%", "12%", "13%", "13%"].map((width, index) => (
+                <col key={`${width}-${index}`} style={{ width }} />
+              ))}
+            </colgroup>
+            <thead>
+              <tr>
+                {payload.data.headers.map((header) => (
+                  <th key={header}>{header}</th>
                 ))}
               </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td colSpan={payload.data.headers.length - 1}>Total amount</td>
-              <td>{formatPHP(payload.data.totalAmount)}</td>
-            </tr>
-          </tfoot>
-        </table>
-      </section>
+            </thead>
+            <tbody>
+              {payload.data.rows.map((row, index) => (
+                <tr key={`${row.join("-")}-${index}`}>
+                  {row.map((cell, cellIndex) => (
+                    <td key={`${cell}-${cellIndex}`}>{cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={payload.data.headers.length - 1}>Total amount</td>
+                <td>{formatPHP(payload.data.totalAmount)}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </section>
+      )}
     </PrintDocument>
   );
 }
@@ -1437,9 +1534,7 @@ function ServiceMultiSelect({
             );
           })}
           {options.length === 0 && (
-            <li className="px-2 py-3 text-sm text-muted-foreground">
-              No services in this category.
-            </li>
+            <li className="px-2 py-3 text-sm text-muted-foreground">No services found.</li>
           )}
         </ul>
       </PopoverContent>

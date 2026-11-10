@@ -14,6 +14,7 @@ import {
   LayoutDashboard,
   LogOut,
   Package,
+  RotateCw,
   Settings,
   Tags,
   UserCheck,
@@ -127,7 +128,10 @@ function AdminLayout() {
   const role = useQuery({
     queryKey: ["my-role"],
     queryFn: async () => {
-      const { data } = await supabase.from("user_roles").select("role");
+      const { data, error } = await supabase.from("user_roles").select("role");
+      // A failed check must not read as "no roles": that would tell a real
+      // administrator they have no access.
+      if (error) throw error;
       return (data ?? []).map((r) => r.role);
     },
   });
@@ -429,8 +433,26 @@ function AdminLayout() {
                 {signOutError}
               </p>
             )}
-            {role.isLoading ? (
-              <p className="text-sm text-muted-foreground">Checking your access...</p>
+            {!role.data ? (
+              role.isError ? (
+                <div className="mx-auto max-w-md rounded-xl border border-border/70 bg-card/60 p-8 text-center">
+                  <h1 className="font-display text-xl uppercase">Couldn't check your access</h1>
+                  <p className="mt-2 text-sm text-muted-foreground">
+                    We couldn't reach the server to confirm your administrator role. Check your
+                    internet connection and try again.
+                  </p>
+                  {/* Retrying shows "Checking your access..." again until it finishes. */}
+                  <Button
+                    className="mt-5 font-display uppercase"
+                    variant="outline"
+                    onClick={() => void role.refetch()}
+                  >
+                    <RotateCw aria-hidden="true" /> Try again
+                  </Button>
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground">Checking your access...</p>
+              )
             ) : isAdmin ? (
               <Outlet />
             ) : (

@@ -10,6 +10,7 @@ import {
 } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 
+import { ConnectionBanner } from "@/components/site/connection-banner";
 import { OfflineConnection } from "@/components/site/offline-connection";
 
 import appCss from "../styles.css?url";
@@ -143,7 +144,8 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       {/* Required: nested routes render here. Removing <Outlet /> breaks all child routes. */}
       <Outlet />
-      {OFFLINE && <OfflineConnection />}
+      {/* The offline copy runs on the shop's own network and shows its own status. */}
+      {OFFLINE ? <OfflineConnection /> : <ConnectionBanner />}
     </QueryClientProvider>
   );
 }

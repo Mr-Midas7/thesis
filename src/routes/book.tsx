@@ -1673,13 +1673,26 @@ function BookPage() {
                   <div className="flex items-baseline justify-between gap-3">
                     <span className="text-sm font-medium">Estimated total</span>
                     <span className="font-display text-2xl text-primary">
-                      {pricingReady ? formatPHP(total) : "—"}
+                      {pricingReady ? (
+                        formatPHP(total)
+                      ) : availabilityLoading ? (
+                        <Loader2
+                          className="size-5 animate-spin text-muted-foreground"
+                          aria-hidden="true"
+                        />
+                      ) : (
+                        "—"
+                      )}
                     </span>
                   </div>
-                  <p className="mt-1 text-xs text-muted-foreground">
+                  <p className="mt-1 text-xs text-muted-foreground" aria-live="polite">
                     {pricingReady
                       ? "Labor/service charge only. Parts are quoted separately."
-                      : "Choose your motorcycle and services to see an estimate."}
+                      : !availabilityEnabled
+                        ? "Choose your motorcycle and services to see an estimate."
+                        : availabilityLoading
+                          ? "Calculating your estimate…"
+                          : "The estimate isn't available right now. Please try again shortly."}
                   </p>
                 </div>
 

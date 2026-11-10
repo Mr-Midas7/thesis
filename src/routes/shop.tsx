@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 
+import { LoadError } from "@/components/site/load-error";
 import { ProductCard } from "@/components/site/product-card";
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
@@ -130,10 +131,31 @@ function ShopPage() {
           {list.map((p) => (
             <ProductCard key={p.id} product={p} />
           ))}
+          {products.isPending &&
+            Array.from({ length: 8 }, (_, i) => (
+              <div
+                key={i}
+                className="h-72 animate-pulse rounded-xl border border-border/70 bg-card/60"
+              />
+            ))}
         </div>
-        {!products.isLoading && list.length === 0 && (
-          <p className="py-16 text-center text-muted-foreground">No items match your search.</p>
-        )}
+        {products.data
+          ? list.length === 0 && (
+              <p className="py-16 text-center text-muted-foreground">
+                {normalizedSearchTerm
+                  ? `No items match “${searchTerm.trim()}”.`
+                  : products.data.length === 0
+                    ? "No items are listed right now. Please check back soon or message the shop."
+                    : `No ${tab === "part" ? "parts" : "accessories"} are listed right now.`}
+              </p>
+            )
+          : products.isError && (
+              <LoadError
+                message="We couldn't load the shop items right now."
+                onRetry={() => void products.refetch()}
+                className="justify-center py-16"
+              />
+            )}
       </main>
       <SiteFooter className="lg:mt-auto" />
     </div>

@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 
 import famImage from "@/assets/fam-image.jpg?url";
+import { LoadError } from "@/components/site/load-error";
 import { ProductCard } from "@/components/site/product-card";
 import { ServiceBookingRow } from "@/components/site/service-booking-row";
 import { ShopHours, SiteFooter } from "@/components/site/site-footer";
@@ -225,7 +226,7 @@ function Home() {
                 </CardContent>
               </Card>
             ))}
-            {services.isLoading &&
+            {services.isPending &&
               Array.from({ length: 6 }).map((_, i) => (
                 <div
                   key={i}
@@ -233,10 +234,11 @@ function Home() {
                 />
               ))}
           </div>
-          {services.isError && (
-            <p className="text-sm text-muted-foreground">
-              We couldn't load the service list right now.
-            </p>
+          {services.isError && !services.data && (
+            <LoadError
+              message="We couldn't load the service list right now."
+              onRetry={() => void services.refetch()}
+            />
           )}
           <SectionLink to="/services">
             {services.data?.total ? `See all ${services.data.total} services` : "See all services"}
@@ -285,7 +287,7 @@ function Home() {
                 <ProductCard product={product} compact />
               </div>
             ))}
-            {featured.isLoading &&
+            {featured.isPending &&
               Array.from({ length: 4 }).map((_, i) => (
                 <div
                   key={i}
@@ -293,10 +295,11 @@ function Home() {
                 />
               ))}
           </div>
-          {featured.isError && (
-            <p className="text-sm text-muted-foreground">
-              We couldn't load the featured items right now.
-            </p>
+          {featured.isError && !featured.data && (
+            <LoadError
+              message="We couldn't load the featured items right now."
+              onRetry={() => void featured.refetch()}
+            />
           )}
           <SectionLink to="/shop">View the full shop</SectionLink>
         </section>
